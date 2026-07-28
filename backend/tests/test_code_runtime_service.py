@@ -2366,12 +2366,11 @@ async def test_open_code_session_bootstraps_token_free_binding_and_new_browser_s
 
 
 @pytest.mark.asyncio
-async def test_open_code_session_retries_workspace_bootstrap_once_for_expired_launch_token(
+async def test_open_code_session_does_not_reopen_after_expired_launch_token(
     db_session,
     monkeypatch,
 ):
     from app.code_runtime import service
-    from app.code_runtime.sandbox_auth import RuntimeBootstrap
     from app.code_runtime.service import open_code_session
 
     session = AIChatSession(
@@ -2400,31 +2399,27 @@ async def test_open_code_session_retries_workspace_bootstrap_once_for_expired_la
     async def fake_bootstrap(builder_url: str):
         nonlocal bootstraps
         bootstraps += 1
-        if bootstraps == 1:
-            raise HTTPException(
-                status_code=401,
-                detail="Runtime launch authorization expired",
-                headers={"X-APAAS-Sandbox-Auth-Error": "sandbox_launch_token_expired"},
-            )
-        return RuntimeBootstrap(
-            clean_builder_url="https://sandbox.example.com/workspaces/ws-2/builder",
-            runtime_base_url="https://sandbox.example.com/workspaces/ws-2",
-            runtime_cookie="runtime-cookie",
-            runtime_cookie_hash="b" * 64,
-            expires_at=None,
+        raise HTTPException(
+            status_code=401,
+            detail="Runtime launch authorization expired",
+            headers={"X-APAAS-Sandbox-Auth-Error": "sandbox_launch_token_expired"},
         )
 
     monkeypatch.setattr(service, "bootstrap_runtime_session", fake_bootstrap)
-    result = await open_code_session(
-        db=db_session,
-        session_id=session.id,
-        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7, tenant_role="member"),
-        workspace_open=fake_open,
-    )
+    with pytest.raises(HTTPException) as exc_info:
+        await open_code_session(
+            db=db_session,
+            session_id=session.id,
+            ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7, tenant_role="member"),
+            workspace_open=fake_open,
+        )
 
-    assert opens == 2
-    assert bootstraps == 2
-    assert "entry-2" not in result["embed_url"]
+    assert exc_info.value.status_code == 401
+    assert (exc_info.value.headers or {}).get(
+        "X-APAAS-Sandbox-Auth-Error"
+    ) == "sandbox_launch_token_expired"
+    assert opens == 1
+    assert bootstraps == 1
 
 
 @pytest.mark.asyncio

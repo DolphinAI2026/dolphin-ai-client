@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.code_runtime.sandbox_auth import (
-    RUNTIME_AUTH_ERROR_HEADER,
     bootstrap_runtime_session,
     encrypt_runtime_cookie,
     runtime_session_expiry_for_storage,
@@ -1077,35 +1076,17 @@ async def open_code_session(
     if not builder_url:
         raise HTTPException(status_code=502, detail="Code Control Plane 未返回 builder URL")
 
-    bootstrap = None
     if desktop_runtime or is_local_code_application_id(external_app_id):
         clean_builder_url = builder_url
         runtime_base_url = derive_runtime_base_url(builder_url)
     else:
-        for attempt in range(2):
-            try:
-                bootstrap = await bootstrap_runtime_session(builder_url)
-                break
-            except ValueError as exc:
-                if attempt > 0:
-                    raise HTTPException(
-                        status_code=502,
-                        detail="Code Control Plane 未返回 runtime entry token",
-                    ) from exc
-            except HTTPException as exc:
-                launch_token_expired = (
-                    exc.status_code == 401
-                    and (exc.headers or {}).get(RUNTIME_AUTH_ERROR_HEADER)
-                    == "sandbox_launch_token_expired"
-                )
-                if not launch_token_expired or attempt > 0:
-                    raise
-            opened = await workspace_open_once()
-            builder_url = str(opened.get("specReviewUrl") or opened.get("builderUrl") or "").strip()
-            if not builder_url:
-                raise HTTPException(status_code=502, detail="Code Control Plane 未返回 builder URL")
-        if bootstrap is None:
-            raise HTTPException(status_code=502, detail="Code runtime bootstrap failed")
+        try:
+            bootstrap = await bootstrap_runtime_session(builder_url)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="Code Control Plane 未返回 runtime entry token",
+            ) from exc
         clean_builder_url = bootstrap.clean_builder_url
         runtime_base_url = bootstrap.runtime_base_url
 

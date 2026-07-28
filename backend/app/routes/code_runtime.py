@@ -1722,6 +1722,11 @@ async def _browser_runtime_json_request(
         raise HTTPException(status_code=502, detail="Code runtime 返回了无效 JSON") from exc
 
 
+@dataclass
+class ProxyRecoveryBudget:
+    recovery_used: bool = False
+
+
 async def _browser_runtime_json_request_for_session(
     session: AIChatSession,
     binding: CodeRuntimeBinding,
@@ -1733,7 +1738,9 @@ async def _browser_runtime_json_request_for_session(
     session_id: CodeSessionRef,
     db: AsyncSession,
     json_body: Any = None,
+    recovery_budget: ProxyRecoveryBudget | None = None,
 ) -> tuple[Any, ProxyAuthorization]:
+    budget = recovery_budget or ProxyRecoveryBudget()
     if is_desktop_agent_runtime_target(binding.execution_target):
         return (
             await _browser_runtime_json_request(
@@ -1761,6 +1768,9 @@ async def _browser_runtime_json_request_for_session(
         auth_error = (exc.headers or {}).get(RUNTIME_AUTH_ERROR_HEADER)
         if exc.status_code != 401 or auth_error != "sandbox_session_expired":
             raise
+        if budget.recovery_used:
+            raise
+    budget.recovery_used = True
     renewed = await _renew_proxy_runtime_authorization(
         session,
         binding,
@@ -1789,7 +1799,9 @@ async def _ensure_browser_runtime_current_session(
     request: Request,
     session_id: CodeSessionRef,
     db: AsyncSession,
+    recovery_budget: ProxyRecoveryBudget | None = None,
 ) -> tuple[bool, ProxyAuthorization]:
+    budget = recovery_budget or ProxyRecoveryBudget()
     runtime_session_id = str(binding.runtime_session_id or "").strip()
     if not runtime_session_id or not _path_requires_runtime_current_alignment(path):
         return False, authorization
@@ -1805,6 +1817,7 @@ async def _ensure_browser_runtime_current_session(
             request=request,
             session_id=session_id,
             db=db,
+            recovery_budget=budget,
         )
     except HTTPException as exc:
         if exc.status_code != 404:
@@ -1818,6 +1831,7 @@ async def _ensure_browser_runtime_current_session(
             request=request,
             session_id=session_id,
             db=db,
+            recovery_budget=budget,
         )
         binding.runtime_session_id = str(
             (current or {}).get("runtimeSessionId") or ""
@@ -3027,6 +3041,7 @@ async def proxy_code_runtime(
         and hashlib.sha256(incoming_runtime_cookie.encode("utf-8")).hexdigest()
         != authorization.runtime_cookie_hash
     )
+    recovery_budget = ProxyRecoveryBudget()
 
     try:
         binding_changed, authorization = await _ensure_browser_runtime_current_session(
@@ -3037,6 +3052,7 @@ async def proxy_code_runtime(
             request=request,
             session_id=session_id,
             db=db,
+            recovery_budget=recovery_budget,
         )
     except SandboxRenewalFailure as exc:
         return _sandbox_renewal_failure_response(
@@ -3078,9 +3094,10 @@ async def proxy_code_runtime(
     )
     if attempt.recoverable_auth_error and not is_desktop_agent_runtime_target(
         binding.execution_target
-    ):
+    ) and not recovery_budget.recovery_used:
         recoverable_auth_error = attempt.recoverable_auth_error
         await _close_upstream_attempt(attempt)
+        recovery_budget.recovery_used = True
         try:
             authorization = await _renew_proxy_runtime_authorization(
                 session,

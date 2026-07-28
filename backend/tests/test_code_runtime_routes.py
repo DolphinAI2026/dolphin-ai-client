@@ -2809,6 +2809,7 @@ async def test_code_runtime_proxy_recovers_when_bound_runtime_session_is_missing
         runtime_session_id="runtime-stale",
     )
     calls: list[tuple[str, str]] = []
+    budgets: list[object] = []
 
     authorization = ProxyAuthorization(browser_session_id="browser-a")
 
@@ -2823,8 +2824,10 @@ async def test_code_runtime_proxy_recovers_when_bound_runtime_session_is_missing
         session_id,
         db,
         json_body=None,
+        recovery_budget=None,
     ):
         calls.append((method, path))
+        budgets.append(recovery_budget)
         if method == "POST":
             raise HTTPException(status_code=404, detail="agent session not found")
         return {"runtimeSessionId": "runtime-current"}, current_authorization
@@ -2852,6 +2855,7 @@ async def test_code_runtime_proxy_recovers_when_bound_runtime_session_is_missing
         ("POST", "/api/agent/sessions/runtime-stale/activate"),
         ("GET", "/api/agent/sessions/current"),
     ]
+    assert budgets[0] is budgets[1]
 
 
 @pytest.mark.asyncio
@@ -3061,6 +3065,144 @@ async def test_proxy_current_sse_alignment_renews_expired_session_before_respons
     assert renew_calls == 1
     assert any(
         "apaas_sandbox_token=renewed-cookie" in value
+        for value in response.headers.getlist("set-cookie")
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("renew_stage", ["activate", "fallback_current"])
+async def test_proxy_current_alignment_shares_recovery_budget_with_forwarding(
+    db_session,
+    monkeypatch,
+    renew_stage,
+):
+    from dataclasses import replace
+
+    import httpx
+    import app.routes.code_runtime as code_runtime_routes
+    from app.code_runtime.service import create_proxy_cookie_token
+    from app.routes.code_runtime import proxy_code_runtime
+
+    session, binding, _rows = await _seed_browser_runtime(db_session)
+    binding.runtime_session_id = "runtime-bound"
+    await db_session.commit()
+    proxy_token = create_proxy_cookie_token(
+        session_id=session.public_id,
+        user_id=11,
+        tenant_id=7,
+        browser_session_id="browser-a",
+    )
+    request = _proxy_request(
+        session.public_id,
+        cookie=(
+            f"dolphin_code_runtime_{session.public_id}={proxy_token}; "
+            "apaas_sandbox_token=db-cookie-a"
+        ),
+        path="api/agent/sessions/current/events",
+    )
+    attempts: list[tuple[str, str, str]] = []
+    renew_calls = 0
+
+    activate_path = "/workspaces/crm/api/agent/sessions/runtime-bound/activate"
+    current_path = "/workspaces/crm/api/agent/sessions/current"
+    main_path = "/workspaces/crm/api/agent/sessions/current/events"
+
+    def handler(upstream: httpx.Request) -> httpx.Response:
+        attempt = (
+            upstream.method,
+            upstream.url.path,
+            upstream.headers.get("cookie", ""),
+        )
+        attempts.append(attempt)
+        if renew_stage == "activate":
+            if len(attempts) == 1:
+                return httpx.Response(
+                    401,
+                    content=b"alignment-expired",
+                    headers={
+                        "X-APAAS-Sandbox-Auth-Error": "sandbox_session_expired",
+                    },
+                )
+            if len(attempts) == 2:
+                return httpx.Response(200, json={"runtimeSessionId": "runtime-bound"})
+        else:
+            if len(attempts) == 1:
+                return httpx.Response(404, content=b"runtime session missing")
+            if len(attempts) == 2:
+                return httpx.Response(
+                    401,
+                    content=b"fallback-expired",
+                    headers={
+                        "X-APAAS-Sandbox-Auth-Error": "sandbox_session_expired",
+                    },
+                )
+            if len(attempts) == 3:
+                return httpx.Response(200, json={"runtimeSessionId": "runtime-current"})
+        if upstream.url.path == main_path and renew_calls == 1:
+            return httpx.Response(
+                401,
+                content=b"main-expired",
+                headers={
+                    "content-type": "text/event-stream",
+                    "X-APAAS-Sandbox-Auth-Error": "sandbox_session_expired",
+                },
+            )
+        return httpx.Response(200, content=b"unexpected replay")
+
+    async def fake_renew(_session, _binding, authorization, _db, *, reason):
+        nonlocal renew_calls
+        assert reason == "sandbox_session_expired"
+        renew_calls += 1
+        runtime_cookie = f"renewed-cookie-{renew_calls}"
+        return replace(
+            authorization,
+            runtime_cookie=runtime_cookie,
+            runtime_cookie_hash=hashlib.sha256(runtime_cookie.encode()).hexdigest(),
+            observed_generation=int(authorization.observed_generation or 0) + 1,
+            proxy_cookie_reissue_required=True,
+        )
+
+    transport = httpx.MockTransport(handler)
+    original = code_runtime_routes.httpx.AsyncClient
+    monkeypatch.setattr(
+        code_runtime_routes.httpx,
+        "AsyncClient",
+        lambda **kwargs: original(transport=transport, **kwargs),
+    )
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_renew_proxy_runtime_authorization",
+        fake_renew,
+    )
+
+    response = await proxy_code_runtime(
+        session.public_id,
+        "api/agent/sessions/current/events",
+        request,
+        db_session,
+    )
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    if response.background:
+        await response.background()
+
+    assert response.status_code == 401
+    assert body == b"main-expired"
+    assert renew_calls == 1
+    if renew_stage == "activate":
+        assert attempts == [
+            ("POST", activate_path, "apaas_sandbox_token=db-cookie-a"),
+            ("POST", activate_path, "apaas_sandbox_token=renewed-cookie-1"),
+            ("GET", main_path, "apaas_sandbox_token=renewed-cookie-1"),
+        ]
+    else:
+        assert attempts == [
+            ("POST", activate_path, "apaas_sandbox_token=db-cookie-a"),
+            ("GET", current_path, "apaas_sandbox_token=db-cookie-a"),
+            ("GET", current_path, "apaas_sandbox_token=renewed-cookie-1"),
+            ("GET", main_path, "apaas_sandbox_token=renewed-cookie-1"),
+        ]
+    assert any(
+        "apaas_sandbox_token=renewed-cookie-1" in value
         for value in response.headers.getlist("set-cookie")
     )
 
