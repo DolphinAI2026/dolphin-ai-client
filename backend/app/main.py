@@ -1,6 +1,7 @@
 import subprocess
 from contextlib import AsyncExitStack, asynccontextmanager
 import json
+import logging
 import os
 import re
 import time
@@ -54,6 +55,10 @@ from app.routes import (
     voice,
     work_state,
 )
+
+# HTTP client INFO records include full URLs, including one-time launch tokens.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 @asynccontextmanager

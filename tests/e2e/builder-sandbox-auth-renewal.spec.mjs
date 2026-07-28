@@ -9,6 +9,7 @@ const clockNonce = process.env.CLOCK_NONCE;
 const accessToken = process.env.BUILDER_ACCESS_TOKEN;
 const sessionRef = process.env.BUILDER_SESSION_REF;
 const databasePath = process.env.BUILDER_DATABASE_PATH;
+const secretEvidencePath = process.env.BROWSER_SECRET_EVIDENCE_PATH;
 
 for (const [name, value] of Object.entries({
   builder,
@@ -18,12 +19,14 @@ for (const [name, value] of Object.entries({
   accessToken,
   sessionRef,
   databasePath,
+  secretEvidencePath,
 })) {
   assert.ok(value, `${name} is required`);
 }
 
 const browserErrors = [];
 const response401s = [];
+const runtimeCookies = new Set();
 
 async function jsonFetch(page, path, options = {}) {
   return page.evaluate(
@@ -42,9 +45,15 @@ async function jsonFetch(page, path, options = {}) {
   );
 }
 
+function assertSafeEmbedUrl(embedUrl) {
+  const parsed = new URL(embedUrl, builder);
+  assert.equal(parsed.searchParams.has("token"), false, "launch token leaked to browser URL");
+  assert.ok(parsed.searchParams.get("dolphin_token"), "signed embed token missing");
+}
+
 function browserSessionId(embedUrl) {
   const token = new URL(embedUrl, builder).searchParams.get("dolphin_token");
-  assert.ok(token, "embed token missing");
+  assert.ok(token, "signed embed token missing");
   const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString());
   return payload.bsid;
 }
@@ -55,6 +64,7 @@ async function runtimeCookie(context) {
   );
   const cookie = cookies.find((item) => item.name === "apaas_sandbox_token");
   assert.ok(cookie?.value, "runtime cookie missing");
+  runtimeCookies.add(cookie.value);
   return cookie.value;
 }
 
@@ -79,7 +89,7 @@ async function setMode(mode) {
   assert.equal(response.status, 200);
 }
 
-async function advance(duration = "31m") {
+async function advance(duration = "20m") {
   const response = await fetch(`${clock}/advance`, {
     method: "POST",
     headers: {
@@ -127,39 +137,64 @@ try {
       }),
     ),
   );
-  opened.forEach((item) => assert.equal(item.status, 200, JSON.stringify(item.body)));
+  opened.forEach((item) => {
+    assert.equal(item.status, 200, JSON.stringify(item.body));
+    assertSafeEmbedUrl(item.body.embed_url);
+  });
   const ids = opened.map((item) => browserSessionId(item.body.embed_url));
   assert.notEqual(ids[0], ids[1], "browser_session_id must be isolated");
   const initialCookies = await Promise.all(
     opened.map((item, index) => establish(pages[index], contexts[index], item)),
   );
-  assert.notEqual(initialCookies[0], initialCookies[1], "runtime cookies must be isolated");
+  assert.ok(initialCookies[0] !== initialCookies[1], "runtime cookies must be isolated");
   assert.equal((await state()).open_count, 2);
 
-  const generation1 = await advance();
-  assert.equal(generation1.clock_generation, 1);
   const statusPath = `/api/code-runtime/${sessionRef}/api/status`;
-  const aRenewed = await jsonFetch(pages[0], statusPath);
-  assert.equal(aRenewed.status, 200, JSON.stringify(aRenewed.body));
-  const afterA = await Promise.all(contexts.map(runtimeCookie));
-  assert.notEqual(afterA[0], initialCookies[0], "browser A cookie did not renew");
-  assert.equal(afterA[1], initialCookies[1], "browser B cookie changed during A renewal");
-  assert.equal((await state()).open_count, 3);
+  const initialOpenCount = (await state()).open_count;
+  const chromiumCookie = initialCookies[0];
 
-  const bRenewed = await jsonFetch(pages[1], statusPath);
-  assert.equal(bRenewed.status, 200, JSON.stringify(bRenewed.body));
-  const afterB = await Promise.all(contexts.map(runtimeCookie));
-  assert.notEqual(afterB[1], initialCookies[1], "browser B cookie did not renew");
-  assert.equal((await state()).open_count, 4);
+  for (let step = 1; step <= 5; step += 1) {
+    await advance("20m");
+    const active = await jsonFetch(pages[0], statusPath);
+    assert.equal(active.status, 200, JSON.stringify(active.body));
+    assert.ok(
+      (await runtimeCookie(contexts[0])) === chromiumCookie,
+      `active Session value changed at minute ${step * 20}`,
+    );
+    assert.equal(
+      (await state()).open_count,
+      initialOpenCount,
+      `normal activity reopened workspace at minute ${step * 20}`,
+    );
+  }
 
-  const generation2 = await advance();
-  assert.equal(generation2.clock_generation, 2);
-  const concurrent = await Promise.all(pages.map((page) => jsonFetch(page, statusPath)));
-  concurrent.forEach((item) => assert.equal(item.status, 200, JSON.stringify(item.body)));
-  assert.equal((await state()).open_count, 6, "concurrent renewals must open exactly once each");
+  await advance("20m");
+  const absoluteRecovery = await jsonFetch(pages[0], statusPath);
+  assert.equal(absoluteRecovery.status, 200, JSON.stringify(absoluteRecovery.body));
+  const recoveredChromiumCookie = await runtimeCookie(contexts[0]);
+  assert.ok(
+    recoveredChromiumCookie !== chromiumCookie,
+    "absolute expiry did not create one new Session",
+  );
+  assert.equal((await state()).open_count, initialOpenCount + 1);
+
+  const chromiumAfterOwnRecovery = await runtimeCookie(contexts[0]);
+  const firefoxRecovery = await jsonFetch(pages[1], statusPath);
+  assert.equal(firefoxRecovery.status, 200, JSON.stringify(firefoxRecovery.body));
+  const recoveredFirefoxCookie = await runtimeCookie(contexts[1]);
+  assert.ok(recoveredFirefoxCookie !== initialCookies[1], "Firefox Session did not recover");
+  assert.ok(
+    (await runtimeCookie(contexts[0])) === chromiumAfterOwnRecovery,
+    "Firefox recovery changed the Chromium Session",
+  );
+  assert.ok(
+    recoveredFirefoxCookie !== chromiumAfterOwnRecovery,
+    "Firefox recovery reused the Chromium Session",
+  );
+  assert.equal((await state()).open_count, initialOpenCount + 2);
 
   await setMode("access_expired");
-  await advance();
+  await advance("31m");
   const refreshed = await jsonFetch(pages[0], statusPath);
   assert.equal(refreshed.status, 200, JSON.stringify(refreshed.body));
   const refreshedState = await state();
@@ -171,7 +206,7 @@ try {
   response401s.length = 0;
 
   await setMode("refresh_invalid");
-  await advance();
+  await advance("31m");
   const refreshInvalid = await jsonFetch(pages[1], statusPath);
   assert.equal(refreshInvalid.status, 401);
   const hardFailureState = await state();
@@ -181,7 +216,7 @@ try {
   assert.equal((await state()).open_count, opensAfterFailure, "hard failure must not loop");
 
   await setMode("account_disabled");
-  await advance();
+  await advance("31m");
   const accountDisabled = await jsonFetch(pages[0], statusPath);
   assert.equal(accountDisabled.status, 403);
   const accountDisabledOpens = (await state()).open_count;
@@ -194,9 +229,10 @@ try {
     headers: { "Content-Type": "application/json" },
   });
   assert.equal(reopened.status, 200, JSON.stringify(reopened.body));
+  assertSafeEmbedUrl(reopened.body.embed_url);
   await establish(pages[0], contexts[0], reopened);
   await setMode("tenant_unbound");
-  await advance();
+  await advance("31m");
   const tenantUnbound = await jsonFetch(pages[0], statusPath);
   assert.equal(tenantUnbound.status, 403);
   const tenantUnboundOpens = (await state()).open_count;
@@ -204,6 +240,11 @@ try {
   assert.equal((await state()).open_count, tenantUnboundOpens, "unbound tenant must not loop");
 
   assert.ok(fs.statSync(databasePath).size > 0, "SQLite fixture database is empty");
+  fs.writeFileSync(
+    secretEvidencePath,
+    JSON.stringify({ runtime_cookies: [...runtimeCookies] }),
+    { encoding: "utf8", mode: 0o600 },
+  );
   console.log("L3_BROWSER_AUTH_RENEWAL=PASS");
 } finally {
   await Promise.allSettled([chromiumBrowser.close(), firefoxBrowser.close()]);

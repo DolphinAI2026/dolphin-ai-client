@@ -17,6 +17,7 @@ CP_LOG="${TMP_DIR}/control-plane.log"
 BUILDER_LOG="${TMP_DIR}/builder.log"
 RUNTIME_READY="${TMP_DIR}/runtime.json"
 DB_PATH="${TMP_DIR}/builder.db"
+BROWSER_SECRET_EVIDENCE="${TMP_DIR}/browser-secrets.json"
 runtime_pid=""
 cp_pid=""
 builder_pid=""
@@ -26,7 +27,43 @@ dump_logs() {
   if [[ "${status}" -ne 0 ]]; then
     for log in "${RUNTIME_LOG}" "${CP_LOG}" "${BUILDER_LOG}"; do
       printf '\n===== %s =====\n' "${log}" >&2
-      tail -120 "${log}" >&2 || true
+      "${PYTHON}" - "${log}" "${RUNTIME_READY}" "${BROWSER_SECRET_EVIDENCE}" <<'PY' >&2 || true
+import json
+import re
+import sys
+
+log_path, runtime_ready, browser_evidence = sys.argv[1:]
+secrets = []
+for path, key in (
+    (runtime_ready, "initial_launch_token"),
+    (runtime_ready, "clock_nonce"),
+    (runtime_ready, "internal_token"),
+):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            value = str(json.load(handle).get(key) or "")
+        if value:
+            secrets.append(value)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
+try:
+    with open(browser_evidence, encoding="utf-8") as handle:
+        secrets.extend(str(value) for value in json.load(handle).get("runtime_cookies", []))
+except (FileNotFoundError, json.JSONDecodeError, OSError):
+    pass
+
+with open(log_path, encoding="utf-8", errors="replace") as handle:
+    text = "".join(handle.readlines()[-120:])
+for value in secrets:
+    text = text.replace(value, "[REDACTED]")
+text = re.sub(r"(AUTH_RENEWAL_FIXTURE=).*", r"\1[REDACTED]", text)
+text = re.sub(
+    r"(\?\s*token\s*=\s*)(?:[A-Za-z0-9_-]\s*){20,}",
+    r"\1[REDACTED]",
+    text,
+)
+sys.stderr.write(text)
+PY
     done
   fi
   return "${status}"
@@ -84,7 +121,7 @@ sed -i 's/^AUTH_RENEWAL_FIXTURE=.*/AUTH_RENEWAL_FIXTURE=[REDACTED]/' "${RUNTIME_
   --runtime-readiness "${RUNTIME_READY}" >"${CP_LOG}" 2>&1 &
 cp_pid=$!
 cp_json="$(wait_line "${CP_LOG}" "FAKE_CONTROL_PLANE=")"
-cp_base_url="$("${PYTHON}" -c 'import json,sys; print(json.loads(sys.argv[1])["base_url"])' "${cp_json}")"
+cp_base_url="$(printf '%s' "${cp_json}" | "${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin)["base_url"])')"
 wait_http "${cp_base_url}/healthz" "${CP_LOG}"
 
 builder_port="$("${PYTHON}" - <<'PY'
@@ -94,7 +131,7 @@ with socket.socket() as sock:
     print(sock.getsockname()[1])
 PY
 )"
-builder_base_url="http://127.0.0.1:${builder_port}"
+builder_base_url="http://localhost:${builder_port}"
 export DATABASE_URL="sqlite+aiosqlite:///${DB_PATH}"
 export JWT_SECRET_KEY="builder-e2e-jwt-secret"
 export LLM_API_KEY="builder-e2e-llm-key"
@@ -123,11 +160,12 @@ import asyncio
 import json
 from sqlalchemy import select
 from app.auth import create_access_token
+from app.code_runtime.service import code_session_route_id
 from app.code_runtime.auth import store_control_plane_credentials
 from app.database import AsyncSessionLocal
 from app.models import User
 from app.models.ai_chat import AIChatSession
-from app.models.tenant import Tenant
+from app.models.tenant import Tenant, UserTenant
 
 async def main():
     async with AsyncSessionLocal() as db:
@@ -148,8 +186,10 @@ async def main():
         store_control_plane_credentials(user, "access-initial", "refresh-initial")
         db.add(user)
         await db.flush()
+        db.add(UserTenant(user_id=user.id, tenant_id=tenant.id, status=1))
         session = AIChatSession(
             tenant_id=tenant.id,
+            control_plane_tenant_id="tenant-e2e",
             user_id=user.id,
             title="Auth renewal E2E",
             status="active",
@@ -161,17 +201,17 @@ async def main():
         await db.commit()
         print(json.dumps({
             "access_token": create_access_token(user, tenant_id=tenant.id),
-            "session_ref": session.public_id,
+            "session_ref": code_session_route_id(session.id),
         }))
 
 asyncio.run(main())
 PY
 )"
 
-clock_url="$("${PYTHON}" -c 'import json,sys; print(json.loads(sys.argv[1])["clock_control_url"])' "${runtime_json}")"
-clock_nonce="$("${PYTHON}" -c 'import json,sys; print(json.loads(sys.argv[1])["clock_nonce"])' "${runtime_json}")"
-access_token="$("${PYTHON}" -c 'import json,sys; print(json.loads(sys.argv[1])["access_token"])' "${fixture_json}")"
-session_ref="$("${PYTHON}" -c 'import json,sys; print(json.loads(sys.argv[1])["session_ref"])' "${fixture_json}")"
+clock_url="$(printf '%s' "${runtime_json}" | "${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin)["clock_control_url"])')"
+clock_nonce="$(printf '%s' "${runtime_json}" | "${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin)["clock_nonce"])')"
+access_token="$(printf '%s' "${fixture_json}" | "${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
+session_ref="$(printf '%s' "${fixture_json}" | "${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin)["session_ref"])')"
 
 PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_PATH}" \
 BUILDER_BASE_URL="${builder_base_url}" \
@@ -181,31 +221,50 @@ CLOCK_NONCE="${clock_nonce}" \
 BUILDER_ACCESS_TOKEN="${access_token}" \
 BUILDER_SESSION_REF="${session_ref}" \
 BUILDER_DATABASE_PATH="${DB_PATH}" \
+BROWSER_SECRET_EVIDENCE_PATH="${BROWSER_SECRET_EVIDENCE}" \
 npm exec -- node "${ROOT_DIR}/tests/e2e/builder-sandbox-auth-renewal.spec.mjs"
 
-"${PYTHON}" - "${DB_PATH}" <<'PY'
-import sqlite3
+initial_launch_token="$(printf '%s' "${runtime_json}" \
+  | "${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin)["initial_launch_token"])')"
+printf '{"database_path":"%s","launch_tokens":["%s"]}' \
+  "${DB_PATH}" "${initial_launch_token}" \
+  | "${PYTHON}" "${ROOT_DIR}/tests/e2e/fixtures/verify_sandbox_auth_db.py"
+unset initial_launch_token
+
+"${PYTHON}" -c '
+import json
+import re
 import sys
 
-with sqlite3.connect(sys.argv[1]) as db:
-    rows = db.execute(
-        "select browser_session_id, generation, runtime_session_hash "
-        "from code_runtime_browser_sessions order by id"
-    ).fetchall()
-if len(rows) < 2:
-    raise SystemExit(f"expected at least 2 browser session rows, got {len(rows)}")
-if len({row[0] for row in rows}) != len(rows) or len({row[2] for row in rows}) != len(rows):
-    raise SystemExit("browser session rows are not isolated")
-if max(row[1] for row in rows) < 3:
-    raise SystemExit(f"browser generations did not advance: {rows!r}")
-print("L3_DATABASE_ISOLATION=PASS")
-PY
+runtime_ready, browser_evidence, *logs = sys.argv[1:]
+with open(runtime_ready, encoding="utf-8") as handle:
+    launch_token = str(json.load(handle)["initial_launch_token"])
+with open(browser_evidence, encoding="utf-8") as handle:
+    runtime_cookies = [str(value) for value in json.load(handle)["runtime_cookies"]]
+if not runtime_cookies:
+    raise SystemExit("runtime cookie evidence is empty")
 
-if rg -n \
-  'access-initial|refresh-initial|clock_nonce|initial_launch_token|internal_token|token=[A-Za-z0-9_-]{20,}' \
-  "${RUNTIME_LOG}" "${CP_LOG}" "${BUILDER_LOG}"; then
-  echo "credential canary found in service logs" >&2
-  exit 1
-fi
+literal_canaries = [
+    "access-initial",
+    "refresh-initial",
+    "clock_nonce",
+    "initial_launch_token",
+    "internal_token",
+    "local-auth-disabled",
+]
+secret_canaries = [launch_token, *runtime_cookies]
+url_canary = re.compile(r"\?\s*token\s*=\s*(?:[A-Za-z0-9_-]\s*){20,}")
+for log_path in logs:
+    with open(log_path, encoding="utf-8", errors="replace") as handle:
+        text = handle.read()
+    compact_text = re.sub(r"\s+", "", text)
+    if (
+        any(value and value in text for value in literal_canaries)
+        or any(value and (value in text or value in compact_text) for value in secret_canaries)
+        or url_canary.search(text)
+    ):
+        raise SystemExit(f"credential canary found in service log: {log_path}")
+' "${RUNTIME_READY}" "${BROWSER_SECRET_EVIDENCE}" \
+  "${RUNTIME_LOG}" "${CP_LOG}" "${BUILDER_LOG}"
 
 echo "L3_SANDBOX_AUTH_RENEWAL=PASS"
