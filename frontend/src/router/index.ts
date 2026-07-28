@@ -14,7 +14,7 @@ import request, {
 } from '@/utils/request'
 import { getDesktopState } from '@/utils/desktop'
 import {
-  resolveDesktopBootstrapRedirect,
+  loadDesktopBootstrapDecision,
   resolveDesktopRedirect,
 } from './desktopGuard'
 import { normalizeTenantPublicId, resolveTenantUrl } from './tenantUrlGuard'
@@ -317,11 +317,10 @@ export function installRouterGuards(targetRouter: Router): void {
   targetRouter.beforeEach(async (to, _from, next) => {
   if (typeof __DESKTOP__ !== 'undefined' && __DESKTOP__) {
     if (!desktopBootstrapReadyForDocument) {
-      const desktopState = await getDesktopState()
-      desktopBootstrapReadyForDocument = desktopState.phase === 'ready'
-      const desktopRedirect = resolveDesktopBootstrapRedirect(desktopState.phase, to.path)
-      if (desktopRedirect) {
-        next({ path: desktopRedirect, replace: true })
+      const desktopDecision = await loadDesktopBootstrapDecision(getDesktopState, to.path)
+      desktopBootstrapReadyForDocument = desktopDecision.readyForDocument
+      if (desktopDecision.redirect) {
+        next({ path: desktopDecision.redirect, replace: true })
         return
       }
     }
