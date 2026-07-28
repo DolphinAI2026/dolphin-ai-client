@@ -5,7 +5,9 @@ use crate::desktop_config::{
 use crate::local_runtime::api::LocalRuntimeApiServer;
 use crate::local_runtime::process_driver::agent_runtime_executable;
 use serde::{Deserialize, Serialize};
+use std::any::Any;
 use std::collections::BTreeMap;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -242,6 +244,12 @@ impl LifecycleIntent {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShutdownRequestStatus {
+    Pending,
+    Complete,
+}
+
 #[derive(Clone)]
 struct LifecycleSupervisor {
     sender: Sender<LifecycleIntent>,
@@ -270,7 +278,11 @@ struct DesktopBackendInner {
     runtime: Option<LocalRuntimeApiServer>,
     sidecar: Option<CommandChild>,
     pending_sidecar_error: Option<(u64, DesktopBackendError)>,
+    worker_failed: bool,
     shutdown_requested: bool,
+    shutdown_generation: Option<u64>,
+    shutdown_intent_enqueued: bool,
+    shutdown_recovery_started: bool,
     shutdown_complete: bool,
 }
 
@@ -301,7 +313,11 @@ impl DesktopBackend {
                 runtime: None,
                 sidecar: None,
                 pending_sidecar_error: None,
+                worker_failed: false,
                 shutdown_requested: false,
+                shutdown_generation: None,
+                shutdown_intent_enqueued: false,
+                shutdown_recovery_started: false,
                 shutdown_complete: false,
             }),
             config_store,
@@ -319,6 +335,10 @@ impl DesktopBackend {
 
     fn snapshot(&self) -> DesktopStateSnapshot {
         let inner = self.lock();
+        self.snapshot_from_inner(&inner)
+    }
+
+    fn snapshot_from_inner(&self, inner: &DesktopBackendInner) -> DesktopStateSnapshot {
         DesktopStateSnapshot {
             phase: inner.phase,
             setup_scope: inner.setup_scope,
@@ -328,8 +348,168 @@ impl DesktopBackend {
         }
     }
 
-    fn submit(&self, intent: LifecycleIntent) -> Result<(), DesktopBackendError> {
-        self.supervisor.submit(intent)
+    fn ensure_accepting(inner: &DesktopBackendInner) -> Result<(), DesktopBackendError> {
+        if inner.shutdown_requested {
+            return Err(DesktopBackendError::runtime("桌面应用正在退出"));
+        }
+        if inner.worker_failed {
+            return Err(inner.error.clone().unwrap_or_else(|| {
+                DesktopBackendError::runtime("桌面生命周期服务不可用，请重新启动应用")
+            }));
+        }
+        Ok(())
+    }
+
+    fn record_worker_failure(inner: &mut DesktopBackendInner, error: DesktopBackendError) {
+        inner.worker_failed = true;
+        inner.shutdown_intent_enqueued = false;
+        inner.pending_sidecar_error = None;
+        inner.phase = DesktopPhase::Failed;
+        inner.error = Some(error);
+    }
+
+    fn submit_locked(
+        &self,
+        inner: &mut DesktopBackendInner,
+        intent: LifecycleIntent,
+    ) -> Result<(), DesktopBackendError> {
+        if let Err(error) = self.supervisor.submit(intent) {
+            Self::record_worker_failure(inner, error.clone());
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn queue_initialize(&self) -> Result<(), DesktopBackendError> {
+        let mut inner = self.lock();
+        Self::ensure_accepting(&inner)?;
+        let generation = inner.lease.request_generation();
+        self.submit_locked(&mut inner, LifecycleIntent::Initialize { generation })
+    }
+
+    fn queue_save_setup(
+        &self,
+        input: DesktopSetupInput,
+    ) -> Result<DesktopStateSnapshot, DesktopBackendError> {
+        let mut inner = self.lock();
+        Self::ensure_accepting(&inner)?;
+        let generation = inner.lease.request_generation();
+        inner.phase = DesktopPhase::SavingConfig;
+        inner.setup_scope = DesktopSetupScope::Full;
+        inner.error = None;
+        self.submit_locked(&mut inner, LifecycleIntent::SaveSetup { generation, input })?;
+        Ok(self.snapshot_from_inner(&inner))
+    }
+
+    fn queue_retry(&self) -> Result<DesktopStateSnapshot, DesktopBackendError> {
+        let mut inner = self.lock();
+        Self::ensure_accepting(&inner)?;
+        if inner.phase != DesktopPhase::Failed {
+            return Ok(self.snapshot_from_inner(&inner));
+        }
+        let generation = inner.lease.request_generation();
+        inner.phase = DesktopPhase::StartingRuntime;
+        inner.error = None;
+        self.submit_locked(&mut inner, LifecycleIntent::Retry { generation })?;
+        Ok(self.snapshot_from_inner(&inner))
+    }
+
+    fn queue_enter_login_setup(&self) -> Result<(), DesktopBackendError> {
+        let mut inner = self.lock();
+        Self::ensure_accepting(&inner)?;
+        if inner.config.is_none() {
+            return Err(DesktopBackendError::config("桌面配置尚未初始化"));
+        }
+        let generation = inner.lease.request_generation();
+        inner.phase = DesktopPhase::NeedsSetup;
+        inner.setup_scope = DesktopSetupScope::LoginOnly;
+        inner.error = None;
+        self.submit_locked(&mut inner, LifecycleIntent::EnterLoginSetup { generation })
+    }
+
+    fn queue_update_login(
+        &self,
+        login: DesktopLoginConfig,
+    ) -> Result<DesktopStateSnapshot, DesktopBackendError> {
+        let mut inner = self.lock();
+        Self::ensure_accepting(&inner)?;
+        if inner.config.is_none() {
+            return Err(DesktopBackendError::config("桌面配置尚未初始化"));
+        }
+        let generation = inner.lease.request_generation();
+        inner.phase = DesktopPhase::SavingConfig;
+        inner.setup_scope = DesktopSetupScope::LoginOnly;
+        inner.error = None;
+        self.submit_locked(
+            &mut inner,
+            LifecycleIntent::UpdateLogin { generation, login },
+        )?;
+        Ok(self.snapshot_from_inner(&inner))
+    }
+
+    fn queue_sidecar_terminated(
+        &self,
+        generation: u64,
+        error: DesktopBackendError,
+    ) -> Result<bool, DesktopBackendError> {
+        let mut inner = self.lock();
+        if inner.shutdown_requested || inner.worker_failed {
+            return Ok(false);
+        }
+        if !inner.lease.is_desired(generation)
+            || !matches!(
+                inner.phase,
+                DesktopPhase::StartingSidecar | DesktopPhase::Ready
+            )
+        {
+            return Ok(false);
+        }
+        inner.pending_sidecar_error = Some((generation, error.clone()));
+        self.submit_locked(
+            &mut inner,
+            LifecycleIntent::SidecarTerminated { generation, error },
+        )?;
+        Ok(true)
+    }
+
+    fn queue_shutdown(&self) -> Result<ShutdownRequestStatus, DesktopBackendError> {
+        let mut inner = self.lock();
+        if inner.shutdown_complete {
+            return Ok(ShutdownRequestStatus::Complete);
+        }
+        inner.shutdown_requested = true;
+        if inner.shutdown_intent_enqueued {
+            return Ok(ShutdownRequestStatus::Pending);
+        }
+        if inner.worker_failed {
+            return Err(inner.error.clone().unwrap_or_else(|| {
+                DesktopBackendError::runtime("桌面生命周期服务不可用，请重新启动应用")
+            }));
+        }
+        let generation = match inner.shutdown_generation {
+            Some(generation) => generation,
+            None => {
+                let generation = inner.lease.request_generation();
+                inner.shutdown_generation = Some(generation);
+                generation
+            }
+        };
+        self.submit_locked(&mut inner, LifecycleIntent::Shutdown { generation })?;
+        inner.shutdown_intent_enqueued = true;
+        Ok(ShutdownRequestStatus::Pending)
+    }
+
+    fn shutdown_complete(&self) -> bool {
+        self.lock().shutdown_complete
+    }
+
+    fn begin_shutdown_recovery(&self) -> bool {
+        let mut inner = self.lock();
+        if inner.shutdown_complete || inner.shutdown_recovery_started {
+            return false;
+        }
+        inner.shutdown_recovery_started = true;
+        true
     }
 
     fn begin_operation(&self, generation: u64) -> bool {
@@ -491,18 +671,7 @@ fn log_sidecar_events(
                     };
                     let error = DesktopBackendError::sidecar(message);
                     let state = app.state::<DesktopBackend>();
-                    {
-                        let mut inner = state.lock();
-                        if inner.lease.is_desired(generation)
-                            && matches!(
-                                inner.phase,
-                                DesktopPhase::StartingSidecar | DesktopPhase::Ready
-                            )
-                        {
-                            inner.pending_sidecar_error = Some((generation, error.clone()));
-                        }
-                    }
-                    let _ = state.submit(LifecycleIntent::SidecarTerminated { generation, error });
+                    let _ = state.queue_sidecar_terminated(generation, error);
                     break;
                 }
                 _ => {}
@@ -951,6 +1120,78 @@ fn run_sidecar_terminated(app: &AppHandle, generation: u64, error: DesktopBacken
     let _ = navigate_packaged(app, &packaged_url);
 }
 
+struct LifecycleLeaseRelease<F: FnOnce()> {
+    release: Option<F>,
+}
+
+impl<F: FnOnce()> LifecycleLeaseRelease<F> {
+    fn new(release: F) -> Self {
+        Self {
+            release: Some(release),
+        }
+    }
+}
+
+impl<F: FnOnce()> Drop for LifecycleLeaseRelease<F> {
+    fn drop(&mut self) {
+        if let Some(release) = self.release.take() {
+            release();
+        }
+    }
+}
+
+fn panic_message(payload: &(dyn Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic".to_string()
+    }
+}
+
+fn run_guarded_worker_operation<Operation, Release, Recover>(
+    operation: Operation,
+    release: Release,
+    recover: Recover,
+) -> bool
+where
+    Operation: FnOnce(),
+    Release: FnOnce(),
+    Recover: FnOnce(String),
+{
+    let _lease_release = LifecycleLeaseRelease::new(release);
+    match catch_unwind(AssertUnwindSafe(operation)) {
+        Ok(()) => true,
+        Err(payload) => {
+            let message = panic_message(payload.as_ref());
+            let _ = catch_unwind(AssertUnwindSafe(|| recover(message)));
+            false
+        }
+    }
+}
+
+fn recover_worker_failure(app: &AppHandle, panic_message: String) {
+    let state = app.state::<DesktopBackend>();
+    let (sidecar, runtime, shutdown_requested) = {
+        let mut inner = state.lock();
+        let error = DesktopBackendError::runtime(format!(
+            "桌面生命周期处理异常，请重新启动应用: {panic_message}"
+        ));
+        DesktopBackend::record_worker_failure(&mut inner, error);
+        (
+            inner.sidecar.take(),
+            inner.runtime.take(),
+            inner.shutdown_requested,
+        )
+    };
+    let _ = catch_unwind(AssertUnwindSafe(|| stop_resources(sidecar, runtime)));
+    if shutdown_requested {
+        state.lock().shutdown_complete = true;
+        app.exit(1);
+    }
+}
+
 fn lifecycle_worker(app: AppHandle, receiver: Receiver<LifecycleIntent>) {
     while let Ok(intent) = receiver.recv() {
         let generation = intent.generation();
@@ -959,25 +1200,35 @@ fn lifecycle_worker(app: AppHandle, receiver: Receiver<LifecycleIntent>) {
             continue;
         }
         let shutdown = matches!(intent, LifecycleIntent::Shutdown { .. });
-        match intent {
-            LifecycleIntent::Initialize { .. } => run_initialize(&app, generation),
-            LifecycleIntent::SaveSetup { input, .. } => run_save_setup(&app, generation, input),
-            LifecycleIntent::Retry { .. } => run_retry(&app, generation),
-            LifecycleIntent::EnterLoginSetup { .. } => run_enter_login_setup(&app, generation),
-            LifecycleIntent::UpdateLogin { login, .. } => run_update_login(&app, generation, login),
-            LifecycleIntent::SidecarTerminated { error, .. } => {
-                run_sidecar_terminated(&app, generation, error)
-            }
-            LifecycleIntent::Shutdown { .. } => {
-                let (sidecar, runtime) = {
+        let completed = run_guarded_worker_operation(
+            || match intent {
+                LifecycleIntent::Initialize { .. } => run_initialize(&app, generation),
+                LifecycleIntent::SaveSetup { input, .. } => run_save_setup(&app, generation, input),
+                LifecycleIntent::Retry { .. } => run_retry(&app, generation),
+                LifecycleIntent::EnterLoginSetup { .. } => run_enter_login_setup(&app, generation),
+                LifecycleIntent::UpdateLogin { login, .. } => {
+                    run_update_login(&app, generation, login)
+                }
+                LifecycleIntent::SidecarTerminated { error, .. } => {
+                    run_sidecar_terminated(&app, generation, error)
+                }
+                LifecycleIntent::Shutdown { .. } => {
+                    let (sidecar, runtime) = {
+                        let mut inner = state.lock();
+                        (inner.sidecar.take(), inner.runtime.take())
+                    };
+                    stop_resources(sidecar, runtime);
                     let mut inner = state.lock();
-                    (inner.sidecar.take(), inner.runtime.take())
-                };
-                stop_resources(sidecar, runtime);
-                state.lock().shutdown_complete = true;
-            }
+                    inner.shutdown_intent_enqueued = false;
+                    inner.shutdown_complete = true;
+                }
+            },
+            || state.finish_operation(generation),
+            |message| recover_worker_failure(&app, message),
+        );
+        if !completed {
+            break;
         }
-        state.finish_operation(generation);
         if shutdown {
             app.exit(0);
             break;
@@ -1006,9 +1257,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     ));
     let worker_handle = handle.clone();
     thread::spawn(move || lifecycle_worker(worker_handle, receiver));
-    let state = handle.state::<DesktopBackend>();
-    let generation = state.lock().lease.request_generation();
-    state.submit(LifecycleIntent::Initialize { generation })?;
+    handle.state::<DesktopBackend>().queue_initialize()?;
     Ok(())
 }
 
@@ -1022,16 +1271,7 @@ pub fn desktop_save_setup(
     state: tauri::State<'_, DesktopBackend>,
     input: DesktopSetupInput,
 ) -> Result<DesktopStateSnapshot, DesktopBackendError> {
-    let generation = {
-        let mut inner = state.lock();
-        let generation = inner.lease.request_generation();
-        inner.phase = DesktopPhase::SavingConfig;
-        inner.setup_scope = DesktopSetupScope::Full;
-        inner.error = None;
-        generation
-    };
-    state.submit(LifecycleIntent::SaveSetup { generation, input })?;
-    Ok(state.snapshot())
+    state.queue_save_setup(input)
 }
 
 fn desktop_test_service_blocking(login: DesktopLoginConfig) -> Result<(), DesktopBackendError> {
@@ -1069,37 +1309,14 @@ pub async fn desktop_test_service(login: DesktopLoginConfig) -> Result<(), Deskt
 pub fn desktop_enter_login_setup(
     state: tauri::State<'_, DesktopBackend>,
 ) -> Result<(), DesktopBackendError> {
-    let generation = {
-        let mut inner = state.lock();
-        if inner.config.is_none() {
-            return Err(DesktopBackendError::config("桌面配置尚未初始化"));
-        }
-        let generation = inner.lease.request_generation();
-        inner.phase = DesktopPhase::NeedsSetup;
-        inner.setup_scope = DesktopSetupScope::LoginOnly;
-        inner.error = None;
-        generation
-    };
-    state.submit(LifecycleIntent::EnterLoginSetup { generation })
+    state.queue_enter_login_setup()
 }
 
 #[tauri::command]
 pub fn desktop_retry_start(
     state: tauri::State<'_, DesktopBackend>,
 ) -> Result<DesktopStateSnapshot, DesktopBackendError> {
-    let generation = {
-        let mut inner = state.lock();
-        if inner.phase != DesktopPhase::Failed {
-            drop(inner);
-            return Ok(state.snapshot());
-        }
-        let generation = inner.lease.request_generation();
-        inner.phase = DesktopPhase::StartingRuntime;
-        inner.error = None;
-        generation
-    };
-    state.submit(LifecycleIntent::Retry { generation })?;
-    Ok(state.snapshot())
+    state.queue_retry()
 }
 
 #[tauri::command]
@@ -1107,19 +1324,7 @@ pub fn desktop_update_login(
     state: tauri::State<'_, DesktopBackend>,
     login: DesktopLoginConfig,
 ) -> Result<DesktopStateSnapshot, DesktopBackendError> {
-    let generation = {
-        let mut inner = state.lock();
-        if inner.config.is_none() {
-            return Err(DesktopBackendError::config("桌面配置尚未初始化"));
-        }
-        let generation = inner.lease.request_generation();
-        inner.phase = DesktopPhase::SavingConfig;
-        inner.setup_scope = DesktopSetupScope::LoginOnly;
-        inner.error = None;
-        generation
-    };
-    state.submit(LifecycleIntent::UpdateLogin { generation, login })?;
-    Ok(state.snapshot())
+    state.queue_update_login(login)
 }
 
 #[tauri::command]
@@ -1149,22 +1354,29 @@ pub fn desktop_open_path(
 pub fn handle_run_event(app: &AppHandle, event: RunEvent) {
     if let RunEvent::ExitRequested { api, .. } = event {
         let state = app.state::<DesktopBackend>();
-        let generation = {
-            let mut inner = state.lock();
-            if inner.shutdown_complete {
-                return;
+        if state.shutdown_complete() {
+            return;
+        }
+        api.prevent_exit();
+        match state.queue_shutdown() {
+            Ok(ShutdownRequestStatus::Pending) => {}
+            Ok(ShutdownRequestStatus::Complete) => app.exit(0),
+            Err(error) => {
+                eprintln!("[desktop] failed to submit shutdown: {error}");
+                if state.begin_shutdown_recovery() {
+                    let app = app.clone();
+                    thread::spawn(move || {
+                        let state = app.state::<DesktopBackend>();
+                        let (sidecar, runtime) = {
+                            let mut inner = state.lock();
+                            (inner.sidecar.take(), inner.runtime.take())
+                        };
+                        let _ = catch_unwind(AssertUnwindSafe(|| stop_resources(sidecar, runtime)));
+                        state.lock().shutdown_complete = true;
+                        app.exit(1);
+                    });
+                }
             }
-            api.prevent_exit();
-            if inner.shutdown_requested {
-                return;
-            }
-            inner.shutdown_requested = true;
-            inner.lease.request_generation()
-        };
-        if let Err(error) = state.submit(LifecycleIntent::Shutdown { generation }) {
-            eprintln!("[desktop] failed to submit shutdown: {error}");
-            state.lock().shutdown_complete = true;
-            app.exit(1);
         }
     }
 }
@@ -1219,6 +1431,7 @@ fn kill_sidecar_deep(bootloader_pid: u32) {
 mod tests {
     use super::*;
     use crate::desktop_config::{DesktopConfig, DesktopLoginConfig, DesktopLoginMode};
+    use std::cell::{Cell, RefCell};
     use std::io::Write;
     use std::net::TcpListener;
     use std::path::PathBuf;
@@ -1229,6 +1442,28 @@ mod tests {
             root_dir: PathBuf::from("/tmp/DolphinCode"),
             login: DesktopLoginConfig {
                 mode,
+                base_url: "https://om-demo.dfy.definesys.cn".to_string(),
+            },
+        }
+    }
+
+    fn fixture_backend(supervisor: LifecycleSupervisor) -> DesktopBackend {
+        let backend = DesktopBackend::new(
+            DesktopConfigStore::new(std::env::temp_dir().join("dolphin-desktop-tests")),
+            PathBuf::from("/tmp/DolphinCode"),
+            PathBuf::from("/tmp/agent-runtime"),
+            tauri::Url::parse("tauri://localhost/index.html").unwrap(),
+            supervisor,
+        );
+        backend.lock().config = Some(fixture_config(DesktopLoginMode::ControlPlane));
+        backend
+    }
+
+    fn fixture_setup_input() -> DesktopSetupInput {
+        DesktopSetupInput {
+            root_dir: "/tmp/DolphinCode".to_string(),
+            login: DesktopLoginConfig {
+                mode: DesktopLoginMode::ControlPlane,
                 base_url: "https://om-demo.dfy.definesys.cn".to_string(),
             },
         }
@@ -1297,6 +1532,86 @@ mod tests {
             receiver.try_recv(),
             Ok(LifecycleIntent::Shutdown { generation: 7 })
         ));
+    }
+
+    #[test]
+    fn shutdown_barrier_rejects_normal_intents_without_advancing_generation() {
+        let (supervisor, receiver) = LifecycleSupervisor::channel();
+        let backend = fixture_backend(supervisor);
+        backend.lock().phase = DesktopPhase::Failed;
+
+        assert_eq!(
+            backend.queue_shutdown().unwrap(),
+            ShutdownRequestStatus::Pending
+        );
+        let shutdown_generation = backend.lock().lease.desired_generation;
+
+        assert!(backend.queue_retry().is_err());
+        assert!(backend.queue_save_setup(fixture_setup_input()).is_err());
+        assert!(backend.queue_enter_login_setup().is_err());
+        assert!(backend
+            .queue_update_login(fixture_setup_input().login)
+            .is_err());
+        assert_eq!(
+            backend.queue_shutdown().unwrap(),
+            ShutdownRequestStatus::Pending
+        );
+
+        assert_eq!(backend.lock().lease.desired_generation, shutdown_generation);
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(LifecycleIntent::Shutdown { generation }) if generation == shutdown_generation
+        ));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn disconnected_supervisor_stabilizes_state_and_rejects_future_commands() {
+        let (supervisor, receiver) = LifecycleSupervisor::channel();
+        drop(receiver);
+        let backend = fixture_backend(supervisor);
+
+        let error = backend.queue_save_setup(fixture_setup_input()).unwrap_err();
+        let generation_after_failure = backend.lock().lease.desired_generation;
+        let snapshot = backend.snapshot();
+
+        assert_eq!(error.code, "DESKTOP_SETUP_RUNTIME_START_FAILED");
+        assert_eq!(snapshot.phase, DesktopPhase::Failed);
+        assert_eq!(
+            snapshot.error.as_ref().map(|item| item.code.as_str()),
+            Some(error.code.as_str())
+        );
+        assert!(backend.queue_retry().is_err());
+        assert_eq!(
+            backend.lock().lease.desired_generation,
+            generation_after_failure
+        );
+    }
+
+    #[test]
+    fn handler_panic_releases_active_lease_and_runs_failure_cleanup() {
+        let lease = RefCell::new(LifecycleLeaseState::default());
+        let generation = lease.borrow_mut().request_generation();
+        assert!(lease.borrow_mut().try_begin(generation));
+        let phase = Cell::new(DesktopPhase::StartingRuntime);
+        let cleanup_called = Cell::new(false);
+
+        let completed = run_guarded_worker_operation(
+            || panic!("handler failed"),
+            || lease.borrow_mut().finish(generation),
+            |_| {
+                phase.set(DesktopPhase::Failed);
+                cleanup_called.set(true);
+            },
+        );
+
+        assert!(!completed);
+        assert_eq!(lease.borrow().active_generation(), None);
+        assert_eq!(phase.get(), DesktopPhase::Failed);
+        assert!(cleanup_called.get());
     }
 
     #[test]
