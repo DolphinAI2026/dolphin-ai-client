@@ -77,8 +77,8 @@ export const DESKTOP_LOGIN_SERVICES: readonly DesktopLoginServiceOption[] = [
 ]
 
 export const DESKTOP_WORKSPACE_ENTRY_OPTIONS = [
-  { value: 'apaas', label: '仅 aPaaS' },
-  { value: 'ai_platform', label: '仅 AI平台' },
+  { value: 'apaas', label: '仅 Builder' },
+  { value: 'ai_platform', label: '仅 Code' },
   { value: 'both', label: '两者都有' },
 ] as const
 

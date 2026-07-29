@@ -59,8 +59,8 @@ export function visibleModesForDesktopScope(scope: DesktopWorkspaceEntryScope): 
   return ['builder', 'code']
 }
 
-export function desktopModeLabel(mode: AppMode): 'aPaaS' | 'AI平台' {
-  return mode === 'code' ? 'AI平台' : 'aPaaS'
+export function desktopModeLabel(mode: AppMode): 'Builder' | 'Code' {
+  return mode === 'code' ? 'Code' : 'Builder'
 }
 
 export function visibleModeNav(mode: AppMode, desktop: boolean): ModeNavItem[] {
