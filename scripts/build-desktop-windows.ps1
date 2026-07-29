@@ -109,7 +109,7 @@ try {
     try {
       $env:VITE_DESKTOP = "1"
       $env:VITE_BASE_URL = "/"
-      npm exec -- vite build --outDir dist-desktop --emptyOutDir
+      node .\node_modules\vite\bin\vite.js build --outDir dist-desktop --emptyOutDir
       Assert-NativeSuccess "Frontend desktop build" $LASTEXITCODE
     } finally {
       [Environment]::SetEnvironmentVariable("VITE_DESKTOP", $PreviousViteDesktop, "Process")
@@ -170,9 +170,9 @@ try {
         Assert-NativeSuccess "Root dependency install" $LASTEXITCODE
       }
       if ($Bundle -eq "portable") {
-        npx tauri build --target $Target --no-bundle
+        node .\node_modules\@tauri-apps\cli\tauri.js build --target $Target --no-bundle
       } else {
-        npx tauri build --target $Target --bundles $Bundle
+        node .\node_modules\@tauri-apps\cli\tauri.js build --target $Target --bundles $Bundle
       }
       Assert-NativeSuccess "Tauri Windows build" $LASTEXITCODE
 
