@@ -15,7 +15,8 @@
 - 旧配置缺少 `workspace_entry_scope` 时读取为 `both`，不阻塞升级启动。
 - 入口范围更新不得退出账号、重启 sidecar 或重启 Runtime。
 - 单入口仍显示一个顶部 Tab；访问被隐藏入口时跳转到可用入口首页。
-- 不新增分散测试文件，只修改既有 Rust 内联测试和既有前端测试文件。
+- 不新增分散测试文件；只保留锁定真实故障或纯函数合同的最小回归测试。
+- UI 接线不增加 raw-source/字符串存在性断言，使用 TypeScript 检查和桌面构建验证。
 - Windows 交付物固定为 `ruijing-0.2.39-windows-x86_64-setup.exe`，且只交付一个安装 EXE。
 
 ---
@@ -304,8 +305,6 @@ git commit -m "feat(desktop): constrain visible workspaces"
 - Modify: `frontend/src/views/DesktopSetupWizard.vue`
 - Modify: `frontend/src/views/DesktopSettings.vue`
 - Modify: `frontend/src/components/v2/RailSidebar.vue`
-- Modify: `frontend/src/components/v2/RailSidebar.spec.ts`
-- Modify: `frontend/src/router/desktopGuard.spec.ts`
 
 **Interfaces:**
 - Consumes: `DESKTOP_WORKSPACE_ENTRY_OPTIONS`、`updateDesktopWorkspaceEntryScope`、
@@ -313,27 +312,7 @@ git commit -m "feat(desktop): constrain visible workspaces"
 - Produces: window event `desktop-workspace-entry-scope-changed`，其 `detail` 是
   `DesktopWorkspaceEntryScope`。
 
-- [ ] **Step 1: 在既有测试中写失败断言**
-
-`desktopGuard.spec.ts` raw-source 断言初始化向导包含三个选项、`workspaceScope` 初始为
-`null`、未选时禁用最终保存；桌面设置调用 `updateDesktopWorkspaceEntryScope`，且该 handler
-不调用 `user.logout()` 或 `updateDesktopLogin`。
-
-`RailSidebar.spec.ts` 断言使用 `visibleModesForDesktopScope` 和 `desktopModeLabel`，并监听/
-移除 `desktop-workspace-entry-scope-changed`。
-
-- [ ] **Step 2: 运行测试并确认失败**
-
-Run:
-
-```bash
-cd frontend
-npm run test -- src/router/desktopGuard.spec.ts src/components/v2/RailSidebar.spec.ts
-```
-
-Expected: FAIL。
-
-- [ ] **Step 3: 修改首次初始化**
+- [ ] **Step 1: 修改首次初始化**
 
 在 `DesktopSetupWizard.vue` 的“本地存储”步骤、目录预览下增加分段选择。新安装时：
 
@@ -345,7 +324,7 @@ const workspaceScope = ref<DesktopWorkspaceEntryScope | null>(null)
 `workspaceScope === null` 禁用条件，提交时将非空 scope 传给
 `buildDesktopSetupInput`。`login_only` 流程不显示也不修改该字段。
 
-- [ ] **Step 4: 修改桌面设置**
+- [ ] **Step 2: 修改桌面设置**
 
 在 `DesktopSettings.vue` 增加独立“工作台入口” section 和独立保存按钮：
 
@@ -362,20 +341,19 @@ async function saveWorkspaceEntryScope() {
 
 该 handler 不调用 `user.logout()`，不复用登录设置的 `saving` 锁，也不显示“重新登录”。
 
-- [ ] **Step 5: 修改顶部 Tab**
+- [ ] **Step 3: 修改顶部 Tab**
 
 `RailSidebar.vue` 在桌面 mount 时通过 `getDesktopState()` 初始化 scope，并监听上述事件。
 模板的 `v-for` 从固定 `MODE_ORDER` 改为 computed `visibleModeOrder`；桌面标签调用
 `desktopModeLabel(mode)`，Web 标签继续使用 `MODE_META[mode].label`。unmount 时移除监听。
 
-- [ ] **Step 6: 运行测试和桌面前端构建并提交**
+- [ ] **Step 4: 运行已有关键测试和桌面前端构建并提交**
 
 Run:
 
 ```bash
 cd frontend
-npm run test -- src/stores/mode.spec.ts src/router/desktopGuard.spec.ts \
-  src/components/v2/RailSidebar.spec.ts
+npm run test -- src/stores/mode.spec.ts src/router/desktopGuard.spec.ts
 npm run build:desktop
 ```
 
@@ -385,8 +363,7 @@ Commit:
 
 ```bash
 git add frontend/src/views/DesktopSetupWizard.vue frontend/src/views/DesktopSettings.vue \
-  frontend/src/components/v2/RailSidebar.vue frontend/src/components/v2/RailSidebar.spec.ts \
-  frontend/src/router/desktopGuard.spec.ts
+  frontend/src/components/v2/RailSidebar.vue
 git commit -m "feat(desktop): configure workspace entries"
 ```
 
