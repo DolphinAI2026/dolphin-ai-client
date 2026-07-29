@@ -3,7 +3,12 @@ param(
   [string]$Target = "x86_64-pc-windows-msvc",
   [ValidateSet("nsis", "msi", "all")]
   [string]$Bundle = "nsis",
-  [switch]$SkipInstall
+  [switch]$SkipInstall,
+  [string]$AgentRuntimeRepo = "",
+  [string]$AgenticCodingRoot = "",
+  [string]$CodexVendorRoot = "",
+  [string]$BuilderDist = "",
+  [string]$SuperpowersSource = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,6 +39,16 @@ function Invoke-Step($Name, [scriptblock]$Body) {
   & $Body
 }
 
+function Assert-NativeSuccess($Name, $ExitCode) {
+  if ($ExitCode -ne 0) {
+    throw "$Name failed with exit code $ExitCode."
+  }
+}
+
+function Write-Utf8NoBom($Path, $Content) {
+  [IO.File]::WriteAllText($Path, $Content, [Text.UTF8Encoding]::new($false))
+}
+
 function Get-PythonCommand {
   $py = Get-Command py -ErrorAction SilentlyContinue
   if ($py) { return @("py", "-3") }
@@ -47,65 +62,95 @@ try {
     $RestoreConfig = $true
     $text = Get-Content $Config -Raw
     $text = $text -replace '"version"\s*:\s*"[^"]+"', ('"version": "' + $Version + '"')
-    Set-Content -Path $Config -Value $text -Encoding UTF8
+    Write-Utf8NoBom $Config $text
   }
 
   if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
     $RestoreConfig = $true
     $text = Get-Content $Config -Raw
     $text = $text -replace '"createUpdaterArtifacts"\s*:\s*true', '"createUpdaterArtifacts": false'
-    Set-Content -Path $Config -Value $text -Encoding UTF8
+    Write-Utf8NoBom $Config $text
     Write-Host "TAURI_SIGNING_PRIVATE_KEY is not set; updater artifacts are disabled for this installer build."
   }
 
   Write-Host "==> [build-desktop-windows.ps1] ROOT=$Root TARGET=$Target BUNDLE=$Bundle"
 
-  Invoke-Step "1/5 Install frontend dependencies" {
+  Invoke-Step "1/6 Materialize Windows local runtime appliance" {
+    $Prepare = Join-Path $Root "scripts\prepare-local-runtime-appliance-windows.ps1"
+    $PrepareArguments = @{}
+    foreach ($Entry in @{
+      AgentRuntimeRepo = $AgentRuntimeRepo
+      AgenticCodingRoot = $AgenticCodingRoot
+      CodexVendorRoot = $CodexVendorRoot
+      BuilderDist = $BuilderDist
+      SuperpowersSource = $SuperpowersSource
+    }.GetEnumerator()) {
+      if ($Entry.Value) { $PrepareArguments[$Entry.Key] = $Entry.Value }
+    }
+    & $Prepare @PrepareArguments
+  }
+
+  Invoke-Step "2/6 Install frontend dependencies" {
     Push-Location $Frontend
     try {
       if (-not $SkipInstall -and -not (Test-Path "node_modules")) {
         npm ci
+        Assert-NativeSuccess "Frontend dependency install" $LASTEXITCODE
       }
     } finally {
       Pop-Location
     }
   }
 
-  Invoke-Step "2/5 Build frontend desktop bundle" {
+  Invoke-Step "3/6 Build frontend desktop bundle" {
     Push-Location $Frontend
+    $PreviousViteDesktop = [Environment]::GetEnvironmentVariable("VITE_DESKTOP", "Process")
+    $PreviousViteBaseUrl = [Environment]::GetEnvironmentVariable("VITE_BASE_URL", "Process")
     try {
-      npm run build:desktop
+      $env:VITE_DESKTOP = "1"
+      $env:VITE_BASE_URL = "/"
+      npm exec -- vite build --outDir dist-desktop --emptyOutDir
+      Assert-NativeSuccess "Frontend desktop build" $LASTEXITCODE
     } finally {
+      [Environment]::SetEnvironmentVariable("VITE_DESKTOP", $PreviousViteDesktop, "Process")
+      [Environment]::SetEnvironmentVariable("VITE_BASE_URL", $PreviousViteBaseUrl, "Process")
       Pop-Location
     }
   }
 
-  Invoke-Step "3/5 Build PyInstaller Windows sidecar" {
+  Invoke-Step "4/6 Build PyInstaller Windows sidecar" {
     Push-Location $Backend
     try {
       $VenvPython = Join-Path $Backend ".venv\Scripts\python.exe"
       if (-not (Test-Path $VenvPython)) {
-        $cmd = Get-PythonCommand
+        $cmd = @(Get-PythonCommand)
         if ($cmd.Length -gt 1) {
           & $cmd[0] @($cmd[1..($cmd.Length - 1)] + @("-m", "venv", ".venv"))
+          Assert-NativeSuccess "Python virtual environment creation" $LASTEXITCODE
         } else {
           & $cmd[0] -m venv .venv
+          Assert-NativeSuccess "Python virtual environment creation" $LASTEXITCODE
         }
       }
       if (-not $SkipInstall) {
         & $VenvPython -m pip install --upgrade pip
+        Assert-NativeSuccess "Python pip upgrade" $LASTEXITCODE
         & $VenvPython -m pip install -r requirements.txt
+        Assert-NativeSuccess "Python requirements install" $LASTEXITCODE
         & $VenvPython -m pip install "pyinstaller>=6.6"
+        Assert-NativeSuccess "PyInstaller dependency install" $LASTEXITCODE
       } else {
         & $VenvPython -m PyInstaller --version | Out-Null
+        Assert-NativeSuccess "PyInstaller availability check" $LASTEXITCODE
       }
       & $VenvPython -m PyInstaller ruijing-sidecar.spec --noconfirm
+      Assert-NativeSuccess "PyInstaller sidecar build" $LASTEXITCODE
     } finally {
       Pop-Location
     }
   }
 
-  Invoke-Step "4/5 Place sidecar binary" {
+  Invoke-Step "5/6 Place sidecar binary" {
     $BinDir = Join-Path $Tauri "binaries"
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
     $Sidecar = Join-Path $Backend "dist\ruijing-sidecar.exe"
@@ -117,13 +162,32 @@ try {
     Get-Item $Dest | Format-List FullName,Length,LastWriteTime
   }
 
-  Invoke-Step "5/5 Build Tauri Windows installer" {
+  Invoke-Step "6/6 Build Tauri Windows installer" {
     Push-Location $Root
     try {
       if (-not $SkipInstall -and -not (Test-Path "node_modules")) {
         npm ci
+        Assert-NativeSuccess "Root dependency install" $LASTEXITCODE
       }
       npx tauri build --target $Target --bundles $Bundle
+      Assert-NativeSuccess "Tauri Windows installer build" $LASTEXITCODE
+
+      # Keep this relative layout identical to packaged_agent_runtime_root() in desktop_backend.rs.
+      $PackagedApplianceRelativePath = "resources/agent-runtime"
+      $ReleaseRoot = Join-Path $Tauri "target\$Target\release"
+      $PackagedApplianceRoot = Join-Path $ReleaseRoot $PackagedApplianceRelativePath
+      foreach ($RelativePath in @(
+        "bin\agent-runtime.exe",
+        "codex\bin\codex.exe",
+        "agentic-coding\.venv\Scripts\python.exe",
+        "agentic-coding-pack\manifest.yaml",
+        "web\builder\dist\index.html"
+      )) {
+        $ResourcePath = Join-Path $PackagedApplianceRoot $RelativePath
+        if (-not (Test-Path -LiteralPath $ResourcePath -PathType Leaf)) {
+          throw "Tauri packaged appliance is missing $PackagedApplianceRelativePath\$RelativePath"
+        }
+      }
     } finally {
       Pop-Location
     }
@@ -145,25 +209,39 @@ try {
     if ($PackageVersion) {
       $DownloadDir = Join-Path $Root "dist-desktop\windows"
       New-Item -ItemType Directory -Force -Path $DownloadDir | Out-Null
+      $VersionPattern = "(^|[^0-9A-Za-z])$([Regex]::Escape($PackageVersion))([^0-9A-Za-z]|$)"
       $Installer = Get-ChildItem $BundleRoot -Recurse -File -Filter "*.exe" |
         Where-Object { $_.Name -notlike "*.zip" } |
+        Where-Object { $_.Name -match $VersionPattern } |
+        Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
       if ($Installer) {
+        Get-ChildItem $DownloadDir -File -Filter "ruijing-*-windows-x86_64-setup.exe" |
+          Remove-Item -Force
         $NamedInstaller = Join-Path $DownloadDir "ruijing-$PackageVersion-windows-x86_64-setup.exe"
         Copy-Item $Installer.FullName $NamedInstaller -Force
         Write-Host ""
         Write-Host "Download-ready installer: $NamedInstaller"
+      } elseif ($Bundle -in "nsis", "all") {
+        throw "Missing NSIS installer for package version $PackageVersion under $BundleRoot"
       }
-      $Msi = Get-ChildItem $BundleRoot -Recurse -File -Filter "*.msi" | Select-Object -First 1
+      $Msi = Get-ChildItem $BundleRoot -Recurse -File -Filter "*.msi" |
+        Where-Object { $_.Name -match $VersionPattern } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
       if ($Msi) {
+        Get-ChildItem $DownloadDir -File -Filter "ruijing-*-windows-x86_64.msi" |
+          Remove-Item -Force
         $NamedMsi = Join-Path $DownloadDir "ruijing-$PackageVersion-windows-x86_64.msi"
         Copy-Item $Msi.FullName $NamedMsi -Force
         Write-Host "Download-ready MSI: $NamedMsi"
+      } elseif ($Bundle -in "msi", "all") {
+        throw "Missing MSI installer for package version $PackageVersion under $BundleRoot"
       }
     }
   }
 } finally {
   if ($RestoreConfig) {
-    Set-Content -Path $Config -Value $OriginalConfig -Encoding UTF8
+    Write-Utf8NoBom $Config $OriginalConfig
   }
 }

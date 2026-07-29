@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { isCodeRoutePath, MODE_META, MODE_ORDER, modeForRoutePath, visibleModeNav } from './mode'
+import {
+  desktopModeLabel,
+  isCodeRoutePath,
+  MODE_META,
+  MODE_ORDER,
+  modeForRoutePath,
+  visibleModeNav,
+  visibleModesForDesktopScope,
+} from './mode'
 
 describe('mode store metadata', () => {
   it('exposes Builder and Code as first-class shell modes', () => {
@@ -33,5 +41,13 @@ describe('mode store metadata', () => {
     expect(visibleModeNav('code', false)).not.toContainEqual(expect.objectContaining({
       key: 'c-local-new',
     }))
+  })
+
+  it('maps desktop entry scope to visible workspace labels', () => {
+    expect(visibleModesForDesktopScope('apaas')).toEqual(['builder'])
+    expect(visibleModesForDesktopScope('ai_platform')).toEqual(['code'])
+    expect(visibleModesForDesktopScope('both')).toEqual(['builder', 'code'])
+    expect(desktopModeLabel('builder')).toBe('aPaaS')
+    expect(desktopModeLabel('code')).toBe('AI平台')
   })
 })

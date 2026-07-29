@@ -47,9 +47,31 @@ def ensure_encryption_key(data_dir: Path) -> str:
     return val
 
 
-def build_env(data_dir: Path, port: int) -> dict:
+def sqlite_database_url(database_path: Path) -> str:
+    """Build a SQLite URL that accepts canonical Windows device paths."""
+    path = str(database_path)
+    if path.startswith("\\\\?\\UNC\\"):
+        path = "\\\\" + path[8:]
+    elif path.startswith("\\\\?\\"):
+        path = path[4:]
+    return f"sqlite+aiosqlite:///{path}"
+
+
+def build_env(
+    data_dir: Path,
+    port: int,
+    *,
+    login_mode: str = "control_plane",
+    login_base_url: str = "https://om-demo.dfy.definesys.cn",
+    applications_root: Path | None = None,
+    runtime_data_dir: Path | None = None,
+) -> dict:
     """构造并写入本地运行所需的环境变量, 返回写入的子集 (便于测试)。"""
+    if login_mode not in {"control_plane", "apaas"}:
+        raise ValueError("login_mode must be control_plane or apaas")
     data_dir = Path(data_dir)
+    applications_root = Path(applications_root or data_dir.parent / "applications")
+    runtime_data_dir = Path(runtime_data_dir or data_dir / "runtime")
     data_dir.mkdir(parents=True, exist_ok=True)
     db_path = data_dir / "app.db"
     written = {
@@ -59,21 +81,25 @@ def build_env(data_dir: Path, port: int) -> dict:
         # data_dir 的真相源：Tauri 经 --data-dir 传入(app_data_dir, 各平台不同)。
         # 显式导出, 让 skills_root() 等下游不必各自猜路径(避免误用 ~/.ruijing-builder 兜底)。
         "SIDECAR_DATA_DIR": str(data_dir),
-        # 绝对路径(四斜杠), 避免被 config._normalize_database_url 锚定到 backend/
-        "DATABASE_URL": f"sqlite+aiosqlite:///{db_path}",
+        # Windows canonicalize 会产生 \\?\ 设备路径；SQLite URL 必须先转回普通路径，
+        # 否则问号会被 URL 解析器当成查询分隔符并截断数据库文件名。
+        "DATABASE_URL": sqlite_database_url(db_path),
         # 每实例持久化的加密主密钥 (crypto.py 对它 sha256 派生 Fernet key)。
         "ENCRYPTION_KEY": ensure_encryption_key(data_dir),
         "JWT_SECRET_KEY": ensure_jwt_secret(data_dir),
         # 桌面与 Web 复用 Control Plane/aPaaS 登录协议，不再走独立 desktop 账号服务。
-        # 企业部署可用 CODE_AUTH_PROVIDER=apaas 覆盖默认的 control_plane。
-        "AUTH_PROVIDER": os.environ.get("CODE_AUTH_PROVIDER", "control_plane"),
+        "AUTH_PROVIDER": login_mode,
+        "DOLPHIN_WORKSPACE_BASE_URL": (
+            login_base_url if login_mode == "control_plane" else ""
+        ),
+        "APAAS_BASE_URL": login_base_url if login_mode == "apaas" else "",
         "PUBLIC_ACCOUNT_BASE_URL": "",
         # The sidecar may issue its own desktop-sidecar ticket after remote
         # Control Plane authentication. This whitelist is local-only; shared
         # backends still reject that issuer at startup.
         "ACCEPTED_TOKEN_ISSUERS": "ai-builder,desktop-sidecar",
-        # app 托管工作区落 app_data_dir 下(稳定持久), 修冻结包相对二进制诡异路径
-        "APAAS_WORKSPACE_ROOT": os.path.join(str(data_dir), "workspaces"),
+        "APAAS_WORKSPACE_ROOT": str(applications_root),
+        "DOLPHIN_LOCAL_RUNTIME_DATA_DIR": str(runtime_data_dir),
     }
     for k, v in written.items():
         os.environ[k] = v
@@ -116,6 +142,17 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=int(os.environ.get("SIDECAR_PORT", "8799")))
     parser.add_argument("--data-dir", type=str, default=os.environ.get("SIDECAR_DATA_DIR", ""))
+    parser.add_argument(
+        "--login-mode",
+        choices=("control_plane", "apaas"),
+        default="control_plane",
+    )
+    parser.add_argument(
+        "--login-base-url",
+        default="https://om-demo.dfy.definesys.cn",
+    )
+    parser.add_argument("--applications-root", type=Path)
+    parser.add_argument("--runtime-data-dir", type=Path)
     parser.add_argument("--run-script", type=str, default="")
     args = parser.parse_args()
 
@@ -127,7 +164,14 @@ def main() -> None:
     # 注入本地基础设施 env (必须早于任何 app.* import)。
     # 注意: aPaaS/LLM 等"用户配置"不走这里 — 它们由用户在应用内 UI 配置,
     # 存进本地 SQLite 的 PlatformEnv / LLMConfig 表。这里只设本地运行管道。
-    build_env(data_dir=data_dir, port=args.port)
+    build_env(
+        data_dir=data_dir,
+        port=args.port,
+        login_mode=args.login_mode,
+        login_base_url=args.login_base_url,
+        applications_root=args.applications_root,
+        runtime_data_dir=args.runtime_data_dir,
+    )
 
     # 现在才 import app (此时 Settings() 能读到上面注入的 env)
     import uvicorn

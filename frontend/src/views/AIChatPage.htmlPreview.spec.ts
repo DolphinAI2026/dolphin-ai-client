@@ -14,4 +14,11 @@ describe('AIChatPage 设计稿 HTML 预览', () => {
       expect(sandbox).not.toContain('allow-same-origin')
     }
   })
+
+  it('Code 输入框底栏显示本地或远程工作区的最后一级目录', () => {
+    expect(src).toContain('codeWorkspaceContext')
+    expect(src).toContain('本地目录')
+    expect(src).toContain('远程目录')
+    expect(src).toContain('code-workspace-context')
+  })
 })

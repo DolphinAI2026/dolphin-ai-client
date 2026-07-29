@@ -422,7 +422,7 @@ fn validate_sandbox_token_path(value: &str, runtime_dir: &Path) -> Result<(), Lo
         ));
     }
     let expected = runtime_dir.join(SANDBOX_TOKEN_FILE);
-    if Path::new(value) != expected {
+    if canonical(Path::new(value))? != canonical(&expected)? {
         return Err(LocalRuntimeError::new(
             LocalRuntimeErrorCode::InvalidRequest,
             "runtime sandbox token path escapes instance directory",
@@ -566,7 +566,32 @@ fn actual_git_common_dir(worktree: &Path) -> Result<PathBuf, LocalRuntimeError> 
     } else {
         worktree.join(target)
     };
-    canonical(&git_dir)
+    let git_dir = canonical(&git_dir)?;
+    let common_dir = match fs::read_to_string(git_dir.join("commondir")) {
+        Ok(contents) => {
+            let target = contents.trim();
+            if target.is_empty() {
+                return Err(LocalRuntimeError::new(
+                    LocalRuntimeErrorCode::InvalidRequest,
+                    "managed Git worktree has an invalid common directory",
+                ));
+            }
+            let target = PathBuf::from(target);
+            if target.is_absolute() {
+                target
+            } else {
+                git_dir.join(target)
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(git_dir),
+        Err(_) => {
+            return Err(LocalRuntimeError::new(
+                LocalRuntimeErrorCode::InvalidRequest,
+                "managed Git worktree common directory is invalid",
+            ));
+        }
+    };
+    canonical(&common_dir)
 }
 
 fn overlaps(left: &Path, right: &Path) -> bool {
@@ -768,6 +793,28 @@ mod tests {
         ));
         fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    #[test]
+    fn linked_worktree_resolves_its_git_common_directory() {
+        let root = temp_root();
+        let common = root.join("repository").join(".git");
+        let worktree_git = common.join("worktrees").join("session-a");
+        let worktree = root.join("worktree");
+        fs::create_dir_all(&worktree_git).unwrap();
+        fs::create_dir_all(&worktree).unwrap();
+        fs::write(
+            worktree.join(".git"),
+            format!("gitdir: {}\n", worktree_git.display()),
+        )
+        .unwrap();
+        fs::write(worktree_git.join("commondir"), "../..\n").unwrap();
+
+        assert_eq!(
+            actual_git_common_dir(&worktree).unwrap(),
+            fs::canonicalize(&common).unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(target_os = "linux")]
@@ -1130,6 +1177,24 @@ mod tests {
         missing.environment.remove("APAAS_SANDBOX_TOKEN_PATH");
         let error = validate_request(&root, &missing).unwrap_err();
         assert_eq!(error.code, LocalRuntimeErrorCode::InvalidRequest);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn request_accepts_an_equivalent_sandbox_token_path_spelling() {
+        let root = temp_root();
+        let mut request = request(&root, "instance-a");
+        let equivalent = request
+            .runtime_dir
+            .join("..")
+            .join(&request.sandbox_instance_id)
+            .join(SANDBOX_TOKEN_FILE);
+        request.environment.insert(
+            "APAAS_SANDBOX_TOKEN_PATH".into(),
+            equivalent.display().to_string(),
+        );
+
+        assert!(validate_request(&root, &request).is_ok());
         fs::remove_dir_all(root).unwrap();
     }
 }

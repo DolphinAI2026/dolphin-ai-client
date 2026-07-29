@@ -109,6 +109,9 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz, a.scripts, a.binaries, a.datas, [],
     name="ruijing-sidecar",
-    debug=False, strip=False, upx=False, console=True,
+    debug=False,
+    strip=False,
+    upx=False,
+    console=(os.name != "nt"),
     onefile=True,
 )

@@ -140,3 +140,20 @@ describe('RailSidebar tenant navigation', () => {
     expect(railSidebarSource).not.toContain("router.push('/')")
   })
 })
+
+describe('RailSidebar desktop settings', () => {
+  it('桌面用户菜单提供桌面设置且 Web 不显示', () => {
+    const settingsClick = railSidebarSource.indexOf('@click="go(desktopSettingsItem.path)"')
+    const settingsButtonStart = railSidebarSource.lastIndexOf('<button', settingsClick)
+    const settingsButtonEnd = railSidebarSource.indexOf('</button>', settingsClick)
+    const settingsButtonSource = railSidebarSource.slice(settingsButtonStart, settingsButtonEnd)
+    const themeToggle = railSidebarSource.indexOf('@click="theme.toggle()"')
+
+    expect(railSidebarSource).toContain("path: '/desktop-settings'")
+    expect(settingsClick).toBeGreaterThan(-1)
+    expect(settingsButtonSource).toContain('v-if="isDesktop"')
+    expect(settingsButtonSource).toContain("renderIcon('settings')")
+    expect(settingsButtonSource).toContain('桌面设置')
+    expect(settingsClick).toBeLessThan(themeToggle)
+  })
+})

@@ -1,7 +1,16 @@
 import os
+from pathlib import PureWindowsPath
 
 import desktop_sidecar as ds
 import desktop_sidecar
+
+
+def test_sqlite_database_url_removes_windows_verbatim_prefix():
+    database_path = PureWindowsPath(r"\\?\E:\dolphin_code\.appdata\app.db")
+
+    assert ds.sqlite_database_url(database_path) == (
+        r"sqlite+aiosqlite:///E:\dolphin_code\.appdata\app.db"
+    )
 
 
 def test_ensure_jwt_secret_persists(tmp_path):
@@ -54,6 +63,38 @@ def test_build_env_uses_web_auth_contract(tmp_path):
 
 
 def test_build_env_sets_workspace_root(tmp_path):
-    env = desktop_sidecar.build_env(data_dir=tmp_path, port=9999)
-    import os
-    assert env["APAAS_WORKSPACE_ROOT"] == os.path.join(str(tmp_path), "workspaces")
+    env = desktop_sidecar.build_env(data_dir=tmp_path / ".appdata", port=9999)
+    assert env["APAAS_WORKSPACE_ROOT"] == str(tmp_path / "applications")
+
+
+def test_build_env_maps_control_plane_login_and_user_root(tmp_path, monkeypatch):
+    monkeypatch.setattr(os, "environ", os.environ.copy())
+    data_dir = tmp_path / ".appdata"
+    env = ds.build_env(
+        data_dir=data_dir,
+        port=8799,
+        login_mode="control_plane",
+        login_base_url="https://om-demo.dfy.definesys.cn",
+        applications_root=tmp_path / "applications",
+        runtime_data_dir=data_dir / "runtime",
+    )
+    assert env["AUTH_PROVIDER"] == "control_plane"
+    assert env["DOLPHIN_WORKSPACE_BASE_URL"] == "https://om-demo.dfy.definesys.cn"
+    assert env["APAAS_BASE_URL"] == ""
+    assert env["APAAS_WORKSPACE_ROOT"] == str(tmp_path / "applications")
+    assert env["DOLPHIN_LOCAL_RUNTIME_DATA_DIR"] == str(data_dir / "runtime")
+
+
+def test_build_env_maps_apaas_login(tmp_path, monkeypatch):
+    monkeypatch.setattr(os, "environ", os.environ.copy())
+    env = ds.build_env(
+        data_dir=tmp_path / ".appdata",
+        port=8799,
+        login_mode="apaas",
+        login_base_url="https://apaas-trial.definesys.cn/backend",
+        applications_root=tmp_path / "applications",
+        runtime_data_dir=tmp_path / ".appdata/runtime",
+    )
+    assert env["AUTH_PROVIDER"] == "apaas"
+    assert env["APAAS_BASE_URL"] == "https://apaas-trial.definesys.cn/backend"
+    assert env["DOLPHIN_WORKSPACE_BASE_URL"] == ""

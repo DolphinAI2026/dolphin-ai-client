@@ -24,9 +24,20 @@
         <div class="login-card">
           <div class="login-header">
             <img class="login-logo" :src="ruijingWhaleMarkUrl" alt="" aria-hidden="true" />
-            <div>
+            <div class="login-header-copy">
               <h1>Dolphin Code</h1>
               <p>登录以打开桌面工作台</p>
+              <div v-if="desktopService" class="login-service-row">
+                <span>{{ desktopService.label }} · {{ desktopService.host }}</span>
+                <button
+                  type="button"
+                  class="login-service-change"
+                  :disabled="!desktopServiceChangeAllowed"
+                  @click="changeDesktopService"
+                >
+                  更改登录服务
+                </button>
+              </div>
             </div>
           </div>
 
@@ -43,6 +54,7 @@
                 placeholder="账号"
                 size="large"
                 :prefix-icon="User"
+                :disabled="changingDesktopService"
                 autocomplete="username"
                 clearable
               />
@@ -55,6 +67,7 @@
                 placeholder="密码"
                 size="large"
                 :prefix-icon="Lock"
+                :disabled="loginLoading || changingDesktopService"
                 autocomplete="current-password"
                 show-password
                 @keyup.enter="handleLogin"
@@ -72,12 +85,14 @@
                   placeholder="验证码"
                   size="large"
                   maxlength="6"
+                  :disabled="loginLoading || changingDesktopService"
                   @keyup.enter="handleLogin"
                 />
                 <button
                   type="button"
                   class="captcha-image-button"
                   title="刷新验证码"
+                  :disabled="changingDesktopService"
                   @click="refreshCaptcha"
                 >
                   <img v-if="captchaImage" :src="captchaImage" alt="验证码" />
@@ -91,6 +106,7 @@
                 type="primary"
                 size="large"
                 :loading="loginLoading"
+                :disabled="loginLoading || changingDesktopService"
                 @click="handleLogin"
                 class="submit-btn"
               >
@@ -104,8 +120,27 @@
   </div>
 </template>
 
+<script lang="ts">
+export function canChangeDesktopService(
+  loginPending: boolean,
+  transitionPending: boolean,
+): boolean {
+  return !loginPending && !transitionPending
+}
+
+export function tryStartLogin(
+  loginPending: boolean,
+  transitionPending: boolean,
+  start: () => void,
+): boolean {
+  if (loginPending || transitionPending) return false
+  start()
+  return true
+}
+</script>
+
 <script setup lang="ts">
-import { onMounted, ref, reactive } from 'vue'
+import { computed, onMounted, ref, reactive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Lock, Moon, Sunny, User } from '@element-plus/icons-vue'
@@ -114,6 +149,12 @@ import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
 import ruijingWhaleMarkUrl from '@/assets/brand/ruijing-whale-mark.svg'
 import { safeLoginRedirectPath } from '@/router/loginRedirect'
+import {
+  DESKTOP_LOGIN_SERVICES,
+  enterDesktopLoginSetup,
+  getDesktopState,
+  isDesktop,
+} from '@/utils/desktop'
 
 const router = useRouter()
 const route = useRoute()
@@ -125,6 +166,12 @@ const loginLoading = ref(false)
 const captchaRequired = ref(false)
 const captchaId = ref('')
 const captchaImage = ref('')
+const desktopService = ref<{ label: string; host: string } | null>(null)
+const changingDesktopService = ref(false)
+const desktopServiceChangeAllowed = computed(() => canChangeDesktopService(
+  loginLoading.value,
+  changingDesktopService.value,
+))
 
 const loginForm = reactive({
   username: '',
@@ -148,6 +195,7 @@ const loginRules: FormRules = {
 }
 
 const refreshCaptcha = async () => {
+  if (changingDesktopService.value) return
   try {
     const result = await authApi.getCaptcha()
     captchaRequired.value = result.required
@@ -161,15 +209,53 @@ const refreshCaptcha = async () => {
   }
 }
 
-onMounted(refreshCaptcha)
+async function loadDesktopService() {
+  if (!isDesktop) return
+  try {
+    const snapshot = await getDesktopState()
+    if (!snapshot.config) return
+    const service = DESKTOP_LOGIN_SERVICES.find(
+      item => item.mode === snapshot.config?.login.mode,
+    )
+    if (!service) return
+    desktopService.value = {
+      label: service.label,
+      host: new URL(snapshot.config.login.base_url).host,
+    }
+  } catch {
+    desktopService.value = null
+  }
+}
+
+async function changeDesktopService() {
+  if (!isDesktop || !desktopServiceChangeAllowed.value) return
+  changingDesktopService.value = true
+  try {
+    userStore.logout()
+    await enterDesktopLoginSetup()
+  } catch {
+    changingDesktopService.value = false
+    ElMessage.error('无法打开登录服务设置，请稍后重试')
+  }
+}
+
+onMounted(() => {
+  void refreshCaptcha()
+  void loadDesktopService()
+})
 
 const handleLogin = async () => {
-  if (!loginFormRef.value) return
+  const form = loginFormRef.value
+  if (!form || !tryStartLogin(
+    loginLoading.value,
+    changingDesktopService.value,
+    () => { loginLoading.value = true },
+  )) return
 
-  await loginFormRef.value.validate(async (valid) => {
-    if (!valid) return
+  try {
+    const valid = await form.validate().catch(() => false)
+    if (!valid || changingDesktopService.value) return
 
-    loginLoading.value = true
     try {
       const result = await userStore.login(
         loginForm.username,
@@ -204,10 +290,10 @@ const handleLogin = async () => {
       if (captchaRequired.value) {
         await refreshCaptcha()
       }
-    } finally {
-      loginLoading.value = false
     }
-  })
+  } finally {
+    loginLoading.value = false
+  }
 }
 </script>
 
@@ -363,6 +449,55 @@ const handleLogin = async () => {
   color: #64748b;
   font-size: 14px;
   line-height: 1.5;
+}
+
+.login-header-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.login-service-row {
+  min-width: 0;
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.login-service-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.login-service-change {
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #075fa8;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.login-service-change:hover:not(:disabled) {
+  color: #1d4ed8;
+  text-decoration: underline;
+}
+
+.login-service-change:focus-visible {
+  outline: 2px solid rgba(29, 78, 216, 0.28);
+  outline-offset: 3px;
+}
+
+.login-service-change:disabled {
+  cursor: wait;
+  opacity: 0.55;
 }
 
 .login-form {
@@ -524,6 +659,14 @@ const handleLogin = async () => {
 
 .login-page.theme-dark .login-header p {
   color: #94a3b8;
+}
+
+.login-page.theme-dark .login-service-row {
+  color: #94a3b8;
+}
+
+.login-page.theme-dark .login-service-change {
+  color: #60a5fa;
 }
 
 .login-page.theme-dark :deep(.el-input__wrapper) {
