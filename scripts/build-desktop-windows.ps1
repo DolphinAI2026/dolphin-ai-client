@@ -259,7 +259,15 @@ try {
           }
         }
 
-        Compress-Archive -LiteralPath $PortableAppRoot -DestinationPath $PortableZip -CompressionLevel Optimal
+        Push-Location $PortableStagingRoot
+        try {
+          & tar.exe -a -c -f $PortableZip "Dolphin Code"
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $PortableZip -PathType Leaf)) {
+            throw "Failed to create portable package with tar.exe"
+          }
+        } finally {
+          Pop-Location
+        }
         Write-Host ""
         Write-Host "Download-ready portable package: $PortableZip"
         Get-Item $PortableZip | Format-List FullName,Length,LastWriteTime
