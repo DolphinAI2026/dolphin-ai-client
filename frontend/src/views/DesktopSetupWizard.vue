@@ -181,16 +181,80 @@ function containsJwt(value: string): boolean {
   })
 }
 
+function normalizeSensitiveKey(key: string): string {
+  return key.replace(/[^A-Za-z0-9]/g, '').toLowerCase()
+}
+
+function isSensitiveKey(key: string): boolean {
+  const normalized = normalizeSensitiveKey(key)
+  return normalized === 'authorization'
+    || normalized.endsWith('password')
+    || normalized.endsWith('token')
+    || normalized.endsWith('apikey')
+    || normalized.endsWith('secret')
+    || normalized.endsWith('encryptionkey')
+    || normalized.endsWith('privatekey')
+    || normalized.endsWith('authenticationresponse')
+}
+
+function containsSensitiveAssignment(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const match = value.slice(index).match(/^["']?([A-Za-z0-9 _-]{1,80})["']?\s*[:=]/)
+    if (match && isSensitiveKey(match[1])) return true
+  }
+  return false
+}
+
+function containsSensitiveUrl(value: string): boolean {
+  for (const match of value.matchAll(/https?:\/\/[^\s"'<>]+/gi)) {
+    const candidate = match[0].replace(/[,;\)\]\}]+$/, '')
+    try {
+      const url = new URL(candidate)
+      if (url.username || url.password) return true
+      for (const key of url.searchParams.keys()) {
+        if (isSensitiveKey(key)) return true
+      }
+    } catch {
+      // Malformed URLs are handled as ordinary text.
+    }
+  }
+  return false
+}
+
+function containsNonJsonSensitiveValue(value: string): boolean {
+  return /traceback/i.test(value)
+    || containsSensitiveAssignment(value)
+    || /\bbearer\s+\S+/i.test(value)
+    || containsJwt(value)
+    || containsSensitiveUrl(value)
+}
+
+function jsonContainsSensitiveValue(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(jsonContainsSensitiveValue)
+  if (value && typeof value === 'object') {
+    return Object.entries(value).some(([key, item]) => (
+      isSensitiveKey(key) || jsonContainsSensitiveValue(item)
+    ))
+  }
+  return typeof value === 'string' && containsNonJsonSensitiveValue(value)
+}
+
+function containsSensitiveValue(value: string): boolean {
+  try {
+    return jsonContainsSensitiveValue(JSON.parse(value))
+  } catch {
+    return containsNonJsonSensitiveValue(value)
+  }
+}
+
 export function safeDesktopFailureMessage(error: unknown, fallback: string): string {
   const raw = typeof error === 'string'
     ? error
     : error && typeof error === 'object' && 'message' in error
       ? String((error as { message?: unknown }).message ?? '')
       : ''
+  if (!raw.trim() || containsSensitiveValue(raw)) return fallback
   const firstLine = raw.split(/\r?\n/).find(line => line.trim())?.trim() ?? ''
-  const containsSensitiveValue = /traceback|authorization\s*:|(?:password|token|api[_ -]?key|secret|access[_ -]?token|refresh[_ -]?token|id[_ -]?token|encryption[_ -]?key|private[_ -]?key|authentication[_ -]?response)["']?\s*[:=]/i
-    .test(firstLine)
-  if (!firstLine || containsSensitiveValue || containsJwt(firstLine)) return fallback
   return firstLine.slice(0, 240)
 }
 </script>

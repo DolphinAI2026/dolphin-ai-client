@@ -430,7 +430,7 @@ describe('resolveDesktopRedirect', () => {
     expect(setupWizardSource).toContain('onBeforeUnmount(disposePolling)')
   })
 
-  it('失败页拒绝展示凭据、JWT 和 traceback', () => {
+  it('失败页拒绝展示各种凭据语法、URL secret、JWT 和 traceback', () => {
     const safeDesktopFailureMessage = (
       setupWizardModule as typeof setupWizardModule & {
         safeDesktopFailureMessage?: (error: unknown, fallback: string) => string
@@ -442,7 +442,14 @@ describe('resolveDesktopRedirect', () => {
 
     const fallback = '本地环境未能启动，请重试或查看日志'
     for (const sensitive of [
-      'Authorization: Bearer auth-value',
+      'Authorization : Bearer auth-space',
+      'Authorization=auth-equals',
+      '{\n  "nested": {"token" : "json-token"},\n  "ok": "visible"\n}',
+      'password : password-colon',
+      'apiKey=camel-key',
+      'Bearer bearer-only',
+      'urls https://safe.example/path https://user:url-pass@example.test/path?x=1',
+      'queries https://safe.example/?x=1 https://example.test/?apiKey=query-key',
       'secret=secret-value',
       'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.signature',
       'Traceback (most recent call last):\n  File "app.py", line 1',

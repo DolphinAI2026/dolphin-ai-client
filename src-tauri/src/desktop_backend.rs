@@ -12,8 +12,9 @@ use std::io::{self, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
@@ -115,45 +116,110 @@ fn sanitize_log_line(line: &str) -> String {
         return "(empty)".to_string();
     }
 
-    let lowercase = flattened.to_ascii_lowercase();
-    let redact_entire_line = [
-        "traceback",
-        "authorization:",
-        "authorization=",
-        "authorization =",
-        "password=",
-        "password =",
-        "\"password\":",
-        "'password':",
-        "api_key=",
-        "api_key =",
-        "api-key=",
-        "\"api_key\":",
-        "'api_key':",
-        "secret=",
-        "secret =",
-        "\"secret\":",
-        "'secret':",
-        "access_token",
-        "refresh_token",
-        "id_token",
-        "encryption_key",
-        "private_key",
-        "authentication_response",
-    ]
-    .iter()
-    .any(|marker| lowercase.contains(marker));
-    if redact_entire_line || contains_jwt(flattened) || contains_url_credentials(flattened) {
+    if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(flattened) {
+        sanitize_json_value(&mut value);
+        return serde_json::to_string(&value).unwrap_or_else(|_| "[REDACTED]".to_string());
+    }
+
+    sanitize_non_json_line(flattened)
+}
+
+fn normalize_sensitive_key(key: &str) -> String {
+    key.chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .map(|character| character.to_ascii_lowercase())
+        .collect()
+}
+
+fn is_sensitive_key(key: &str) -> bool {
+    let normalized = normalize_sensitive_key(key);
+    normalized == "authorization"
+        || normalized.ends_with("password")
+        || normalized.ends_with("token")
+        || normalized.ends_with("apikey")
+        || normalized.ends_with("secret")
+        || normalized.ends_with("encryptionkey")
+        || normalized.ends_with("privatekey")
+        || normalized.ends_with("authenticationresponse")
+}
+
+fn sanitize_json_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            for (key, value) in object.iter_mut() {
+                if is_sensitive_key(key) {
+                    *value = serde_json::Value::String("[REDACTED]".to_string());
+                } else {
+                    sanitize_json_value(value);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                sanitize_json_value(item);
+            }
+        }
+        serde_json::Value::String(value) => {
+            let sanitized = sanitize_non_json_line(value);
+            if sanitized == "[REDACTED]" {
+                *value = sanitized;
+            }
+        }
+        _ => {}
+    }
+}
+
+fn sanitize_non_json_line(line: &str) -> String {
+    let lowercase = line.to_ascii_lowercase();
+    if lowercase.contains("traceback")
+        || contains_sensitive_assignment(line)
+        || contains_bearer_credential(line)
+        || contains_jwt(line)
+        || contains_sensitive_url(line)
+    {
         return "[REDACTED]".to_string();
     }
 
-    for marker in ["token=", "token =", "\"token\":", "'token':"] {
-        if let Some(index) = lowercase.find(marker) {
-            return format!("{}[REDACTED]", &flattened[..index + marker.len()]);
+    line.to_string()
+}
+
+fn contains_sensitive_assignment(line: &str) -> bool {
+    for (start, _) in line.char_indices() {
+        let tail = &line[start..];
+        for (offset, character) in tail.char_indices() {
+            if offset > 80 {
+                break;
+            }
+            if matches!(character, ':' | '=') {
+                let key = tail[..offset].trim().trim_matches(['"', '\'']);
+                if is_sensitive_key(key) {
+                    return true;
+                }
+                break;
+            }
+            if !(character.is_ascii_alphanumeric()
+                || character.is_ascii_whitespace()
+                || matches!(character, '_' | '-' | '"' | '\''))
+            {
+                break;
+            }
         }
     }
+    false
+}
 
-    flattened.to_string()
+fn contains_bearer_credential(line: &str) -> bool {
+    let lowercase = line.to_ascii_lowercase();
+    lowercase.match_indices("bearer").any(|(index, marker)| {
+        let before = lowercase[..index].chars().next_back();
+        let after = &lowercase[index + marker.len()..];
+        before.is_none_or(|character| !character.is_ascii_alphanumeric())
+            && after
+                .chars()
+                .next()
+                .is_some_and(|character| character.is_ascii_whitespace())
+            && !after.trim().is_empty()
+    })
 }
 
 fn contains_jwt(line: &str) -> bool {
@@ -177,36 +243,135 @@ fn contains_jwt(line: &str) -> bool {
     })
 }
 
-fn contains_url_credentials(line: &str) -> bool {
-    let Some(scheme_end) = line.find("://") else {
-        return false;
-    };
-    let authority = &line[scheme_end + 3..];
-    authority
-        .split(['/', '?', '#'])
-        .next()
-        .is_some_and(|value| value.contains('@'))
+fn contains_sensitive_url(line: &str) -> bool {
+    let lowercase = line.to_ascii_lowercase();
+    let mut offset = 0;
+    while offset < line.len() {
+        let tail = &lowercase[offset..];
+        let http = tail.find("http://");
+        let https = tail.find("https://");
+        let Some(relative_start) = [http, https].into_iter().flatten().min() else {
+            break;
+        };
+        let start = offset + relative_start;
+        let end = line[start..]
+            .char_indices()
+            .find_map(|(relative, character)| {
+                (relative > 0
+                    && (character.is_whitespace() || matches!(character, '"' | '\'' | '<' | '>')))
+                .then_some(start + relative)
+            })
+            .unwrap_or(line.len());
+        let candidate = line[start..end]
+            .trim_end_matches([',', ';', ')', ']', '}'])
+            .trim();
+        if let Ok(url) = tauri::Url::parse(candidate) {
+            if !url.username().is_empty()
+                || url.password().is_some()
+                || url.query_pairs().any(|(key, _)| is_sensitive_key(&key))
+            {
+                return true;
+            }
+        }
+        offset = start + 1;
+    }
+    false
 }
 
-fn write_diagnostic_log(
-    logs_dir: &Path,
-    file_name: &str,
+#[derive(Debug, Clone)]
+struct DiagnosticRecord {
+    logs_dir: PathBuf,
+    file_name: &'static str,
     phase: DesktopPhase,
-    code: &str,
-    message: &str,
-) -> io::Result<()> {
-    std::fs::create_dir_all(logs_dir)?;
+    code: String,
+    message: String,
+}
+
+#[derive(Debug, Clone)]
+struct SidecarLogContext {
+    generation: u64,
+    logs_dir: PathBuf,
+}
+
+impl DiagnosticRecord {
+    fn new(
+        logs_dir: PathBuf,
+        file_name: &'static str,
+        phase: DesktopPhase,
+        code: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            logs_dir,
+            file_name,
+            phase,
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct DiagnosticSink {
+    sender: SyncSender<DiagnosticRecord>,
+    failed: Arc<AtomicBool>,
+}
+
+impl DiagnosticSink {
+    fn new() -> Self {
+        Self::from_writer(128, write_diagnostic_log)
+    }
+
+    fn from_writer(
+        capacity: usize,
+        writer: impl Fn(&DiagnosticRecord) -> io::Result<()> + Send + 'static,
+    ) -> Self {
+        let (sender, receiver) = mpsc::sync_channel::<DiagnosticRecord>(capacity);
+        let failed = Arc::new(AtomicBool::new(false));
+        let writer_failed = failed.clone();
+        if thread::Builder::new()
+            .name("desktop-diagnostics".to_string())
+            .spawn(move || {
+                while let Ok(record) = receiver.recv() {
+                    if writer(&record).is_err() {
+                        writer_failed.store(true, Ordering::Release);
+                    }
+                }
+            })
+            .is_err()
+        {
+            failed.store(true, Ordering::Release);
+        }
+        Self { sender, failed }
+    }
+
+    fn enqueue(&self, record: DiagnosticRecord) {
+        if matches!(
+            self.sender.try_send(record),
+            Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_))
+        ) {
+            self.failed.store(true, Ordering::Release);
+        }
+    }
+
+    fn has_failed(&self) -> bool {
+        self.failed.load(Ordering::Acquire)
+    }
+}
+
+fn write_diagnostic_log(record: &DiagnosticRecord) -> io::Result<()> {
+    std::fs::create_dir_all(&record.logs_dir)?;
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(logs_dir.join(file_name))?;
+        .open(record.logs_dir.join(record.file_name))?;
     writeln!(
         file,
         "time={} phase={} code={} message={}",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        phase.as_str(),
-        sanitize_log_line(code),
-        sanitize_log_line(message),
+        record.phase.as_str(),
+        sanitize_log_line(&record.code),
+        sanitize_log_line(&record.message),
     )
 }
 
@@ -411,6 +576,7 @@ struct DesktopBackendInner {
     lease: LifecycleLeaseState,
     runtime: Option<LocalRuntimeApiServer>,
     sidecar: Option<CommandChild>,
+    sidecar_generation: Option<u64>,
     pending_sidecar_error: Option<(u64, DesktopBackendError)>,
     worker_failed: bool,
     shutdown_requested: bool,
@@ -418,13 +584,13 @@ struct DesktopBackendInner {
     shutdown_intent_enqueued: bool,
     shutdown_recovery_started: bool,
     shutdown_complete: bool,
-    log_write_failed: bool,
+    diagnostics: DiagnosticSink,
 }
 
 impl DesktopBackendInner {
     fn write_diagnostic(
-        &mut self,
-        file_name: &str,
+        &self,
+        file_name: &'static str,
         phase: DesktopPhase,
         code: &str,
         message: &str,
@@ -433,9 +599,32 @@ impl DesktopBackendInner {
             return;
         };
         let logs_dir = DesktopPaths::from_root(config.root_dir.clone()).logs_dir;
-        if write_diagnostic_log(&logs_dir, file_name, phase, code, message).is_err() {
-            self.log_write_failed = true;
+        self.diagnostics.enqueue(DiagnosticRecord::new(
+            logs_dir, file_name, phase, code, message,
+        ));
+    }
+
+    fn prepare_sidecar_diagnostic(
+        &self,
+        context: &SidecarLogContext,
+        code: &str,
+        message: &str,
+    ) -> Option<(DiagnosticSink, DiagnosticRecord)> {
+        if self.sidecar_generation != Some(context.generation)
+            || !self.lease.is_desired(context.generation)
+        {
+            return None;
         }
+        Some((
+            self.diagnostics.clone(),
+            DiagnosticRecord::new(
+                context.logs_dir.clone(),
+                "sidecar.log",
+                self.phase,
+                code,
+                message,
+            ),
+        ))
     }
 
     fn transition_to(&mut self, phase: DesktopPhase, message: &str) {
@@ -451,10 +640,24 @@ impl DesktopBackendInner {
             &error.code,
             &error.message,
         );
-        if self.log_write_failed && !error.message.contains("日志写入失败") {
+        if self.diagnostics.has_failed() && !error.message.contains("日志写入失败") {
             error.message.push_str("；日志写入失败");
         }
         self.error = Some(error);
+    }
+
+    fn visible_error(&self) -> Option<DesktopBackendError> {
+        self.error.clone().map(|mut error| {
+            if self.diagnostics.has_failed() && !error.message.contains("日志写入失败") {
+                error.message.push_str("；日志写入失败");
+            }
+            error
+        })
+    }
+
+    fn take_sidecar(&mut self) -> Option<CommandChild> {
+        self.sidecar_generation = None;
+        self.sidecar.take()
     }
 }
 
@@ -484,6 +687,7 @@ impl DesktopBackend {
                 lease: LifecycleLeaseState::default(),
                 runtime: None,
                 sidecar: None,
+                sidecar_generation: None,
                 pending_sidecar_error: None,
                 worker_failed: false,
                 shutdown_requested: false,
@@ -491,7 +695,7 @@ impl DesktopBackend {
                 shutdown_intent_enqueued: false,
                 shutdown_recovery_started: false,
                 shutdown_complete: false,
-                log_write_failed: false,
+                diagnostics: DiagnosticSink::new(),
             }),
             config_store,
             default_root_dir,
@@ -517,7 +721,7 @@ impl DesktopBackend {
             setup_scope: inner.setup_scope,
             config: inner.config.clone(),
             default_root_dir: self.default_root_dir.clone(),
-            error: inner.error.clone(),
+            error: inner.visible_error(),
         }
     }
 
@@ -526,7 +730,7 @@ impl DesktopBackend {
             return Err(DesktopBackendError::runtime("桌面应用正在退出"));
         }
         if inner.worker_failed {
-            return Err(inner.error.clone().unwrap_or_else(|| {
+            return Err(inner.visible_error().unwrap_or_else(|| {
                 DesktopBackendError::runtime("桌面生命周期服务不可用，请重新启动应用")
             }));
         }
@@ -657,7 +861,7 @@ impl DesktopBackend {
             return Ok(ShutdownRequestStatus::Pending);
         }
         if inner.worker_failed {
-            return Err(inner.error.clone().unwrap_or_else(|| {
+            return Err(inner.visible_error().unwrap_or_else(|| {
                 DesktopBackendError::runtime("桌面生命周期服务不可用，请重新启动应用")
             }));
         }
@@ -820,43 +1024,52 @@ fn set_launch_failed(app: &AppHandle, generation: u64, error: DesktopBackendErro
     let _ = navigate_packaged(app, &packaged_url);
 }
 
+fn enqueue_sidecar_diagnostic(
+    app: &AppHandle,
+    context: &SidecarLogContext,
+    code: &str,
+    message: &str,
+) -> bool {
+    let state = app.state::<DesktopBackend>();
+    let prepared = {
+        let inner = state.lock();
+        inner.prepare_sidecar_diagnostic(context, code, message)
+    };
+    let Some((sink, record)) = prepared else {
+        return false;
+    };
+    sink.enqueue(record);
+    true
+}
+
 fn log_sidecar_events(
     app: AppHandle,
-    generation: u64,
+    context: SidecarLogContext,
     mut rx: tauri::async_runtime::Receiver<CommandEvent>,
 ) {
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
             match event {
                 CommandEvent::Stdout(bytes) => {
-                    let state = app.state::<DesktopBackend>();
-                    let mut inner = state.lock();
-                    let phase = inner.phase;
-                    inner.write_diagnostic(
-                        "sidecar.log",
-                        phase,
+                    enqueue_sidecar_diagnostic(
+                        &app,
+                        &context,
                         "DESKTOP_SIDECAR_STDOUT",
                         &String::from_utf8_lossy(&bytes),
                     );
                 }
                 CommandEvent::Stderr(bytes) => {
-                    let state = app.state::<DesktopBackend>();
-                    let mut inner = state.lock();
-                    let phase = inner.phase;
-                    inner.write_diagnostic(
-                        "sidecar.log",
-                        phase,
+                    enqueue_sidecar_diagnostic(
+                        &app,
+                        &context,
                         "DESKTOP_SIDECAR_STDERR",
                         &String::from_utf8_lossy(&bytes),
                     );
                 }
                 CommandEvent::Error(error) => {
-                    let state = app.state::<DesktopBackend>();
-                    let mut inner = state.lock();
-                    let phase = inner.phase;
-                    inner.write_diagnostic(
-                        "sidecar.log",
-                        phase,
+                    enqueue_sidecar_diagnostic(
+                        &app,
+                        &context,
                         "DESKTOP_SIDECAR_STREAM_ERROR",
                         &error,
                     );
@@ -868,18 +1081,14 @@ fn log_sidecar_events(
                         _ => "sidecar terminated unexpectedly".to_string(),
                     };
                     let error = map_sidecar_error(message);
+                    enqueue_sidecar_diagnostic(
+                        &app,
+                        &context,
+                        "DESKTOP_SIDECAR_TERMINATED",
+                        &error.message,
+                    );
                     let state = app.state::<DesktopBackend>();
-                    {
-                        let mut inner = state.lock();
-                        let phase = inner.phase;
-                        inner.write_diagnostic(
-                            "sidecar.log",
-                            phase,
-                            "DESKTOP_SIDECAR_TERMINATED",
-                            &error.message,
-                        );
-                    }
-                    let _ = state.queue_sidecar_terminated(generation, error);
+                    let _ = state.queue_sidecar_terminated(context.generation, error);
                     break;
                 }
                 _ => {}
@@ -900,21 +1109,23 @@ fn spawn_sidecar(
     }
 
     let paths = DesktopPaths::from_root(config.root_dir.clone());
+    let log_context = SidecarLogContext {
+        generation,
+        logs_dir: paths.logs_dir.clone(),
+    };
     let port = stable_port(&paths.data_dir);
     let state = app.state::<DesktopBackend>();
     let agent_runtime_path = agent_runtime_executable(&state.agent_runtime_root);
     let launch =
         SidecarLaunch::from_config(config, port, manager_url.as_str(), manager_token.as_str());
-    {
-        let mut inner = state.lock();
-        let phase = inner.phase;
-        inner.write_diagnostic(
-            "sidecar.log",
-            phase,
-            "DESKTOP_SIDECAR_STARTING",
-            "启动 sidecar 进程",
-        );
-    }
+    let diagnostic_sink = state.lock().diagnostics.clone();
+    diagnostic_sink.enqueue(DiagnosticRecord::new(
+        log_context.logs_dir.clone(),
+        "sidecar.log",
+        DesktopPhase::StartingSidecar,
+        "DESKTOP_SIDECAR_STARTING",
+        "启动 sidecar 进程",
+    ));
     let mut command = match app.shell().sidecar("ruijing-sidecar") {
         Ok(command) => command.args(launch.args),
         Err(error) => {
@@ -957,18 +1168,20 @@ fn spawn_sidecar(
     }
     let replaced_child = {
         let mut inner = state.lock();
-        inner.sidecar.replace(child)
+        let replaced = inner.sidecar.replace(child);
+        inner.sidecar_generation = Some(generation);
+        replaced
     };
     if let Some(child) = replaced_child {
         stop_sidecar(child);
     }
-    log_sidecar_events(app.clone(), generation, rx);
+    log_sidecar_events(app.clone(), log_context, rx);
 
     let health = wait_healthy(app, generation, port);
     match health {
         HealthStatus::Healthy => {
             if !operation_is_current(app, generation, DesktopPhase::StartingSidecar) {
-                let child = state.lock().sidecar.take();
+                let child = state.lock().take_sidecar();
                 if let Some(child) = child {
                     stop_sidecar(child);
                 }
@@ -977,7 +1190,7 @@ fn spawn_sidecar(
             if let Err(error) = navigate_ready(app, port) {
                 let child = {
                     let mut inner = state.lock();
-                    let child = inner.sidecar.take();
+                    let child = inner.take_sidecar();
                     if inner.lease.is_active_current(generation) {
                         inner.fail(error);
                     }
@@ -1002,7 +1215,7 @@ fn spawn_sidecar(
             };
             let child = {
                 let mut inner = state.lock();
-                let child = inner.sidecar.take();
+                let child = inner.take_sidecar();
                 if inner.lease.is_active_current(generation) {
                     inner.fail(error);
                     inner.pending_sidecar_error = None;
@@ -1016,7 +1229,7 @@ fn spawn_sidecar(
             let _ = navigate_packaged(app, &packaged_url);
         }
         HealthStatus::Cancelled => {
-            let child = state.lock().sidecar.take();
+            let child = state.lock().take_sidecar();
             if let Some(child) = child {
                 stop_sidecar(child);
             }
@@ -1113,7 +1326,7 @@ fn run_save_setup(app: &AppHandle, generation: u64, input: DesktopSetupInput) {
     let state = app.state::<DesktopBackend>();
     let (sidecar, runtime) = {
         let mut inner = state.lock();
-        (inner.sidecar.take(), inner.runtime.take())
+        (inner.take_sidecar(), inner.runtime.take())
     };
     stop_resources(sidecar, runtime);
     if !state.operation_is_current(generation, DesktopPhase::SavingConfig) {
@@ -1148,7 +1361,7 @@ fn run_enter_login_setup(app: &AppHandle, generation: u64) {
     let state = app.state::<DesktopBackend>();
     let packaged_url = state.lock().packaged_url.clone();
     let navigation_result = navigate_packaged(app, &packaged_url);
-    let sidecar = state.lock().sidecar.take();
+    let sidecar = state.lock().take_sidecar();
     if let Some(sidecar) = sidecar {
         stop_sidecar(sidecar);
     }
@@ -1167,7 +1380,7 @@ fn run_retry(app: &AppHandle, generation: u64) {
         .config
         .as_ref()
         .map(|config| config.root_dir.clone());
-    let sidecar = state.lock().sidecar.take();
+    let sidecar = state.lock().take_sidecar();
     if let Some(sidecar) = sidecar {
         stop_sidecar(sidecar);
     }
@@ -1257,7 +1470,7 @@ fn run_update_login(app: &AppHandle, generation: u64, login: DesktopLoginConfig)
     };
     let packaged_url = state.lock().packaged_url.clone();
     let navigation_result = navigate_packaged(app, &packaged_url);
-    let sidecar = state.lock().sidecar.take();
+    let sidecar = state.lock().take_sidecar();
     if let Some(sidecar) = sidecar {
         stop_sidecar(sidecar);
     }
@@ -1325,7 +1538,7 @@ fn run_sidecar_terminated(app: &AppHandle, generation: u64, error: DesktopBacken
         {
             return;
         }
-        let sidecar = inner.sidecar.take();
+        let sidecar = inner.take_sidecar();
         inner.pending_sidecar_error = None;
         inner.fail(error);
         (sidecar, inner.packaged_url.clone())
@@ -1396,7 +1609,7 @@ fn recover_worker_failure(app: &AppHandle, panic_message: String) {
         ));
         DesktopBackend::record_worker_failure(&mut inner, error);
         (
-            inner.sidecar.take(),
+            inner.take_sidecar(),
             inner.runtime.take(),
             inner.shutdown_requested,
         )
@@ -1431,7 +1644,7 @@ fn lifecycle_worker(app: AppHandle, receiver: Receiver<LifecycleIntent>) {
                 LifecycleIntent::Shutdown { .. } => {
                     let (sidecar, runtime) = {
                         let mut inner = state.lock();
-                        (inner.sidecar.take(), inner.runtime.take())
+                        (inner.take_sidecar(), inner.runtime.take())
                     };
                     stop_resources(sidecar, runtime);
                     let mut inner = state.lock();
@@ -1585,7 +1798,7 @@ pub fn handle_run_event(app: &AppHandle, event: RunEvent) {
                         let state = app.state::<DesktopBackend>();
                         let (sidecar, runtime) = {
                             let mut inner = state.lock();
-                            (inner.sidecar.take(), inner.runtime.take())
+                            (inner.take_sidecar(), inner.runtime.take())
                         };
                         let _ = catch_unwind(AssertUnwindSafe(|| stop_resources(sidecar, runtime)));
                         state.lock().shutdown_complete = true;
@@ -1714,26 +1927,62 @@ mod tests {
     }
 
     #[test]
-    fn diagnostics_redact_tokens_and_passwords() {
-        let line = sanitize_log_line("token=abc password=secret Authorization: Bearer xyz");
-        assert!(!line.contains("abc"));
-        assert!(!line.contains("secret"));
-        assert!(!line.contains("xyz"));
-        assert!(line.contains("[REDACTED]"));
+    fn diagnostics_reject_adversarial_secret_syntax() {
+        for (line, secret) in [
+            ("token=abc password=secret Authorization: Bearer xyz", "xyz"),
+            (
+                r#"response={"access_token":"access-value"}"#,
+                "access-value",
+            ),
+            ("api_key=api-value", "api-value"),
+            ("secret=secret-value", "secret-value"),
+            (
+                "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.signature",
+                "signature",
+            ),
+            (
+                "Traceback (most recent call last):\n  File \"app.py\", line 1",
+                "app.py",
+            ),
+            ("Authorization : Bearer auth-space", "auth-space"),
+            ("Authorization=auth-equals", "auth-equals"),
+            (
+                r#"{"nested":{"token" : "json-token"},"ok":"visible"}"#,
+                "json-token",
+            ),
+            ("password : password-colon", "password-colon"),
+            ("apiKey=camel-key", "camel-key"),
+            ("Bearer bearer-only", "bearer-only"),
+            (
+                "urls https://safe.example/path https://user:url-pass@example.test/path?x=1",
+                "url-pass",
+            ),
+            (
+                "queries https://safe.example/?x=1 https://example.test/?apiKey=query-key",
+                "query-key",
+            ),
+        ] {
+            let sanitized = sanitize_log_line(line);
+            assert!(
+                !sanitized.contains(secret),
+                "secret {secret:?} leaked from {line:?} as {sanitized:?}"
+            );
+            assert!(sanitized.contains("[REDACTED]"));
+        }
     }
 
     #[test]
-    fn diagnostics_redact_json_secrets_jwts_and_tracebacks() {
-        for secret in [
-            r#"response={"access_token":"access-value"}"#,
-            "api_key=api-value",
-            "secret=secret-value",
-            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.signature",
-            "Traceback (most recent call last):\n  File \"app.py\", line 1",
-        ] {
-            let line = sanitize_log_line(secret);
-            assert_eq!(line, "[REDACTED]", "sensitive input: {secret}");
-        }
+    fn nested_json_redacts_sensitive_keys_recursively() {
+        let sanitized = sanitize_log_line(
+            r#"{"items":[{"apiKey":"api-json"},{"profile":{"password":"pass-json"}}],"ok":"visible"}"#,
+        );
+        let value: serde_json::Value = serde_json::from_str(&sanitized).unwrap();
+
+        assert_eq!(value["items"][0]["apiKey"], "[REDACTED]");
+        assert_eq!(value["items"][1]["profile"]["password"], "[REDACTED]");
+        assert_eq!(value["ok"], "visible");
+        assert!(!sanitized.contains("api-json"));
+        assert!(!sanitized.contains("pass-json"));
     }
 
     #[test]
@@ -1755,20 +2004,20 @@ mod tests {
             std::process::id(),
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));
-        write_diagnostic_log(
-            &logs_dir,
+        write_diagnostic_log(&DiagnosticRecord::new(
+            logs_dir.clone(),
             "desktop.log",
             DesktopPhase::Failed,
             "DESKTOP_SETUP_RUNTIME_START_FAILED",
             "bind failed token=manager-secret",
-        )
+        ))
         .unwrap();
 
         let contents = std::fs::read_to_string(logs_dir.join("desktop.log")).unwrap();
         assert!(contents.contains("time="));
         assert!(contents.contains("phase=failed"));
         assert!(contents.contains("code=DESKTOP_SETUP_RUNTIME_START_FAILED"));
-        assert!(contents.contains("message=bind failed token=[REDACTED]"));
+        assert!(contents.contains("message=[REDACTED]"));
         assert!(!contents.contains("manager-secret"));
         assert_eq!(contents.lines().count(), 1);
 
@@ -1791,11 +2040,104 @@ mod tests {
             inner.fail(map_runtime_error("bind failed"));
         }
 
+        for _ in 0..100 {
+            if backend.lock().diagnostics.has_failed() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+
         let error = backend.snapshot().error.unwrap();
         assert_eq!(error.code, "DESKTOP_SETUP_RUNTIME_START_FAILED");
         assert_eq!(error.message, "bind failed；日志写入失败");
 
         std::fs::remove_file(blocked_root).unwrap();
+    }
+
+    #[test]
+    fn stale_sidecar_generation_is_dropped_and_log_path_stays_frozen() {
+        let (supervisor, _receiver) = LifecycleSupervisor::channel();
+        let backend = fixture_backend(supervisor);
+        let old_logs = PathBuf::from("/old-root/.appdata/logs");
+        let new_logs = PathBuf::from("/new-root/.appdata/logs");
+
+        let old_context = {
+            let mut inner = backend.lock();
+            let generation = inner.lease.request_generation();
+            inner.sidecar_generation = Some(generation);
+            inner.phase = DesktopPhase::Ready;
+            SidecarLogContext {
+                generation,
+                logs_dir: old_logs.clone(),
+            }
+        };
+
+        let old_record = backend
+            .lock()
+            .prepare_sidecar_diagnostic(&old_context, "STDOUT", "old event")
+            .expect("current generation event is accepted")
+            .1;
+        assert_eq!(old_record.logs_dir, old_logs);
+
+        {
+            let mut inner = backend.lock();
+            inner.config.as_mut().unwrap().root_dir = PathBuf::from("/new-root");
+            let new_generation = inner.lease.request_generation();
+            inner.sidecar_generation = Some(new_generation);
+            let new_context = SidecarLogContext {
+                generation: new_generation,
+                logs_dir: new_logs.clone(),
+            };
+            let new_record = inner
+                .prepare_sidecar_diagnostic(&new_context, "STDOUT", "new event")
+                .expect("replacement generation event is accepted")
+                .1;
+            assert_eq!(new_record.logs_dir, new_logs);
+        }
+
+        assert!(backend
+            .lock()
+            .prepare_sidecar_diagnostic(&old_context, "STDOUT", "late old event")
+            .is_none());
+    }
+
+    #[test]
+    fn blocked_bounded_diagnostic_sink_never_holds_backend_mutex() {
+        use std::sync::{Arc, Barrier};
+
+        let writer_started = Arc::new(Barrier::new(2));
+        let writer_release = Arc::new(Barrier::new(2));
+        let started = writer_started.clone();
+        let release = writer_release.clone();
+        let sink = DiagnosticSink::from_writer(1, move |_| {
+            started.wait();
+            release.wait();
+            Ok(())
+        });
+        let (supervisor, _receiver) = LifecycleSupervisor::channel();
+        let backend = fixture_backend(supervisor);
+        backend.lock().diagnostics = sink.clone();
+
+        backend
+            .lock()
+            .transition_to(DesktopPhase::StartingRuntime, "first");
+        writer_started.wait();
+        backend
+            .lock()
+            .transition_to(DesktopPhase::StartingSidecar, "queued");
+        backend
+            .lock()
+            .transition_to(DesktopPhase::Ready, "queue overflow");
+
+        assert!(
+            sink.has_failed(),
+            "full bounded queue marks diagnostics failed"
+        );
+        assert!(
+            backend.inner.try_lock().is_ok(),
+            "blocked log writer must not retain backend state mutex"
+        );
+        writer_release.wait();
     }
 
     #[test]
