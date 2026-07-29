@@ -1,6 +1,6 @@
 use crate::desktop_config::{
     default_root_dir, normalize_login_url, DesktopConfig, DesktopConfigError, DesktopConfigStore,
-    DesktopLoginConfig, DesktopLoginMode, DesktopPaths, DesktopSetupInput,
+    DesktopLoginConfig, DesktopLoginMode, DesktopPaths, DesktopSetupInput, WorkspaceEntryScope,
 };
 use crate::local_runtime::api::LocalRuntimeApiServer;
 use crate::local_runtime::process_driver::agent_runtime_executable;
@@ -847,6 +847,23 @@ impl DesktopBackend {
         Ok(self.snapshot_from_inner(&inner))
     }
 
+    fn update_workspace_entry_scope(
+        &self,
+        scope: WorkspaceEntryScope,
+    ) -> Result<DesktopStateSnapshot, DesktopBackendError> {
+        let mut inner = self.lock();
+        Self::ensure_accepting(&inner)?;
+        let config = inner
+            .config
+            .as_ref()
+            .ok_or_else(|| DesktopBackendError::config("桌面配置尚未初始化"))?;
+        let saved = self
+            .config_store
+            .save(workspace_scope_update_input(config, scope))?;
+        inner.config = Some(saved.config);
+        Ok(self.snapshot_from_inner(&inner))
+    }
+
     fn queue_sidecar_terminated(
         &self,
         generation: u64,
@@ -927,6 +944,17 @@ impl DesktopBackend {
 
     fn generation_is_desired(&self, generation: u64) -> bool {
         self.lock().lease.is_desired(generation)
+    }
+}
+
+fn workspace_scope_update_input(
+    config: &DesktopConfig,
+    scope: WorkspaceEntryScope,
+) -> DesktopSetupInput {
+    DesktopSetupInput {
+        root_dir: config.root_dir.to_string_lossy().into_owned(),
+        login: config.login.clone(),
+        workspace_entry_scope: scope,
     }
 }
 
@@ -1483,13 +1511,8 @@ fn run_retry(app: &AppHandle, generation: u64) {
 
 fn run_update_login(app: &AppHandle, generation: u64, login: DesktopLoginConfig) {
     let state = app.state::<DesktopBackend>();
-    let root_dir = match state
-        .lock()
-        .config
-        .as_ref()
-        .map(|config| config.root_dir.clone())
-    {
-        Some(root_dir) => root_dir,
+    let config = match state.lock().config.clone() {
+        Some(config) => config,
         None => return,
     };
     let packaged_url = state.lock().packaged_url.clone();
@@ -1509,8 +1532,9 @@ fn run_update_login(app: &AppHandle, generation: u64, login: DesktopLoginConfig)
         return;
     }
     let saved = match state.config_store.save(DesktopSetupInput {
-        root_dir: root_dir.to_string_lossy().into_owned(),
+        root_dir: config.root_dir.to_string_lossy().into_owned(),
         login,
+        workspace_entry_scope: config.workspace_entry_scope,
     }) {
         Ok(saved) => saved,
         Err(error) => {
@@ -1781,6 +1805,14 @@ pub fn desktop_update_login(
 }
 
 #[tauri::command]
+pub fn desktop_update_workspace_entry_scope(
+    state: tauri::State<'_, DesktopBackend>,
+    scope: WorkspaceEntryScope,
+) -> Result<DesktopStateSnapshot, DesktopBackendError> {
+    state.update_workspace_entry_scope(scope)
+}
+
+#[tauri::command]
 #[allow(deprecated)]
 pub fn desktop_open_path(
     app: tauri::AppHandle,
@@ -1883,7 +1915,9 @@ fn kill_sidecar_deep(bootloader_pid: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::desktop_config::{DesktopConfig, DesktopLoginConfig, DesktopLoginMode};
+    use crate::desktop_config::{
+        DesktopConfig, DesktopLoginConfig, DesktopLoginMode, WorkspaceEntryScope,
+    };
     use std::cell::{Cell, RefCell};
     use std::io::Write;
     use std::net::TcpListener;
@@ -1897,6 +1931,7 @@ mod tests {
                 mode,
                 base_url: "https://om-demo.dfy.definesys.cn".to_string(),
             },
+            workspace_entry_scope: WorkspaceEntryScope::Both,
         }
     }
 
@@ -1919,7 +1954,17 @@ mod tests {
                 mode: DesktopLoginMode::ControlPlane,
                 base_url: "https://om-demo.dfy.definesys.cn".to_string(),
             },
+            workspace_entry_scope: WorkspaceEntryScope::Both,
         }
+    }
+
+    #[test]
+    fn workspace_scope_update_input_preserves_login_and_root() {
+        let config = fixture_config(DesktopLoginMode::Apaas);
+        let input = workspace_scope_update_input(&config, WorkspaceEntryScope::Apaas);
+        assert_eq!(PathBuf::from(input.root_dir), config.root_dir);
+        assert_eq!(input.login, config.login);
+        assert_eq!(input.workspace_entry_scope, WorkspaceEntryScope::Apaas);
     }
 
     #[test]

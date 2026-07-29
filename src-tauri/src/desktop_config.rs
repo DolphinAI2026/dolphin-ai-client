@@ -25,6 +25,18 @@ pub enum DesktopLoginMode {
     Apaas,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceEntryScope {
+    Apaas,
+    AiPlatform,
+    Both,
+}
+
+fn default_workspace_entry_scope() -> WorkspaceEntryScope {
+    WorkspaceEntryScope::Both
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DesktopLoginConfig {
     pub mode: DesktopLoginMode,
@@ -36,12 +48,15 @@ pub struct DesktopConfig {
     pub schema_version: u32,
     pub root_dir: PathBuf,
     pub login: DesktopLoginConfig,
+    #[serde(default = "default_workspace_entry_scope")]
+    pub workspace_entry_scope: WorkspaceEntryScope,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesktopSetupInput {
     pub root_dir: String,
     pub login: DesktopLoginConfig,
+    pub workspace_entry_scope: WorkspaceEntryScope,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -216,6 +231,7 @@ impl DesktopConfigStore {
             schema_version: DESKTOP_CONFIG_SCHEMA_VERSION,
             root_dir: root_dir.clone(),
             login,
+            workspace_entry_scope: input.workspace_entry_scope,
         };
         atomic_write_json(&paths.config_path, &config)?;
 
@@ -685,6 +701,39 @@ mod tests {
     }
 
     #[test]
+    fn legacy_config_without_workspace_scope_defaults_to_both() {
+        let raw = r#"{
+            "schema_version": 1,
+            "root_dir": "/tmp/DolphinCode",
+            "login": {"mode": "control_plane", "base_url": "https://example.com"}
+        }"#;
+        let config: DesktopConfig = serde_json::from_str(raw).unwrap();
+        assert_eq!(config.workspace_entry_scope, WorkspaceEntryScope::Both);
+    }
+
+    #[test]
+    fn setup_persists_explicit_workspace_scope() {
+        let temp = unique_test_dir("workspace-scope");
+        let store = DesktopConfigStore::new(temp.join("system"));
+        store
+            .save(DesktopSetupInput {
+                root_dir: temp.join("DolphinCode").to_string_lossy().into_owned(),
+                login: DesktopLoginConfig {
+                    mode: DesktopLoginMode::ControlPlane,
+                    base_url: CONTROL_PLANE_DEFAULT_URL.to_string(),
+                },
+                workspace_entry_scope: WorkspaceEntryScope::AiPlatform,
+            })
+            .unwrap();
+        let loaded = store.load().unwrap().unwrap();
+        assert_eq!(
+            loaded.config.workspace_entry_scope,
+            WorkspaceEntryScope::AiPlatform
+        );
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
     fn root_config_is_written_before_bootstrap_pointer() {
         let temp = unique_test_dir("save-order");
         let system_data = temp.join("system");
@@ -697,6 +746,7 @@ mod tests {
                     mode: DesktopLoginMode::ControlPlane,
                     base_url: CONTROL_PLANE_DEFAULT_URL.to_string(),
                 },
+                workspace_entry_scope: WorkspaceEntryScope::Both,
             })
             .unwrap();
 
@@ -718,6 +768,7 @@ mod tests {
                     mode: DesktopLoginMode::Apaas,
                     base_url: format!("{APAAS_DEFAULT_URL}/"),
                 },
+                workspace_entry_scope: WorkspaceEntryScope::Both,
             })
             .unwrap();
 
@@ -824,6 +875,7 @@ mod tests {
                     mode: DesktopLoginMode::ControlPlane,
                     base_url: CONTROL_PLANE_DEFAULT_URL.to_string(),
                 },
+                workspace_entry_scope: WorkspaceEntryScope::Both,
             })
             .unwrap_err();
 
@@ -852,6 +904,7 @@ mod tests {
                     mode: DesktopLoginMode::ControlPlane,
                     base_url: CONTROL_PLANE_DEFAULT_URL.to_string(),
                 },
+                workspace_entry_scope: WorkspaceEntryScope::Both,
             });
             let applications_created = root.join("applications").exists();
             let data_created = root.join(".appdata").exists();
@@ -883,6 +936,7 @@ mod tests {
                 mode: DesktopLoginMode::ControlPlane,
                 base_url: CONTROL_PLANE_DEFAULT_URL.to_string(),
             },
+            workspace_entry_scope: WorkspaceEntryScope::Both,
         });
         let external_runtime_created = external.join("runtime").exists();
         let bootstrap_created = system_data.join("bootstrap.json").exists();
@@ -927,6 +981,7 @@ mod tests {
                                 mode,
                                 base_url: format!("https://example.com/{writer}/{round}"),
                             },
+                            workspace_entry_scope: WorkspaceEntryScope::Both,
                         })
                         .unwrap();
                     sender.send(saved.config).unwrap();

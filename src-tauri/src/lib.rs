@@ -16,6 +16,7 @@ pub fn run() {
             desktop_backend::desktop_enter_login_setup,
             desktop_backend::desktop_retry_start,
             desktop_backend::desktop_update_login,
+            desktop_backend::desktop_update_workspace_entry_scope,
             desktop_backend::desktop_open_path,
         ])
         .setup(desktop_backend::setup)
