@@ -26,6 +26,11 @@
       "icons/icon.ico"
     ],
     "externalBin": ["binaries/ruijing-sidecar"],
+    "windows": {
+      "nsis": {
+        "languages": ["SimpChinese"]
+      }
+    },
     "macOS": {
       "exceptionDomain": ""
     }

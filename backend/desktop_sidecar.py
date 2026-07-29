@@ -47,6 +47,16 @@ def ensure_encryption_key(data_dir: Path) -> str:
     return val
 
 
+def sqlite_database_url(database_path: Path) -> str:
+    """Build a SQLite URL that accepts canonical Windows device paths."""
+    path = str(database_path)
+    if path.startswith("\\\\?\\UNC\\"):
+        path = "\\\\" + path[8:]
+    elif path.startswith("\\\\?\\"):
+        path = path[4:]
+    return f"sqlite+aiosqlite:///{path}"
+
+
 def build_env(
     data_dir: Path,
     port: int,
@@ -71,8 +81,9 @@ def build_env(
         # data_dir 的真相源：Tauri 经 --data-dir 传入(app_data_dir, 各平台不同)。
         # 显式导出, 让 skills_root() 等下游不必各自猜路径(避免误用 ~/.ruijing-builder 兜底)。
         "SIDECAR_DATA_DIR": str(data_dir),
-        # 绝对路径(四斜杠), 避免被 config._normalize_database_url 锚定到 backend/
-        "DATABASE_URL": f"sqlite+aiosqlite:///{db_path}",
+        # Windows canonicalize 会产生 \\?\ 设备路径；SQLite URL 必须先转回普通路径，
+        # 否则问号会被 URL 解析器当成查询分隔符并截断数据库文件名。
+        "DATABASE_URL": sqlite_database_url(db_path),
         # 每实例持久化的加密主密钥 (crypto.py 对它 sha256 派生 Fernet key)。
         "ENCRYPTION_KEY": ensure_encryption_key(data_dir),
         "JWT_SECRET_KEY": ensure_jwt_secret(data_dir),

@@ -1,7 +1,16 @@
 import os
+from pathlib import PureWindowsPath
 
 import desktop_sidecar as ds
 import desktop_sidecar
+
+
+def test_sqlite_database_url_removes_windows_verbatim_prefix():
+    database_path = PureWindowsPath(r"\\?\E:\dolphin_code\.appdata\app.db")
+
+    assert ds.sqlite_database_url(database_path) == (
+        r"sqlite+aiosqlite:///E:\dolphin_code\.appdata\app.db"
+    )
 
 
 def test_ensure_jwt_secret_persists(tmp_path):
