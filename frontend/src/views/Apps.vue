@@ -22,20 +22,21 @@
       </section>
 
       <section class="apps-toolbar" aria-label="应用筛选和视图切换">
-        <div class="apps-tabs" role="tablist" aria-label="应用状态">
-          <button
-            v-for="tab in tabs"
-            :key="tab.value"
-            class="apps-tab"
-            :class="{ active: activeTab === tab.value }"
-            type="button"
-            role="tab"
-            :aria-selected="activeTab === tab.value"
-            @click="activeTab = tab.value"
+        <div class="apps-status-filter">
+          <span class="apps-filter-label">状态</span>
+          <el-select
+            v-model="activeTab"
+            class="apps-status-select"
+            size="small"
+            aria-label="应用状态"
           >
-            <span>{{ tab.label }}</span>
-            <span v-if="tab.count" class="apps-tab-count">{{ tab.count }}</span>
-          </button>
+            <el-option
+              v-for="tab in tabs"
+              :key="tab.value"
+              :label="`${tab.label}（${tab.count}）`"
+              :value="tab.value"
+            />
+          </el-select>
         </div>
 
         <div class="apps-toolbar-right">
@@ -1212,72 +1213,27 @@ watch(() => route.fullPath, () => {
   font-weight: var(--fw-semibold, 600);
 }
 
-/* ── Tabs ─────────────────────────────────────────────────── */
-.apps-tabs {
-  display: inline-flex;
+/* ── Status filter ────────────────────────────────────────── */
+.apps-status-filter {
+  display: flex;
   align-items: center;
-  gap: 2px;
-  border-bottom: 1px solid var(--line);
-  padding: 0;
-  background: transparent;
+  gap: 8px;
+  flex: 0 0 auto;
 }
 
-.apps-tab {
-  position: relative;
-  min-width: 58px;
-  height: 36px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
+.apps-filter-label {
   color: var(--text-3);
-  font: inherit;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: var(--fw-medium, 500);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 0 14px;
-  transition: color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
-.apps-tab:hover:not(.active) {
-  color: var(--text);
+.apps-status-select {
+  width: 156px;
 }
 
-.apps-tab.active {
-  color: var(--brand);
-  font-weight: var(--fw-semibold, 600);
-}
-
-.apps-tab.active::after {
-  content: '';
-  position: absolute;
-  left: 6px;
-  right: 6px;
-  bottom: -1px;
-  height: 2px;
-  background: var(--brand);
-  border-radius: 1px;
-}
-
-.apps-tab-count {
-  min-width: 18px;
-  padding: 1px 6px;
-  border-radius: var(--r-full, 999px);
-  background: var(--surface-2);
-  color: var(--text-3);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 15px;
-  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
-              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
-}
-
-.apps-tab.active .apps-tab-count {
-  background: var(--brand-soft);
-  color: var(--brand);
+.apps-status-select :deep(.el-select__wrapper) {
+  min-height: 36px;
+  border-radius: var(--r-3, 8px);
 }
 
 /* ── View toggle (list / card) ────────────────────────────── */
@@ -2205,9 +2161,13 @@ watch(() => route.fullPath, () => {
     justify-content: flex-start;
   }
 
-  .apps-tabs {
+  .apps-status-filter {
     width: 100%;
-    overflow-x: auto;
+  }
+
+  .apps-status-select {
+    flex: 1;
+    width: auto;
   }
 
   .apps-view-toggle {

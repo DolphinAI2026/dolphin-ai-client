@@ -34,4 +34,12 @@ describe('Apps Code mode entry', () => {
     expect(appsSource).toContain('storeCodeApplicationSource(source)')
     expect(appsSource).not.toContain('ElMessageBox.prompt')
   })
+
+  it('keeps source tabs visible while moving application status into a dropdown filter', () => {
+    expect(appsSource).toContain('class="apps-source-switch"')
+    expect(appsSource).toContain('class="apps-status-filter"')
+    expect(appsSource).toContain('<el-select')
+    expect(appsSource).toContain('v-model="activeTab"')
+    expect(appsSource).not.toContain('class="apps-tabs"')
+  })
 })
