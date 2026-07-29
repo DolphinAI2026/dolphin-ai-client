@@ -54,6 +54,7 @@
                 placeholder="账号"
                 size="large"
                 :prefix-icon="User"
+                :disabled="changingDesktopService"
                 autocomplete="username"
                 clearable
               />
@@ -66,6 +67,7 @@
                 placeholder="密码"
                 size="large"
                 :prefix-icon="Lock"
+                :disabled="changingDesktopService"
                 autocomplete="current-password"
                 show-password
                 @keyup.enter="handleLogin"
@@ -83,12 +85,14 @@
                   placeholder="验证码"
                   size="large"
                   maxlength="6"
+                  :disabled="changingDesktopService"
                   @keyup.enter="handleLogin"
                 />
                 <button
                   type="button"
                   class="captcha-image-button"
                   title="刷新验证码"
+                  :disabled="changingDesktopService"
                   @click="refreshCaptcha"
                 >
                   <img v-if="captchaImage" :src="captchaImage" alt="验证码" />
@@ -102,6 +106,7 @@
                 type="primary"
                 size="large"
                 :loading="loginLoading"
+                :disabled="changingDesktopService"
                 @click="handleLogin"
                 class="submit-btn"
               >
@@ -167,6 +172,7 @@ const loginRules: FormRules = {
 }
 
 const refreshCaptcha = async () => {
+  if (changingDesktopService.value) return
   try {
     const result = await authApi.getCaptcha()
     captchaRequired.value = result.required
@@ -205,9 +211,8 @@ async function changeDesktopService() {
     userStore.logout()
     await enterDesktopLoginSetup()
   } catch {
-    ElMessage.error('无法打开登录服务设置，请稍后重试')
-  } finally {
     changingDesktopService.value = false
+    ElMessage.error('无法打开登录服务设置，请稍后重试')
   }
 }
 
@@ -217,10 +222,10 @@ onMounted(() => {
 })
 
 const handleLogin = async () => {
-  if (!loginFormRef.value) return
+  if (changingDesktopService.value || !loginFormRef.value) return
 
   await loginFormRef.value.validate(async (valid) => {
-    if (!valid) return
+    if (!valid || changingDesktopService.value) return
 
     loginLoading.value = true
     try {

@@ -128,6 +128,49 @@ describe('resolveDesktopRedirect', () => {
     expect(updateIndex).toBeGreaterThan(logoutIndex)
   })
 
+  it('桌面设置入队成功保持锁定且仅 invoke 失败解锁', () => {
+    const handlerStart = desktopSettingsSource.indexOf('async function saveLoginSettings()')
+    const handlerEnd = desktopSettingsSource.indexOf('onMounted(() =>', handlerStart)
+    const handlerSource = desktopSettingsSource.slice(handlerStart, handlerEnd)
+    const catchIndex = handlerSource.indexOf('} catch {')
+    const unlockIndex = handlerSource.indexOf('saving.value = false')
+
+    expect(handlerStart).toBeGreaterThan(-1)
+    expect(handlerSource).toContain('saving.value = true')
+    expect(handlerSource).not.toContain('finally')
+    expect(catchIndex).toBeGreaterThan(-1)
+    expect(unlockIndex).toBeGreaterThan(catchIndex)
+    expect(handlerSource.match(/saving\.value = false/g)).toHaveLength(1)
+    expect(desktopSettingsSource).toContain(':disabled="saving || Boolean(urlError)"')
+  })
+
+  it('登录服务切换成功保持锁定且旧 sidecar 登录入口全部停用', () => {
+    const changeStart = loginSource.indexOf('async function changeDesktopService()')
+    const changeEnd = loginSource.indexOf('onMounted(() =>', changeStart)
+    const changeSource = loginSource.slice(changeStart, changeEnd)
+    const catchIndex = changeSource.indexOf('} catch {')
+    const unlockIndex = changeSource.indexOf('changingDesktopService.value = false')
+    const formStart = loginSource.indexOf('<el-form')
+    const formEnd = loginSource.indexOf('</el-form>', formStart)
+    const formSource = loginSource.slice(formStart, formEnd)
+    const refreshStart = loginSource.indexOf('const refreshCaptcha = async () =>')
+    const refreshEnd = loginSource.indexOf('async function loadDesktopService()', refreshStart)
+    const refreshSource = loginSource.slice(refreshStart, refreshEnd)
+    const loginHandlerStart = loginSource.indexOf('const handleLogin = async () =>')
+    const loginHandlerSource = loginSource.slice(loginHandlerStart)
+
+    expect(changeStart).toBeGreaterThan(-1)
+    expect(changeSource).not.toContain('finally')
+    expect(catchIndex).toBeGreaterThan(-1)
+    expect(unlockIndex).toBeGreaterThan(catchIndex)
+    expect(changeSource.match(/changingDesktopService\.value = false/g)).toHaveLength(1)
+    expect(refreshSource).toContain('if (changingDesktopService.value) return')
+    expect(loginHandlerSource).toContain(
+      'if (changingDesktopService.value || !loginFormRef.value) return',
+    )
+    expect(formSource.match(/:disabled="changingDesktopService"/g)).toHaveLength(5)
+  })
+
   it('桌面登录服务只启用 AI中台和 aPaaS平台', () => {
     expect(DESKTOP_LOGIN_SERVICES).toEqual([
       { mode: 'control_plane', label: 'AI中台', defaultUrl: 'https://om-demo.dfy.definesys.cn', enabled: true },

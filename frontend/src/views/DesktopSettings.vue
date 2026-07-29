@@ -99,7 +99,7 @@
             <el-button
               type="primary"
               :loading="saving"
-              :disabled="Boolean(urlError)"
+              :disabled="saving || Boolean(urlError)"
               @click="saveLoginSettings"
             >
               保存并重新登录
@@ -222,7 +222,6 @@ async function saveLoginSettings() {
     })
   } catch {
     operationError.value = '无法保存登录服务，请重新登录后再试'
-  } finally {
     saving.value = false
   }
 }
