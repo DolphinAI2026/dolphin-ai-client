@@ -1,8 +1,8 @@
 param(
   [string]$Version = "",
   [string]$Target = "x86_64-pc-windows-msvc",
-  [ValidateSet("nsis", "msi", "all")]
-  [string]$Bundle = "nsis",
+  [ValidateSet("portable", "nsis", "msi", "all")]
+  [string]$Bundle = "portable",
   [switch]$SkipInstall,
   [string]$AgentRuntimeRepo = "",
   [string]$AgenticCodingRoot = "",
@@ -70,7 +70,7 @@ try {
     $text = Get-Content $Config -Raw
     $text = $text -replace '"createUpdaterArtifacts"\s*:\s*true', '"createUpdaterArtifacts": false'
     Write-Utf8NoBom $Config $text
-    Write-Host "TAURI_SIGNING_PRIVATE_KEY is not set; updater artifacts are disabled for this installer build."
+    Write-Host "TAURI_SIGNING_PRIVATE_KEY is not set; updater artifacts are disabled for this desktop build."
   }
 
   Write-Host "==> [build-desktop-windows.ps1] ROOT=$Root TARGET=$Target BUNDLE=$Bundle"
@@ -162,15 +162,19 @@ try {
     Get-Item $Dest | Format-List FullName,Length,LastWriteTime
   }
 
-  Invoke-Step "6/6 Build Tauri Windows installer" {
+  Invoke-Step "6/6 Build Tauri Windows package" {
     Push-Location $Root
     try {
       if (-not $SkipInstall -and -not (Test-Path "node_modules")) {
         npm ci
         Assert-NativeSuccess "Root dependency install" $LASTEXITCODE
       }
-      npx tauri build --target $Target --bundles $Bundle
-      Assert-NativeSuccess "Tauri Windows installer build" $LASTEXITCODE
+      if ($Bundle -eq "portable") {
+        npx tauri build --target $Target --no-bundle
+      } else {
+        npx tauri build --target $Target --bundles $Bundle
+      }
+      Assert-NativeSuccess "Tauri Windows build" $LASTEXITCODE
 
       # Keep this relative layout identical to packaged_agent_runtime_root() in desktop_backend.rs.
       $PackagedApplianceRelativePath = "resources/agent-runtime"
@@ -188,6 +192,44 @@ try {
           throw "Tauri packaged appliance is missing $PackagedApplianceRelativePath\$RelativePath"
         }
       }
+
+      if ($Bundle -eq "portable") {
+        $DownloadDir = Join-Path $Root "dist-desktop\windows"
+        $PortableStagingRoot = Join-Path $ReleaseRoot "portable"
+        $PortableAppRoot = Join-Path $PortableStagingRoot "Dolphin Code"
+        $PortableZip = Join-Path $DownloadDir "ruijing-$PackageVersion-windows-x86_64-portable.zip"
+
+        Remove-Item $PortableStagingRoot -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path $PortableAppRoot | Out-Null
+        New-Item -ItemType Directory -Force -Path $DownloadDir | Out-Null
+        Get-ChildItem $DownloadDir -File -Filter "ruijing-*-windows-x86_64-portable.zip" |
+          Remove-Item -Force
+
+        Copy-Item (Join-Path $ReleaseRoot "app.exe") (Join-Path $PortableAppRoot "Dolphin Code.exe") -Force
+        Copy-Item (Join-Path $ReleaseRoot "ruijing-sidecar.exe") $PortableAppRoot -Force
+        Copy-Item (Join-Path $ReleaseRoot "resources") $PortableAppRoot -Recurse -Force
+
+        foreach ($RelativePath in @(
+          "Dolphin Code.exe",
+          "ruijing-sidecar.exe",
+          "resources\agent-runtime\bin\agent-runtime.exe",
+          "resources\agent-runtime\codex\bin\codex.exe",
+          "resources\agent-runtime\agentic-coding\.venv\Scripts\python.exe",
+          "resources\agent-runtime\agentic-coding-pack\manifest.yaml",
+          "resources\agent-runtime\web\builder\dist\index.html"
+        )) {
+          $PortablePath = Join-Path $PortableAppRoot $RelativePath
+          if (-not (Test-Path -LiteralPath $PortablePath -PathType Leaf)) {
+            throw "Portable package is missing $RelativePath"
+          }
+        }
+
+        Compress-Archive -LiteralPath $PortableAppRoot -DestinationPath $PortableZip -CompressionLevel Optimal
+        Write-Host ""
+        Write-Host "Download-ready portable package: $PortableZip"
+        Get-Item $PortableZip | Format-List FullName,Length,LastWriteTime
+        Get-FileHash $PortableZip -Algorithm SHA256 | Format-List
+      }
     } finally {
       Pop-Location
     }
@@ -200,7 +242,7 @@ try {
   if (-not (Test-Path $BundleRoot)) {
     $BundleRoot = Join-Path $Tauri "target\release\bundle"
   }
-  if (Test-Path $BundleRoot) {
+  if ($Bundle -ne "portable" -and (Test-Path $BundleRoot)) {
     Get-ChildItem $BundleRoot -Recurse -File |
       Where-Object { $_.Extension -in ".exe", ".msi", ".zip", ".sig" } |
       Select-Object FullName,Length,LastWriteTime |
