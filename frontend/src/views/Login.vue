@@ -32,7 +32,7 @@
                 <button
                   type="button"
                   class="login-service-change"
-                  :disabled="changingDesktopService"
+                  :disabled="!desktopServiceChangeAllowed"
                   @click="changeDesktopService"
                 >
                   更改登录服务
@@ -120,8 +120,17 @@
   </div>
 </template>
 
+<script lang="ts">
+export function canChangeDesktopService(
+  loginPending: boolean,
+  transitionPending: boolean,
+): boolean {
+  return !loginPending && !transitionPending
+}
+</script>
+
 <script setup lang="ts">
-import { onMounted, ref, reactive } from 'vue'
+import { computed, onMounted, ref, reactive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Lock, Moon, Sunny, User } from '@element-plus/icons-vue'
@@ -149,6 +158,10 @@ const captchaId = ref('')
 const captchaImage = ref('')
 const desktopService = ref<{ label: string; host: string } | null>(null)
 const changingDesktopService = ref(false)
+const desktopServiceChangeAllowed = computed(() => canChangeDesktopService(
+  loginLoading.value,
+  changingDesktopService.value,
+))
 
 const loginForm = reactive({
   username: '',
@@ -205,7 +218,7 @@ async function loadDesktopService() {
 }
 
 async function changeDesktopService() {
-  if (!isDesktop || changingDesktopService.value) return
+  if (!isDesktop || !desktopServiceChangeAllowed.value) return
   changingDesktopService.value = true
   try {
     userStore.logout()

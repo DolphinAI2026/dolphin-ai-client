@@ -14,7 +14,18 @@ import {
 import routerSource from './index.ts?raw'
 import setupWizardSource from '@/views/DesktopSetupWizard.vue?raw'
 import loginSource from '@/views/Login.vue?raw'
+import * as loginModule from '@/views/Login.vue'
 import desktopSettingsSource from '@/views/DesktopSettings.vue?raw'
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
 
 describe('resolveDesktopRedirect', () => {
   it('在线版不拦截 hidden 路由', () => {
@@ -169,6 +180,56 @@ describe('resolveDesktopRedirect', () => {
       'if (changingDesktopService.value || !loginFormRef.value) return',
     )
     expect(formSource.match(/:disabled="changingDesktopService"/g)).toHaveLength(5)
+  })
+
+  it('登录 pending、settled 与 transition pending 共用服务切换 gate', async () => {
+    const canChangeDesktopService = (
+      loginModule as typeof loginModule & {
+        canChangeDesktopService?: (loginPending: boolean, transitionPending: boolean) => boolean
+      }
+    ).canChangeDesktopService
+
+    expect(canChangeDesktopService).toBeTypeOf('function')
+    if (!canChangeDesktopService) return
+
+    let loginPending = true
+    let transitionPending = false
+    const loginRequest = deferred<void>()
+    const loginLifecycle = loginRequest.promise.finally(() => {
+      loginPending = false
+    })
+
+    expect(canChangeDesktopService(loginPending, transitionPending)).toBe(false)
+    loginRequest.resolve()
+    await loginLifecycle
+    expect(canChangeDesktopService(loginPending, transitionPending)).toBe(true)
+
+    transitionPending = true
+    const transitionRequest = deferred<void>()
+    expect(canChangeDesktopService(loginPending, transitionPending)).toBe(false)
+    transitionRequest.resolve()
+    await transitionRequest.promise
+    expect(canChangeDesktopService(loginPending, transitionPending)).toBe(false)
+  })
+
+  it('更改服务按钮和 handler 消费同一 gate', () => {
+    const buttonStart = loginSource.lastIndexOf(
+      '<button',
+      loginSource.indexOf('class="login-service-change"'),
+    )
+    const buttonEnd = loginSource.indexOf('</button>', buttonStart)
+    const buttonSource = loginSource.slice(buttonStart, buttonEnd)
+    const handlerStart = loginSource.indexOf('async function changeDesktopService()')
+    const handlerEnd = loginSource.indexOf('onMounted(() =>', handlerStart)
+    const handlerSource = loginSource.slice(handlerStart, handlerEnd)
+
+    expect(loginSource).toContain(
+      'const desktopServiceChangeAllowed = computed(() => canChangeDesktopService(',
+    )
+    expect(buttonSource).toContain(':disabled="!desktopServiceChangeAllowed"')
+    expect(handlerSource).toContain(
+      'if (!isDesktop || !desktopServiceChangeAllowed.value) return',
+    )
   })
 
   it('桌面登录服务只启用 AI中台和 aPaaS平台', () => {
