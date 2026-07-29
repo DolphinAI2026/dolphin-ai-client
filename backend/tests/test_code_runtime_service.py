@@ -1430,6 +1430,15 @@ async def test_default_workspace_open_uses_independent_override_url_and_token(mo
     )
     monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_URL", "http://127.0.0.1:44633")
     monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_TOKEN", "workspace-token")
+
+    async def allow_application_access(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        service,
+        "verify_control_plane_application_access",
+        allow_application_access,
+    )
     monkeypatch.setattr(service.httpx, "AsyncClient", FakeClient)
 
     await service.default_workspace_open(
@@ -1442,6 +1451,36 @@ async def test_default_workspace_open_uses_independent_override_url_and_token(mo
         "Content-Type": "application/json",
         "Authorization": "Bearer workspace-token",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("workspace_url", "workspace_token"),
+    [
+        ("", "workspace-token"),
+        ("http://127.0.0.1:44633", ""),
+    ],
+)
+async def test_default_workspace_open_requires_override_url_and_token_together(
+    monkeypatch,
+    workspace_url,
+    workspace_token,
+):
+    from app.code_runtime import service
+
+    monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_URL", workspace_url)
+    monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_TOKEN", workspace_token)
+    monkeypatch.setattr(service.settings, "dolphin_code_workspace_open_url", "")
+    monkeypatch.setattr(service.settings, "dolphin_code_workspace_open_token", "")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await service.default_workspace_open(
+            "code-app-1",
+            authorization_header="Bearer user-token",
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "Code workspace coordinator 配置不完整"
 
 
 @pytest.mark.asyncio
@@ -2413,7 +2452,7 @@ async def test_open_code_session_bootstraps_token_free_binding_and_new_browser_s
 
 
 @pytest.mark.asyncio
-async def test_open_code_session_does_not_reopen_after_expired_launch_token(
+async def test_open_code_session_reopens_once_after_expired_launch_token(
     db_session,
     monkeypatch,
 ):
@@ -2444,29 +2483,138 @@ async def test_open_code_session_does_not_reopen_after_expired_launch_token(
         }
 
     async def fake_bootstrap(builder_url: str):
+        from app.code_runtime.sandbox_auth import RuntimeBootstrap
+
         nonlocal bootstraps
         bootstraps += 1
-        raise HTTPException(
-            status_code=401,
-            detail="Runtime launch authorization expired",
-            headers={"X-APAAS-Sandbox-Auth-Error": "sandbox_launch_token_expired"},
+        if bootstraps == 1:
+            raise HTTPException(
+                status_code=401,
+                detail="Runtime launch authorization expired",
+                headers={"X-APAAS-Sandbox-Auth-Error": "sandbox_launch_token_expired"},
+            )
+        return RuntimeBootstrap(
+            clean_builder_url="https://sandbox.example.com/workspaces/ws-2/builder",
+            runtime_base_url="https://sandbox.example.com/workspaces/ws-2",
+            runtime_cookie="runtime-cookie",
+            runtime_cookie_hash="b" * 64,
+            expires_at=None,
         )
 
     monkeypatch.setattr(service, "bootstrap_runtime_session", fake_bootstrap)
+    result = await open_code_session(
+        db=db_session,
+        session_id=session.id,
+        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7, tenant_role="member"),
+        workspace_open=fake_open,
+    )
+
+    assert opens == 2
+    assert bootstraps == 2
+    assert "entry-2" not in result["embed_url"]
+
+
+@pytest.mark.asyncio
+async def test_workspace_token_open_verifies_user_application_access_first(monkeypatch):
+    from app.code_runtime import service
+    events: list[str] = []
+
+    async def verify_access(external_application_id: str, **kwargs):
+        assert external_application_id == "code-app-1"
+        assert kwargs["authorization_header"] == "Bearer user-token"
+        assert kwargs["delegated_context"].tenant_id == 7
+        events.append("verify")
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"specReviewUrl": "https://sandbox.example.com/builder?token=entry"}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def post(self, *_args, **_kwargs):
+            events.append("open")
+            return FakeResponse()
+
+    monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_URL", "https://coordinator.example.com")
+    monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_TOKEN", "workspace-token")
+    monkeypatch.setattr(service, "verify_control_plane_application_access", verify_access)
+    monkeypatch.setattr(service.httpx, "AsyncClient", FakeClient)
+
+    await service.default_workspace_open(
+        "code-app-1",
+        authorization_header="Bearer user-token",
+        delegated_context=SimpleNamespace(tenant_id=7),
+    )
+
+    assert events == ["verify", "open"]
+
+
+@pytest.mark.asyncio
+async def test_workspace_token_open_requires_user_bearer(monkeypatch):
+    from app.code_runtime import service
+
+    monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_URL", "https://coordinator.example.com")
+    monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_TOKEN", "workspace-token")
+
     with pytest.raises(HTTPException) as exc_info:
-        await open_code_session(
-            db=db_session,
-            session_id=session.id,
-            ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7, tenant_role="member"),
-            workspace_open=fake_open,
-        )
+        await service.default_workspace_open("code-app-1")
 
     assert exc_info.value.status_code == 401
-    assert (exc_info.value.headers or {}).get(
-        "X-APAAS-Sandbox-Auth-Error"
-    ) == "sandbox_launch_token_expired"
-    assert opens == 1
-    assert bootstraps == 1
+    assert exc_info.value.detail == "Code workspace 用户鉴权不可用"
+
+
+@pytest.mark.asyncio
+async def test_workspace_token_rejection_is_coordinator_failure(monkeypatch):
+    from app.code_runtime import service
+
+    class FakeResponse:
+        status_code = 401
+        text = "invalid coordinator token"
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def post(self, *_args, **_kwargs):
+            return FakeResponse()
+
+    async def allow_application_access(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_URL", "https://coordinator.example.com")
+    monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_TOKEN", "workspace-token")
+    monkeypatch.setattr(
+        service,
+        "verify_control_plane_application_access",
+        allow_application_access,
+    )
+    monkeypatch.setattr(service.httpx, "AsyncClient", FakeClient)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await service.default_workspace_open(
+            "code-app-1",
+            authorization_header="Bearer user-token",
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "Code workspace coordinator 鉴权失败"
 
 
 @pytest.mark.asyncio

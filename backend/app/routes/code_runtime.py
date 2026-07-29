@@ -947,7 +947,7 @@ async def _runtime_json_request_for_session(
         if not (
             exc.status_code == 401
             and (exc.headers or {}).get(RUNTIME_AUTH_ERROR_HEADER)
-            == "sandbox_session_expired"
+            in {"sandbox_session_expired", "sandbox_session_invalid"}
         ):
             raise
     await _refresh_runtime_binding(session, binding, request, ctx, db)
@@ -1783,7 +1783,10 @@ async def _browser_runtime_json_request_for_session(
         return payload, authorization
     except HTTPException as exc:
         auth_error = (exc.headers or {}).get(RUNTIME_AUTH_ERROR_HEADER)
-        if exc.status_code != 401 or auth_error != "sandbox_session_expired":
+        if exc.status_code != 401 or auth_error not in {
+            "sandbox_session_expired",
+            "sandbox_session_invalid",
+        }:
             raise
         if budget.recovery_used:
             raise BrowserRuntimeRequestFailure(
@@ -2301,7 +2304,7 @@ def _recoverable_runtime_auth_error(response: httpx.Response) -> str | None:
     auth_error = str(
         response.headers.get(RUNTIME_AUTH_ERROR_HEADER) or ""
     ).strip()
-    if auth_error == "sandbox_session_expired":
+    if auth_error in {"sandbox_session_expired", "sandbox_session_invalid"}:
         return auth_error
     return None
 
@@ -2398,6 +2401,7 @@ async def _renew_proxy_runtime_authorization(
         return await default_workspace_open(
             binding.external_application_id,
             authorization_header=current_authorization,
+            delegated_context=session,
             shell_session_id=session.id,
         )
 

@@ -1,7 +1,6 @@
 """LLM 模型配置管理 — 管理员可通过前台配置接入的大模型"""
 from __future__ import annotations
 import logging
-from types import SimpleNamespace
 from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -10,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import httpx
 
 from app.database import get_db
-from app.code_runtime.control_plane_models import list_control_plane_model_options
 from app.deps import (
     AuthContext,
     get_auth_context,
@@ -231,23 +229,13 @@ async def list_llm_config_options(
     control_plane_tenant_id = str(
         getattr(ctx, "control_plane_tenant_id", "") or ""
     ).strip()
-    if account_source == "control_plane" and control_plane_tenant_id:
-        # 复用 Code 路由的单飞刷新逻辑，避免应用列表和模型列表并发刷新同一 Token。
-        from app.routes.code_runtime import _control_plane_request_auth
-
-        authorization, _auth_provider = await _control_plane_request_auth(
-            SimpleNamespace(headers={}),
-            ctx,
-            db,
-        )
-        if not authorization:
-            raise HTTPException(status_code=401, detail="Control Plane 登录已失效，请重新登录")
-        options = await list_control_plane_model_options(
-            purpose=purpose,
-            authorization_header=authorization,
-            delegated_context=ctx,
-        )
-        return [LLMConfigOptionResponse(**option) for option in options]
+    local_tenant_id = getattr(ctx, "tenant_id", 0)
+    if (
+        account_source == "control_plane"
+        and control_plane_tenant_id
+        and not (isinstance(local_tenant_id, int) and local_tenant_id > 0)
+    ):
+        return []
 
     tenant_id = await resolve_effective_tenant_id(db, ctx)
     rows = await list_llm_configs_for_purpose(db, tenant_id, purpose)

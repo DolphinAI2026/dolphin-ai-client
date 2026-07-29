@@ -201,48 +201,61 @@ async def _renew_browser_runtime_session(
             except Exception as exc:
                 raise SandboxRenewalFailure("login_required") from exc
 
-            opened, authorization, _forced_refresh_used = (
-                await _workspace_open_with_refresh(
-                    authorization,
-                    authorization_provider=authorization_provider,
-                    workspace_open=workspace_open,
-                    forced_refresh_used=False,
+            opened: dict[str, Any] | None = None
+            runtime_bootstrap: RuntimeBootstrap | None = None
+            forced_refresh_used = False
+            for bootstrap_attempt in range(2):
+                opened, authorization, forced_refresh_used = (
+                    await _workspace_open_with_refresh(
+                        authorization,
+                        authorization_provider=authorization_provider,
+                        workspace_open=workspace_open,
+                        forced_refresh_used=forced_refresh_used,
+                    )
                 )
-            )
-            builder_url = str(
-                opened.get("specReviewUrl") or opened.get("builderUrl") or ""
-            ).strip()
-            if not builder_url:
-                raise SandboxRenewalFailure(
-                    "workspace_temporarily_unavailable"
-                )
-            try:
-                runtime_bootstrap = await asyncio.wait_for(
-                    bootstrap(builder_url),
-                    timeout=10.0,
-                )
-            except SandboxRenewalFailure:
-                raise
-            except HTTPException as exc:
-                auth_error = str(
-                    (exc.headers or {}).get(RUNTIME_AUTH_ERROR_HEADER) or ""
+                builder_url = str(
+                    opened.get("specReviewUrl") or opened.get("builderUrl") or ""
                 ).strip()
-                if auth_error in _LAUNCH_AUTH_ERRORS or exc.status_code == 401:
+                if not builder_url:
                     raise SandboxRenewalFailure(
-                        "workspace_temporarily_unavailable",
+                        "workspace_temporarily_unavailable"
+                    )
+                try:
+                    runtime_bootstrap = await asyncio.wait_for(
+                        bootstrap(builder_url),
+                        timeout=10.0,
+                    )
+                    break
+                except SandboxRenewalFailure:
+                    raise
+                except HTTPException as exc:
+                    auth_error = str(
+                        (exc.headers or {}).get(RUNTIME_AUTH_ERROR_HEADER) or ""
+                    ).strip()
+                    if (
+                        auth_error == "sandbox_launch_token_expired"
+                        and bootstrap_attempt == 0
+                    ):
+                        continue
+                    if auth_error in _LAUNCH_AUTH_ERRORS or exc.status_code == 401:
+                        raise SandboxRenewalFailure(
+                            "workspace_temporarily_unavailable",
+                            stage="bootstrap",
+                        ) from exc
+                    failure = _renewal_failure(exc)
+                    raise SandboxRenewalFailure(
+                        failure.code,
                         stage="bootstrap",
                     ) from exc
-                failure = _renewal_failure(exc)
-                raise SandboxRenewalFailure(
-                    failure.code,
-                    stage="bootstrap",
-                ) from exc
-            except Exception as exc:
-                failure = _renewal_failure(exc)
-                raise SandboxRenewalFailure(
-                    failure.code,
-                    stage="bootstrap",
-                ) from exc
+                except Exception as exc:
+                    failure = _renewal_failure(exc)
+                    raise SandboxRenewalFailure(
+                        failure.code,
+                        stage="bootstrap",
+                    ) from exc
+
+            if opened is None or runtime_bootstrap is None:
+                raise SandboxRenewalFailure("workspace_temporarily_unavailable")
 
             next_generation = max(
                 current_generation,

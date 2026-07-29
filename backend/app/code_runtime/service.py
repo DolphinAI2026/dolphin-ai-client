@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.code_runtime.sandbox_auth import (
+    RUNTIME_AUTH_ERROR_HEADER,
     bootstrap_runtime_session,
     encrypt_runtime_cookie,
     runtime_session_expiry_for_storage,
@@ -429,12 +430,15 @@ def control_plane_base_url() -> str:
     ).rstrip("/")
 
 
-def workspace_open_base_url() -> str:
+def _workspace_open_override_url() -> str:
     return (
         os.getenv("DOLPHIN_CODE_WORKSPACE_OPEN_URL", "").strip()
         or (settings.dolphin_code_workspace_open_url or "").strip()
-        or control_plane_base_url()
     ).rstrip("/")
+
+
+def workspace_open_base_url() -> str:
+    return _workspace_open_override_url() or control_plane_base_url()
 
 
 def workspace_open_token() -> str:
@@ -442,6 +446,16 @@ def workspace_open_token() -> str:
         os.getenv("DOLPHIN_CODE_WORKSPACE_OPEN_TOKEN", "").strip()
         or (settings.dolphin_code_workspace_open_token or "").strip()
     )
+
+
+def _validate_workspace_open_configuration() -> None:
+    has_url = bool(_workspace_open_override_url())
+    has_token = bool(workspace_open_token())
+    if has_url != has_token:
+        raise HTTPException(
+            status_code=503,
+            detail="Code workspace coordinator 配置不完整",
+        )
 
 
 def local_builder_url() -> str:
@@ -998,6 +1012,19 @@ async def default_workspace_open(
     if is_local_code_application_id(external_application_id):
         return local_builder_workspace_open(external_application_id)
 
+    _validate_workspace_open_configuration()
+    if workspace_open_token():
+        if not str(authorization_header or "").strip().lower().startswith("bearer "):
+            raise HTTPException(
+                status_code=401,
+                detail="Code workspace 用户鉴权不可用",
+            )
+        await verify_control_plane_application_access(
+            external_application_id,
+            authorization_header=authorization_header,
+            delegated_context=delegated_context,
+            auth_provider=auth_provider,
+        )
     base_url = workspace_open_base_url()
     body = {"handoffId": handoff_id} if handoff_id else None
     target = f"{base_url}/api/applications/{external_application_id}/workspace/open"
@@ -1023,6 +1050,11 @@ async def default_workspace_open(
             return local_builder_workspace_open(external_application_id)
         raise HTTPException(status_code=503, detail=f"无法连接 Code Control Plane: {base_url}") from exc
     if response.status_code >= 400:
+        if workspace_open_token() and response.status_code in {401, 403}:
+            raise HTTPException(
+                status_code=503,
+                detail="Code workspace coordinator 鉴权失败",
+            )
         raise HTTPException(status_code=response.status_code, detail=response.text[:500] or "Code workspace open failed")
     opened = response.json()
     if isinstance(opened, dict):
@@ -1078,6 +1110,7 @@ async def open_code_session(
 
     desktop_entry_token: str | None = None
     desktop_runtime = is_local_code_application_id(external_app_id)
+    bootstrap = None
 
     async def workspace_open_once() -> dict[str, Any]:
         if workspace_open is not None:
@@ -1116,13 +1149,36 @@ async def open_code_session(
         clean_builder_url = builder_url
         runtime_base_url = derive_runtime_base_url(builder_url)
     else:
-        try:
-            bootstrap = await bootstrap_runtime_session(builder_url)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=502,
-                detail="Code Control Plane 未返回 runtime entry token",
-            ) from exc
+        for bootstrap_attempt in range(2):
+            try:
+                bootstrap = await bootstrap_runtime_session(builder_url)
+                break
+            except HTTPException as exc:
+                auth_error = str(
+                    (exc.headers or {}).get(RUNTIME_AUTH_ERROR_HEADER) or ""
+                ).strip()
+                if (
+                    auth_error == "sandbox_launch_token_expired"
+                    and bootstrap_attempt == 0
+                ):
+                    opened = await workspace_open_once()
+                    builder_url = str(
+                        opened.get("specReviewUrl") or opened.get("builderUrl") or ""
+                    ).strip()
+                    if not builder_url:
+                        raise HTTPException(
+                            status_code=502,
+                            detail="Code Control Plane 未返回 builder URL",
+                        )
+                    continue
+                raise
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Code Control Plane 未返回 runtime entry token",
+                ) from exc
+        if bootstrap is None:
+            raise HTTPException(status_code=503, detail="Code runtime 暂时不可用")
         clean_builder_url = bootstrap.clean_builder_url
         runtime_base_url = bootstrap.runtime_base_url
 
