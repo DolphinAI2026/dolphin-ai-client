@@ -73,9 +73,15 @@ try {
 
   Invoke-Step "2/5 Build frontend desktop bundle" {
     Push-Location $Frontend
+    $PreviousViteDesktop = [Environment]::GetEnvironmentVariable("VITE_DESKTOP", "Process")
+    $PreviousViteBaseUrl = [Environment]::GetEnvironmentVariable("VITE_BASE_URL", "Process")
     try {
-      npm run build:desktop
+      $env:VITE_DESKTOP = "1"
+      $env:VITE_BASE_URL = "/"
+      npm exec -- vite build --outDir dist-desktop --emptyOutDir
     } finally {
+      [Environment]::SetEnvironmentVariable("VITE_DESKTOP", $PreviousViteDesktop, "Process")
+      [Environment]::SetEnvironmentVariable("VITE_BASE_URL", $PreviousViteBaseUrl, "Process")
       Pop-Location
     }
   }
