@@ -40,6 +40,10 @@ function Assert-NativeSuccess($Name, $ExitCode) {
   }
 }
 
+function Write-Utf8NoBom($Path, $Content) {
+  [IO.File]::WriteAllText($Path, $Content, [Text.UTF8Encoding]::new($false))
+}
+
 function Get-PythonCommand {
   $py = Get-Command py -ErrorAction SilentlyContinue
   if ($py) { return @("py", "-3") }
@@ -53,14 +57,14 @@ try {
     $RestoreConfig = $true
     $text = Get-Content $Config -Raw
     $text = $text -replace '"version"\s*:\s*"[^"]+"', ('"version": "' + $Version + '"')
-    Set-Content -Path $Config -Value $text -Encoding UTF8
+    Write-Utf8NoBom $Config $text
   }
 
   if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
     $RestoreConfig = $true
     $text = Get-Content $Config -Raw
     $text = $text -replace '"createUpdaterArtifacts"\s*:\s*true', '"createUpdaterArtifacts": false'
-    Set-Content -Path $Config -Value $text -Encoding UTF8
+    Write-Utf8NoBom $Config $text
     Write-Host "TAURI_SIGNING_PRIVATE_KEY is not set; updater artifacts are disabled for this installer build."
   }
 
@@ -187,6 +191,6 @@ try {
   }
 } finally {
   if ($RestoreConfig) {
-    Set-Content -Path $Config -Value $OriginalConfig -Encoding UTF8
+    Write-Utf8NoBom $Config $OriginalConfig
   }
 }
