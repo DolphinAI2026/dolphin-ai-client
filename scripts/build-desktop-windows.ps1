@@ -57,6 +57,40 @@ function Get-PythonCommand {
   throw "Python 3 is required."
 }
 
+function Initialize-MsvcEnvironment {
+  if (Get-Command link.exe -ErrorAction SilentlyContinue) {
+    return
+  }
+
+  $VcVarsCandidates = @(
+    (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"),
+    (Join-Path $env:ProgramFiles "Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"),
+    "C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat",
+    "D:\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+  ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -Unique
+
+  $VcVars = $VcVarsCandidates | Select-Object -First 1
+  if (-not $VcVars) {
+    throw "MSVC Build Tools with vcvars64.bat are required."
+  }
+
+  Write-Host "Loading MSVC build environment: $VcVars"
+  $EnvironmentLines = & $env:ComSpec /d /s /c "`"$VcVars`" >nul && set"
+  Assert-NativeSuccess "MSVC environment initialization" $LASTEXITCODE
+  foreach ($Line in $EnvironmentLines) {
+    $Separator = $Line.IndexOf("=")
+    if ($Separator -gt 0) {
+      $Name = $Line.Substring(0, $Separator)
+      $Value = $Line.Substring($Separator + 1)
+      [Environment]::SetEnvironmentVariable($Name, $Value, "Process")
+    }
+  }
+
+  if (-not (Get-Command link.exe -ErrorAction SilentlyContinue)) {
+    throw "MSVC environment initialized but link.exe is still unavailable."
+  }
+}
+
 try {
   if ($Version) {
     $RestoreConfig = $true
@@ -165,6 +199,7 @@ try {
   Invoke-Step "6/6 Build Tauri Windows package" {
     Push-Location $Root
     try {
+      Initialize-MsvcEnvironment
       if (-not $SkipInstall -and -not (Test-Path "node_modules")) {
         npm ci
         Assert-NativeSuccess "Root dependency install" $LASTEXITCODE
