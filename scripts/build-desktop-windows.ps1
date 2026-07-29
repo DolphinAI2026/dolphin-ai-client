@@ -230,7 +230,7 @@ try {
 
       if ($Bundle -eq "portable") {
         $DownloadDir = Join-Path $Root "dist-desktop\windows"
-        $PortableStagingRoot = Join-Path $ReleaseRoot "portable"
+        $PortableStagingRoot = Join-Path $env:TEMP "ruijing-$PackageVersion-portable"
         $PortableAppRoot = Join-Path $PortableStagingRoot "Dolphin Code"
         $PortableZip = Join-Path $DownloadDir "ruijing-$PackageVersion-windows-x86_64-portable.zip"
 
