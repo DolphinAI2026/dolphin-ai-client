@@ -36,7 +36,7 @@
       </section>
 
       <template v-else>
-        <el-steps v-if="!loginOnly" :active="step" simple class="desktop-steps">
+        <el-steps v-if="!loginOnly" :active="step === 'local_storage' ? 1 : 0" simple class="desktop-steps">
           <el-step title="登录服务" />
           <el-step title="本地存储" />
         </el-steps>
@@ -50,7 +50,7 @@
           class="desktop-config-error"
         />
 
-        <section v-if="step === 0 || loginOnly" class="desktop-form-section">
+        <section v-if="step === 'login_service' || loginOnly" class="desktop-form-section">
           <div class="desktop-section-heading">
             <h2>选择登录服务</h2>
             <p>登录将通过所选服务完成。</p>
@@ -140,7 +140,7 @@
             <span>{{ progressLabel }}</span>
           </div>
 
-          <template v-else-if="step === 0 || loginOnly">
+          <template v-else-if="step === 'login_service' || loginOnly">
             <el-button :loading="connectionTesting" :disabled="submitting" @click="testConnection">
               测试连接
             </el-button>
@@ -155,7 +155,7 @@
           </template>
 
           <template v-else>
-            <el-button :disabled="submitting" @click="step = 0">上一步</el-button>
+            <el-button :disabled="submitting" @click="goBack">上一步</el-button>
             <el-button
               type="primary"
               :loading="submitting"
@@ -176,7 +176,6 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { FolderOpened, Loading, Refresh } from '@element-plus/icons-vue'
 import {
   DESKTOP_LOGIN_SERVICES,
-  DESKTOP_SETUP_POLL_INTERVAL_MS,
   buildDesktopSetupInput,
   getDesktopState,
   openDesktopPath,
@@ -185,7 +184,11 @@ import {
   resolveDesktopSetupView,
   saveDesktopSetup,
   testDesktopService,
+  transitionDesktopSetup,
   updateDesktopLogin,
+  type DesktopSetupEvent,
+  type DesktopSetupMachineState,
+  type DesktopSetupStep,
   type DesktopLoginMode,
   type DesktopLoginServiceOption,
   type DesktopPhase,
@@ -193,7 +196,7 @@ import {
 } from '@/utils/desktop'
 
 const state = ref<DesktopStateSnapshot | null>(null)
-const step = ref<0 | 1>(0)
+const step = ref<DesktopSetupStep>('login_service')
 const mode = ref<DesktopLoginMode>('control_plane')
 const baseUrl = ref('https://om-demo.dfy.definesys.cn')
 const rootDir = ref('')
@@ -219,6 +222,7 @@ const phaseLabels: Partial<Record<DesktopPhase, string>> = {
 
 let formHydrated = false
 let polling = false
+let disposed = false
 let pollTimer: number | undefined
 
 const viewDecision = computed(() => state.value ? resolveDesktopSetupView(state.value) : null)
@@ -291,28 +295,47 @@ function hydrateForm(snapshot: DesktopStateSnapshot) {
   formHydrated = true
 }
 
+function machineState(): DesktopSetupMachineState {
+  return {
+    scope: state.value?.setup_scope ?? 'full',
+    step: step.value,
+  }
+}
+
+function schedulePolling(event: Extract<DesktopSetupEvent, 'poll_tick' | 'ready'>) {
+  stopPolling()
+  if (disposed) return
+  const effect = transitionDesktopSetup(machineState(), event)
+  if (effect.stopPolling || effect.pollAfterMs == null) return
+  pollTimer = window.setTimeout(() => void refreshState(), effect.pollAfterMs)
+}
+
 function applySnapshot(snapshot: DesktopStateSnapshot) {
   state.value = snapshot
   if (!formHydrated) hydrateForm(snapshot)
   if (snapshot.phase !== 'failed') editingFailedConfig.value = false
-  if (resolveDesktopSetupView(snapshot).lifecycleAction === 'wait_for_tauri_navigation') stopPolling()
+  schedulePolling(snapshot.phase === 'ready' ? 'ready' : 'poll_tick')
 }
 
 function stopPolling() {
   if (pollTimer == null) return
-  window.clearInterval(pollTimer)
+  window.clearTimeout(pollTimer)
   pollTimer = undefined
 }
 
 async function refreshState() {
-  if (polling) return
+  if (polling || disposed) return
   polling = true
   try {
     const wasWaitingForState = !state.value
-    applySnapshot(await getDesktopState())
+    const snapshot = await getDesktopState()
+    if (disposed) return
+    applySnapshot(snapshot)
     if (wasWaitingForState) operationError.value = ''
   } catch (error) {
+    if (disposed) return
     if (!state.value) operationError.value = safeMessage(error, '无法读取桌面初始化状态，正在重试')
+    schedulePolling('poll_tick')
   } finally {
     polling = false
   }
@@ -355,11 +378,17 @@ async function testConnection() {
 function goToStorage() {
   urlTouched.value = true
   if (urlError.value) return
-  step.value = 1
+  step.value = transitionDesktopSetup(machineState(), 'next').step
   operationError.value = ''
 }
 
+function goBack() {
+  step.value = transitionDesktopSetup(machineState(), 'back').step
+}
+
 async function chooseRoot() {
+  const effect = transitionDesktopSetup(machineState(), 'pick_directory')
+  if (effect.pickerRequests !== 1) return
   operationError.value = ''
   try {
     const selected = await pickDirectory('选择 Dolphin Code 本地根目录')
@@ -422,16 +451,20 @@ async function openLogs() {
 
 async function reselectRoot() {
   editingFailedConfig.value = true
-  step.value = 1
+  step.value = transitionDesktopSetup(machineState(), 'next').step
   await chooseRoot()
 }
 
 onMounted(() => {
   void refreshState()
-  pollTimer = window.setInterval(() => void refreshState(), DESKTOP_SETUP_POLL_INTERVAL_MS)
 })
 
-onBeforeUnmount(stopPolling)
+function disposePolling() {
+  disposed = true
+  stopPolling()
+}
+
+onBeforeUnmount(disposePolling)
 </script>
 
 <style scoped>

@@ -6,9 +6,10 @@ import {
 } from './desktopGuard'
 import {
   DESKTOP_LOGIN_SERVICES,
-  DESKTOP_SETUP_POLL_INTERVAL_MS,
   buildDesktopSetupInput,
   resolveDesktopSetupView,
+  transitionDesktopSetup,
+  type DesktopSetupMachineState,
 } from '@/utils/desktop/setup'
 import routerSource from './index.ts?raw'
 import setupWizardSource from '@/views/DesktopSetupWizard.vue?raw'
@@ -106,11 +107,9 @@ describe('resolveDesktopRedirect', () => {
       default_root_dir: 'C:\\Users\\Administrator\\DolphinCode',
       error: null,
     })).toEqual({
-      steps: ['login_service', 'local_storage'],
       rootDir: 'C:\\Users\\Administrator\\DolphinCode',
       directoryEditable: true,
       recovery: 'none',
-      lifecycleAction: 'continue_polling',
     })
   })
 
@@ -126,11 +125,9 @@ describe('resolveDesktopRedirect', () => {
       default_root_dir: 'C:\\Users\\Administrator\\DolphinCode',
       error: null,
     })).toEqual({
-      steps: ['login_service'],
       rootDir: 'D:\\DolphinCode',
       directoryEditable: false,
       recovery: 'none',
-      lifecycleAction: 'continue_polling',
     })
   })
 
@@ -153,19 +150,61 @@ describe('resolveDesktopRedirect', () => {
     }).recovery).toBe('edit_config')
   })
 
-  it('每 300ms 轮询，ready 后等待 Tauri 导航而不由前端跳转', () => {
-    expect(DESKTOP_SETUP_POLL_INTERVAL_MS).toBe(300)
-    expect(resolveDesktopSetupView({
-      phase: 'ready',
-      setup_scope: 'full',
-      config: null,
-      default_root_dir: 'C:\\Users\\Administrator\\DolphinCode',
-      error: null,
-    }).lifecycleAction).toBe('wait_for_tauri_navigation')
+  it('full setup 连续执行 next/back 驱动真实两步切换', () => {
+    let machine: DesktopSetupMachineState = { scope: 'full', step: 'login_service' }
+
+    const next = transitionDesktopSetup(machine, 'next')
+    expect(next.step).toBe('local_storage')
+    machine = { ...machine, step: next.step }
+
+    expect(transitionDesktopSetup(machine, 'back').step).toBe('login_service')
   })
 
-  it('目录选择器只有一个调用点', () => {
-    expect(setupWizardSource.match(/pickDirectory\('选择 Dolphin Code 本地根目录'\)/g))
-      .toHaveLength(1)
+  it('login_only 无 storage 且拒绝目录选择 effect', () => {
+    const machine = { scope: 'login_only' as const, step: 'login_service' as const }
+
+    expect(transitionDesktopSetup(machine, 'next').step).toBe('login_service')
+    expect(transitionDesktopSetup(machine, 'pick_directory').pickerRequests).toBe(0)
+  })
+
+  it('full 每次目录选择 event 只产生一次 picker effect', () => {
+    const machine = { scope: 'full' as const, step: 'local_storage' as const }
+
+    expect(transitionDesktopSetup(machine, 'pick_directory').pickerRequests).toBe(1)
+    expect(transitionDesktopSetup(machine, 'pick_directory').pickerRequests).toBe(1)
+  })
+
+  it('poll_tick 延迟 300ms，ready 停止并等待 Tauri 导航', () => {
+    const machine = { scope: 'full' as const, step: 'local_storage' as const }
+
+    expect(transitionDesktopSetup(machine, 'poll_tick')).toEqual({
+      step: 'local_storage',
+      pickerRequests: 0,
+      pollAfterMs: 300,
+      stopPolling: false,
+      navigation: null,
+    })
+    expect(transitionDesktopSetup(machine, 'ready')).toEqual({
+      step: 'local_storage',
+      pickerRequests: 0,
+      pollAfterMs: null,
+      stopPolling: true,
+      navigation: null,
+    })
+  })
+
+  it('向导真实交互消费统一 transition/effect', () => {
+    expect(setupWizardSource).toContain("transitionDesktopSetup(machineState(), 'next')")
+    expect(setupWizardSource).toContain("transitionDesktopSetup(machineState(), 'back')")
+    expect(setupWizardSource).toContain("transitionDesktopSetup(machineState(), 'pick_directory')")
+    expect(setupWizardSource).toContain("snapshot.phase === 'ready' ? 'ready' : 'poll_tick'")
+    expect(setupWizardSource).not.toContain('useRouter')
+  })
+
+  it('卸载后阻止 in-flight polling 重新调度', () => {
+    expect(setupWizardSource).toContain('if (polling || disposed) return')
+    expect(setupWizardSource).toContain('if (disposed) return')
+    expect(setupWizardSource).toContain('disposed = true')
+    expect(setupWizardSource).toContain('onBeforeUnmount(disposePolling)')
   })
 })
