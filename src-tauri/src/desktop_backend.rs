@@ -1083,10 +1083,20 @@ fn navigate_packaged(
         .map_err(|error| DesktopBackendError::sidecar(format!("无法打开桌面启动页面: {error}")))
 }
 
+fn is_packaged_app_url(url: &tauri::Url) -> bool {
+    url.scheme() == "tauri" || url.host_str() == Some("tauri.localhost")
+}
+
 fn navigate_ready(app: &AppHandle, port: u16) -> Result<(), DesktopBackendError> {
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| DesktopBackendError::sidecar("桌面主窗口不可用"))?;
+    let current_url = window
+        .url()
+        .map_err(|error| DesktopBackendError::sidecar(format!("无法读取桌面启动页面: {error}")))?;
+    if is_packaged_app_url(&current_url) {
+        app.state::<DesktopBackend>().lock().packaged_url = current_url;
+    }
     let url = tauri::Url::parse(&format!("http://127.0.0.1:{port}/"))
         .map_err(|error| DesktopBackendError::sidecar(format!("本地业务地址无效: {error}")))?;
     window
@@ -2005,6 +2015,19 @@ mod tests {
         assert_eq!(PathBuf::from(input.root_dir), config.root_dir);
         assert_eq!(input.login, config.login);
         assert_eq!(input.workspace_entry_scope, WorkspaceEntryScope::Apaas);
+    }
+
+    #[test]
+    fn packaged_app_url_rejects_initial_blank_page() {
+        assert!(!is_packaged_app_url(
+            &tauri::Url::parse("about:blank").unwrap()
+        ));
+        assert!(is_packaged_app_url(
+            &tauri::Url::parse("http://tauri.localhost/desktop-setup").unwrap()
+        ));
+        assert!(is_packaged_app_url(
+            &tauri::Url::parse("tauri://localhost/desktop-setup").unwrap()
+        ));
     }
 
     #[test]
