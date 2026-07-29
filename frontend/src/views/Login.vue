@@ -67,7 +67,7 @@
                 placeholder="密码"
                 size="large"
                 :prefix-icon="Lock"
-                :disabled="changingDesktopService"
+                :disabled="loginLoading || changingDesktopService"
                 autocomplete="current-password"
                 show-password
                 @keyup.enter="handleLogin"
@@ -85,7 +85,7 @@
                   placeholder="验证码"
                   size="large"
                   maxlength="6"
-                  :disabled="changingDesktopService"
+                  :disabled="loginLoading || changingDesktopService"
                   @keyup.enter="handleLogin"
                 />
                 <button
@@ -106,7 +106,7 @@
                 type="primary"
                 size="large"
                 :loading="loginLoading"
-                :disabled="changingDesktopService"
+                :disabled="loginLoading || changingDesktopService"
                 @click="handleLogin"
                 class="submit-btn"
               >
@@ -126,6 +126,16 @@ export function canChangeDesktopService(
   transitionPending: boolean,
 ): boolean {
   return !loginPending && !transitionPending
+}
+
+export function tryStartLogin(
+  loginPending: boolean,
+  transitionPending: boolean,
+  start: () => void,
+): boolean {
+  if (loginPending || transitionPending) return false
+  start()
+  return true
 }
 </script>
 
@@ -235,12 +245,17 @@ onMounted(() => {
 })
 
 const handleLogin = async () => {
-  if (changingDesktopService.value || !loginFormRef.value) return
+  const form = loginFormRef.value
+  if (!form || !tryStartLogin(
+    loginLoading.value,
+    changingDesktopService.value,
+    () => { loginLoading.value = true },
+  )) return
 
-  await loginFormRef.value.validate(async (valid) => {
+  try {
+    const valid = await form.validate().catch(() => false)
     if (!valid || changingDesktopService.value) return
 
-    loginLoading.value = true
     try {
       const result = await userStore.login(
         loginForm.username,
@@ -275,10 +290,10 @@ const handleLogin = async () => {
       if (captchaRequired.value) {
         await refreshCaptcha()
       }
-    } finally {
-      loginLoading.value = false
     }
-  })
+  } finally {
+    loginLoading.value = false
+  }
 }
 </script>
 

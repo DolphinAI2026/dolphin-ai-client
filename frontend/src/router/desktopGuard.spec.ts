@@ -176,10 +176,10 @@ describe('resolveDesktopRedirect', () => {
     expect(unlockIndex).toBeGreaterThan(catchIndex)
     expect(changeSource.match(/changingDesktopService\.value = false/g)).toHaveLength(1)
     expect(refreshSource).toContain('if (changingDesktopService.value) return')
-    expect(loginHandlerSource).toContain(
-      'if (changingDesktopService.value || !loginFormRef.value) return',
-    )
-    expect(formSource.match(/:disabled="changingDesktopService"/g)).toHaveLength(5)
+    expect(loginHandlerSource).toContain('changingDesktopService.value,')
+    expect(formSource.match(/:disabled="changingDesktopService"/g)).toHaveLength(2)
+    expect(formSource.match(/:disabled="loginLoading \|\| changingDesktopService"/g))
+      .toHaveLength(3)
   })
 
   it('登录 pending、settled 与 transition pending 共用服务切换 gate', async () => {
@@ -210,6 +210,77 @@ describe('resolveDesktopRedirect', () => {
     transitionRequest.resolve()
     await transitionRequest.promise
     expect(canChangeDesktopService(loginPending, transitionPending)).toBe(false)
+  })
+
+  it('登录提交 single-flight 在 pending settle 前只启动一次 action', async () => {
+    const tryStartLogin = (
+      loginModule as typeof loginModule & {
+        tryStartLogin?: (
+          loginPending: boolean,
+          transitionPending: boolean,
+          start: () => void,
+        ) => boolean
+      }
+    ).tryStartLogin
+
+    expect(tryStartLogin).toBeTypeOf('function')
+    if (!tryStartLogin) return
+
+    let loginPending = false
+    let transitionPending = false
+    let loginCalls = 0
+    const submit = async (request: Promise<void>) => {
+      const started = tryStartLogin(loginPending, transitionPending, () => {
+        loginPending = true
+      })
+      if (!started) return
+
+      loginCalls += 1
+      try {
+        await request
+      } finally {
+        loginPending = false
+      }
+    }
+
+    const firstLogin = deferred<void>()
+    const firstSubmission = submit(firstLogin.promise)
+    await submit(Promise.resolve())
+    expect(loginCalls).toBe(1)
+    expect(loginPending).toBe(true)
+
+    firstLogin.resolve()
+    await firstSubmission
+    expect(loginPending).toBe(false)
+
+    const nextLogin = deferred<void>()
+    const nextSubmission = submit(nextLogin.promise)
+    expect(loginCalls).toBe(2)
+    expect(loginPending).toBe(true)
+    nextLogin.resolve()
+    await nextSubmission
+
+    transitionPending = true
+    await submit(Promise.resolve())
+    expect(loginCalls).toBe(2)
+  })
+
+  it('handleLogin 在异步校验前同步获取 single-flight latch', () => {
+    const handlerStart = loginSource.indexOf('const handleLogin = async () =>')
+    const handlerEnd = loginSource.indexOf('</script>', handlerStart)
+    const handlerSource = loginSource.slice(handlerStart, handlerEnd)
+    const gateIndex = handlerSource.indexOf('!tryStartLogin(')
+    const latchIndex = handlerSource.indexOf('loginLoading.value = true')
+    const validateIndex = handlerSource.indexOf('await form.validate()')
+    const loginIndex = handlerSource.indexOf('await userStore.login(')
+
+    expect(gateIndex).toBeGreaterThan(-1)
+    expect(latchIndex).toBeGreaterThan(gateIndex)
+    expect(validateIndex).toBeGreaterThan(latchIndex)
+    expect(loginIndex).toBeGreaterThan(validateIndex)
+    expect(handlerSource).toContain('loginLoading.value,')
+    expect(handlerSource).toContain('changingDesktopService.value,')
+    expect(handlerSource).toContain('loginLoading.value = false')
   })
 
   it('更改服务按钮和 handler 消费同一 gate', () => {
