@@ -29,6 +29,7 @@ _LAUNCH_AUTH_ERRORS = {
     "sandbox_launch_token_expired",
     "sandbox_launch_token_invalid",
 }
+_SESSION_CAPACITY_ERROR = "sandbox_session_capacity_exceeded"
 _PROXY_COOKIE_TOKEN_TYPE = "code_runtime_proxy"
 
 
@@ -478,8 +479,14 @@ async def bootstrap_runtime_session(
     except httpx.RequestError as exc:
         raise HTTPException(status_code=503, detail="Runtime bootstrap unavailable") from None
 
+    auth_error = str(response.headers.get(RUNTIME_AUTH_ERROR_HEADER) or "").strip()
+    if response.status_code >= 400 and auth_error == _SESSION_CAPACITY_ERROR:
+        raise HTTPException(
+            status_code=503,
+            detail="Runtime sandbox session capacity exceeded",
+            headers={RUNTIME_AUTH_ERROR_HEADER: auth_error},
+        )
     if response.status_code == 401:
-        auth_error = str(response.headers.get(RUNTIME_AUTH_ERROR_HEADER) or "").strip()
         if auth_error in _LAUNCH_AUTH_ERRORS:
             raise HTTPException(
                 status_code=401,
