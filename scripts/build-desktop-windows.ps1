@@ -34,6 +34,12 @@ function Invoke-Step($Name, [scriptblock]$Body) {
   & $Body
 }
 
+function Assert-NativeSuccess($Name, $ExitCode) {
+  if ($ExitCode -ne 0) {
+    throw "$Name failed with exit code $ExitCode."
+  }
+}
+
 function Get-PythonCommand {
   $py = Get-Command py -ErrorAction SilentlyContinue
   if ($py) { return @("py", "-3") }
@@ -65,6 +71,7 @@ try {
     try {
       if (-not $SkipInstall -and -not (Test-Path "node_modules")) {
         npm ci
+        Assert-NativeSuccess "Frontend dependency install" $LASTEXITCODE
       }
     } finally {
       Pop-Location
@@ -79,6 +86,7 @@ try {
       $env:VITE_DESKTOP = "1"
       $env:VITE_BASE_URL = "/"
       npm exec -- vite build --outDir dist-desktop --emptyOutDir
+      Assert-NativeSuccess "Frontend desktop build" $LASTEXITCODE
     } finally {
       [Environment]::SetEnvironmentVariable("VITE_DESKTOP", $PreviousViteDesktop, "Process")
       [Environment]::SetEnvironmentVariable("VITE_BASE_URL", $PreviousViteBaseUrl, "Process")
@@ -94,18 +102,25 @@ try {
         $cmd = Get-PythonCommand
         if ($cmd.Length -gt 1) {
           & $cmd[0] @($cmd[1..($cmd.Length - 1)] + @("-m", "venv", ".venv"))
+          Assert-NativeSuccess "Python virtual environment creation" $LASTEXITCODE
         } else {
           & $cmd[0] -m venv .venv
+          Assert-NativeSuccess "Python virtual environment creation" $LASTEXITCODE
         }
       }
       if (-not $SkipInstall) {
         & $VenvPython -m pip install --upgrade pip
+        Assert-NativeSuccess "Python pip upgrade" $LASTEXITCODE
         & $VenvPython -m pip install -r requirements.txt
+        Assert-NativeSuccess "Python requirements install" $LASTEXITCODE
         & $VenvPython -m pip install "pyinstaller>=6.6"
+        Assert-NativeSuccess "PyInstaller dependency install" $LASTEXITCODE
       } else {
         & $VenvPython -m PyInstaller --version | Out-Null
+        Assert-NativeSuccess "PyInstaller availability check" $LASTEXITCODE
       }
       & $VenvPython -m PyInstaller ruijing-sidecar.spec --noconfirm
+      Assert-NativeSuccess "PyInstaller sidecar build" $LASTEXITCODE
     } finally {
       Pop-Location
     }
@@ -128,8 +143,10 @@ try {
     try {
       if (-not $SkipInstall -and -not (Test-Path "node_modules")) {
         npm ci
+        Assert-NativeSuccess "Root dependency install" $LASTEXITCODE
       }
       npx tauri build --target $Target --bundles $Bundle
+      Assert-NativeSuccess "Tauri Windows installer build" $LASTEXITCODE
     } finally {
       Pop-Location
     }
