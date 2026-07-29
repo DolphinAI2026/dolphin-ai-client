@@ -24,9 +24,20 @@
         <div class="login-card">
           <div class="login-header">
             <img class="login-logo" :src="ruijingWhaleMarkUrl" alt="" aria-hidden="true" />
-            <div>
+            <div class="login-header-copy">
               <h1>Dolphin Code</h1>
               <p>登录以打开桌面工作台</p>
+              <div v-if="desktopService" class="login-service-row">
+                <span>{{ desktopService.label }} · {{ desktopService.host }}</span>
+                <button
+                  type="button"
+                  class="login-service-change"
+                  :disabled="changingDesktopService"
+                  @click="changeDesktopService"
+                >
+                  更改登录服务
+                </button>
+              </div>
             </div>
           </div>
 
@@ -114,6 +125,12 @@ import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
 import ruijingWhaleMarkUrl from '@/assets/brand/ruijing-whale-mark.svg'
 import { safeLoginRedirectPath } from '@/router/loginRedirect'
+import {
+  DESKTOP_LOGIN_SERVICES,
+  enterDesktopLoginSetup,
+  getDesktopState,
+  isDesktop,
+} from '@/utils/desktop'
 
 const router = useRouter()
 const route = useRoute()
@@ -125,6 +142,8 @@ const loginLoading = ref(false)
 const captchaRequired = ref(false)
 const captchaId = ref('')
 const captchaImage = ref('')
+const desktopService = ref<{ label: string; host: string } | null>(null)
+const changingDesktopService = ref(false)
 
 const loginForm = reactive({
   username: '',
@@ -161,7 +180,41 @@ const refreshCaptcha = async () => {
   }
 }
 
-onMounted(refreshCaptcha)
+async function loadDesktopService() {
+  if (!isDesktop) return
+  try {
+    const snapshot = await getDesktopState()
+    if (!snapshot.config) return
+    const service = DESKTOP_LOGIN_SERVICES.find(
+      item => item.mode === snapshot.config?.login.mode,
+    )
+    if (!service) return
+    desktopService.value = {
+      label: service.label,
+      host: new URL(snapshot.config.login.base_url).host,
+    }
+  } catch {
+    desktopService.value = null
+  }
+}
+
+async function changeDesktopService() {
+  if (!isDesktop || changingDesktopService.value) return
+  changingDesktopService.value = true
+  try {
+    userStore.logout()
+    await enterDesktopLoginSetup()
+  } catch {
+    ElMessage.error('无法打开登录服务设置，请稍后重试')
+  } finally {
+    changingDesktopService.value = false
+  }
+}
+
+onMounted(() => {
+  void refreshCaptcha()
+  void loadDesktopService()
+})
 
 const handleLogin = async () => {
   if (!loginFormRef.value) return
@@ -365,6 +418,55 @@ const handleLogin = async () => {
   line-height: 1.5;
 }
 
+.login-header-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.login-service-row {
+  min-width: 0;
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.login-service-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.login-service-change {
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #075fa8;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.login-service-change:hover:not(:disabled) {
+  color: #1d4ed8;
+  text-decoration: underline;
+}
+
+.login-service-change:focus-visible {
+  outline: 2px solid rgba(29, 78, 216, 0.28);
+  outline-offset: 3px;
+}
+
+.login-service-change:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
 .login-form {
   margin: 0;
 }
@@ -524,6 +626,14 @@ const handleLogin = async () => {
 
 .login-page.theme-dark .login-header p {
   color: #94a3b8;
+}
+
+.login-page.theme-dark .login-service-row {
+  color: #94a3b8;
+}
+
+.login-page.theme-dark .login-service-change {
+  color: #60a5fa;
 }
 
 .login-page.theme-dark :deep(.el-input__wrapper) {

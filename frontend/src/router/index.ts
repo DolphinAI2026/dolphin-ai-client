@@ -265,6 +265,12 @@ export const routes: RouteRecordRaw[] = [
       meta: { tenantContext: 'none' }
     },
     {
+      path: '/desktop-settings',
+      name: 'DesktopSettings',
+      component: () => import('@/views/DesktopSettings.vue'),
+      meta: { requiresAuth: true, tenantContext: 'none' },
+    },
+    {
       path: '/desktop-unavailable',
       name: 'DesktopUnavailable',
       component: () => import('@/views/DesktopUnavailable.vue'),

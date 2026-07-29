@@ -325,6 +325,7 @@ const platformNavItem: NavItem = __DESKTOP__
 
 // 三模式共用的「能力中心」入口 → hub 页(技能/知识/MCP/AI网关 4 tab)
 const hubNavItem: NavItem = { key: 'hub', label: '能力中心', icon: 'spark', path: '/hub' }
+const desktopSettingsItem = { path: '/desktop-settings' }
 
 const userAccount = computed(() => user.user?.username || '')
 const userName = computed(() => user.user?.display_name || userAccount.value || '未登录')
@@ -464,6 +465,7 @@ async function selectTenant(value: string) {
 
 function go(path: string) {
   tenantMenuOpen.value = false
+  userMenuOpen.value = false
   router.push(path)
 }
 
@@ -546,6 +548,7 @@ const ICONS: Record<string, string> = {
   shield: '<path d="M12 2 4 5v7c0 5 3.5 8.5 8 10 4.5-1.5 8-5 8-10V5z"/><path d="M9 12l2 2 4-4"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M6.3 6.3 4.9 4.9M19.1 19.1l-1.4-1.4M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4"/>',
   moon: '<path d="M21 13A9 9 0 0 1 11 3a9 9 0 1 0 10 10z"/>',
+  settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
   chevronLeft: '<polyline points="15 18 9 12 15 6"/>',
   chevronRight: '<polyline points="9 18 15 12 9 6"/>',
   chevronDown: '<polyline points="6 9 12 15 18 9"/>',
@@ -746,6 +749,16 @@ function renderIcon(name: string): string {
         </a>
 
         <!-- 知识库已并入「得小帆·共性能力」hub(/hub?tab=knowledge), 不再单列 footer 入口 -->
+
+        <button
+          v-if="isDesktop"
+          type="button"
+          class="theme-row"
+          @click="go(desktopSettingsItem.path)"
+        >
+          <span class="theme-row-icon" v-html="renderIcon('settings')" />
+          <span class="theme-row-label">桌面设置</span>
+        </button>
 
         <!-- v3 2026-05-20: 删主题色 picker 让 admin/frontend brand 始终一致蓝；只保留浅深切换 -->
         <!-- 2026-05-21 整 row 改成 button — 之前 label 跟太阳 icon 视觉分离体验割裂。

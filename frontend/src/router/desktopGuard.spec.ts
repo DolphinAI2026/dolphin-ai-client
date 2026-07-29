@@ -13,6 +13,8 @@ import {
 } from '@/utils/desktop/setup'
 import routerSource from './index.ts?raw'
 import setupWizardSource from '@/views/DesktopSetupWizard.vue?raw'
+import loginSource from '@/views/Login.vue?raw'
+import desktopSettingsSource from '@/views/DesktopSettings.vue?raw'
 
 describe('resolveDesktopRedirect', () => {
   it('在线版不拦截 hidden 路由', () => {
@@ -64,7 +66,7 @@ describe('resolveDesktopRedirect', () => {
 
   it('旧 aPaaS 和 LLM onboarding 守卫已退役', () => {
     const setupRouteStart = routerSource.indexOf("path: '/desktop-setup'")
-    const setupRouteEnd = routerSource.indexOf("path: '/desktop-unavailable'")
+    const setupRouteEnd = routerSource.indexOf("path: '/desktop-settings'")
     const setupRouteSource = routerSource.slice(setupRouteStart, setupRouteEnd)
 
     expect(routerSource).not.toContain('fetchOnboardingState')
@@ -80,6 +82,50 @@ describe('resolveDesktopRedirect', () => {
 
     expect(bootstrapGuardIndex).toBeGreaterThan(-1)
     expect(bootstrapGuardIndex).toBeLessThan(userStoreIndex)
+  })
+
+  it('桌面设置路由需要认证且不依赖租户上下文', () => {
+    const settingsRouteStart = routerSource.indexOf("path: '/desktop-settings'")
+    const settingsRouteEnd = routerSource.indexOf("path: '/desktop-unavailable'")
+    const settingsRouteSource = routerSource.slice(settingsRouteStart, settingsRouteEnd)
+
+    expect(settingsRouteStart).toBeGreaterThan(-1)
+    expect(settingsRouteSource).toContain("name: 'DesktopSettings'")
+    expect(settingsRouteSource).toContain("component: () => import('@/views/DesktopSettings.vue')")
+    expect(settingsRouteSource).toContain("meta: { requiresAuth: true, tenantContext: 'none' }")
+  })
+
+  it('登录页显示桌面服务摘要并通过 packaged setup 更改服务', () => {
+    expect(loginSource).toContain('desktopService.label')
+    expect(loginSource).toContain('desktopService.host')
+    expect(loginSource).toContain('更改登录服务')
+    expect(loginSource).toContain('new URL(snapshot.config.login.base_url).host')
+    const logoutIndex = loginSource.indexOf('userStore.logout()')
+    const setupIndex = loginSource.indexOf('await enterDesktopLoginSetup()')
+    expect(logoutIndex).toBeGreaterThan(-1)
+    expect(setupIndex).toBeGreaterThan(logoutIndex)
+  })
+
+  it('桌面设置只修改登录服务且本地根目录保持只读', () => {
+    expect(desktopSettingsSource).toContain('<BuilderFrame')
+    expect(desktopSettingsSource).toContain('DESKTOP_LOGIN_SERVICES')
+    expect(desktopSettingsSource).toContain('service.label')
+    expect(desktopSettingsSource).toContain('服务地址')
+    expect(desktopSettingsSource).toContain('readonly')
+    expect(desktopSettingsSource).toContain('不提供编辑或迁移操作')
+    expect(desktopSettingsSource).toContain("@click=\"openPath('root')\"")
+    expect(desktopSettingsSource).toContain("@click=\"openPath('logs')\"")
+    expect(desktopSettingsSource).toContain('await openDesktopPath(kind)')
+    expect(desktopSettingsSource).not.toContain('pickDirectory')
+    expect(desktopSettingsSource).not.toContain('saveDesktopSetup')
+    expect(desktopSettingsSource).not.toContain('root_dir:')
+    expect(desktopSettingsSource).toContain('new URL(value.trim())')
+    expect(desktopSettingsSource).toContain("['http:', 'https:'].includes(url.protocol)")
+
+    const logoutIndex = desktopSettingsSource.indexOf('user.logout()')
+    const updateIndex = desktopSettingsSource.indexOf('await updateDesktopLogin({')
+    expect(logoutIndex).toBeGreaterThan(-1)
+    expect(updateIndex).toBeGreaterThan(logoutIndex)
   })
 
   it('桌面登录服务只启用 AI中台和 aPaaS平台', () => {
