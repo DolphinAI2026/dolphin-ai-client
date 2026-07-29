@@ -172,7 +172,10 @@ try {
       npx tauri build --target $Target --bundles $Bundle
       Assert-NativeSuccess "Tauri Windows installer build" $LASTEXITCODE
 
-      $ReleaseResources = Join-Path $Tauri "target\$Target\release\resources\agent-runtime"
+      # Keep this relative layout identical to packaged_agent_runtime_root() in desktop_backend.rs.
+      $PackagedApplianceRelativePath = "resources/agent-runtime"
+      $ReleaseRoot = Join-Path $Tauri "target\$Target\release"
+      $PackagedApplianceRoot = Join-Path $ReleaseRoot $PackagedApplianceRelativePath
       foreach ($RelativePath in @(
         "bin\agent-runtime.exe",
         "codex\bin\codex.exe",
@@ -180,9 +183,9 @@ try {
         "agentic-coding-pack\manifest.yaml",
         "web\builder\dist\index.html"
       )) {
-        $ResourcePath = Join-Path $ReleaseResources $RelativePath
+        $ResourcePath = Join-Path $PackagedApplianceRoot $RelativePath
         if (-not (Test-Path -LiteralPath $ResourcePath -PathType Leaf)) {
-          throw "Tauri release resources are missing local runtime file: $RelativePath"
+          throw "Tauri packaged appliance is missing $PackagedApplianceRelativePath\$RelativePath"
         }
       }
     } finally {

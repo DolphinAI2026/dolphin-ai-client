@@ -40,6 +40,7 @@ export async function loadDesktopBootstrapDecision(
 const DESKTOP_WORKSPACE_SCOPE_EXEMPT_PATHS = new Set([
   '/desktop-setup',
   '/login',
+  '/tenant-select',
   '/desktop-settings',
   '/desktop-unavailable',
 ])

@@ -859,7 +859,7 @@ impl DesktopBackend {
             .ok_or_else(|| DesktopBackendError::config("桌面配置尚未初始化"))?;
         let saved = self
             .config_store
-            .save(workspace_scope_update_input(config, scope))?;
+            .save_current_root(workspace_scope_update_input(config, scope))?;
         inner.config = Some(saved.config);
         Ok(self.snapshot_from_inner(&inner))
     }
@@ -877,7 +877,7 @@ impl DesktopBackend {
             .config
             .as_ref()
             .ok_or_else(|| DesktopBackendError::config("桌面配置尚未初始化"))?;
-        let saved = self.config_store.save(DesktopSetupInput {
+        let saved = self.config_store.save_current_root(DesktopSetupInput {
             root_dir: config.root_dir.to_string_lossy().into_owned(),
             login,
             workspace_entry_scope: config.workspace_entry_scope,
@@ -981,6 +981,8 @@ fn workspace_scope_update_input(
     }
 }
 
+const PACKAGED_AGENT_RUNTIME_RELATIVE_DIR: &str = "resources/agent-runtime";
+
 fn packaged_agent_runtime_root(handle: &AppHandle) -> PathBuf {
     if let Some(path) = std::env::var_os("DOLPHIN_AGENT_RUNTIME_PATH") {
         let path: PathBuf = path.into();
@@ -990,11 +992,20 @@ fn packaged_agent_runtime_root(handle: &AppHandle) -> PathBuf {
             .map(Path::to_path_buf)
             .unwrap_or(path);
     }
-    handle
+    let resource_dir = handle
         .path()
         .resource_dir()
-        .expect("resource directory is available")
-        .join("agent-runtime")
+        .expect("resource directory is available");
+    let bundled_root = resource_dir.join(PACKAGED_AGENT_RUNTIME_RELATIVE_DIR);
+    if bundled_root.exists() {
+        return bundled_root;
+    }
+
+    let legacy_root = resource_dir.join("agent-runtime");
+    if legacy_root.exists() {
+        return legacy_root;
+    }
+    bundled_root
 }
 
 fn pick_free_port() -> u16 {

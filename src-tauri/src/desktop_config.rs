@@ -128,6 +128,12 @@ pub struct DesktopConfigStore {
     transaction_lock: TransactionLock,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BootstrapSaveMode {
+    WritePointer,
+    PreservePointer,
+}
+
 impl DesktopConfigStore {
     pub fn new(system_data_dir: impl Into<PathBuf>) -> Self {
         let system_data_dir = system_data_dir.into();
@@ -184,6 +190,21 @@ impl DesktopConfigStore {
     }
 
     pub fn save(&self, input: DesktopSetupInput) -> Result<SavedDesktopConfig, DesktopConfigError> {
+        self.save_with_mode(input, BootstrapSaveMode::WritePointer)
+    }
+
+    pub fn save_current_root(
+        &self,
+        input: DesktopSetupInput,
+    ) -> Result<SavedDesktopConfig, DesktopConfigError> {
+        self.save_with_mode(input, BootstrapSaveMode::PreservePointer)
+    }
+
+    fn save_with_mode(
+        &self,
+        input: DesktopSetupInput,
+        bootstrap_mode: BootstrapSaveMode,
+    ) -> Result<SavedDesktopConfig, DesktopConfigError> {
         let _transaction_guard = self
             .transaction_lock
             .lock()
@@ -209,6 +230,9 @@ impl DesktopConfigStore {
         })?;
         let system_data_identity = resolve_path_for_comparison(&self.system_data_dir)?;
         ensure_storage_roots_are_disjoint(&root_dir, &system_data_identity)?;
+        if bootstrap_mode == BootstrapSaveMode::PreservePointer {
+            self.ensure_bootstrap_points_to(&root_dir)?;
+        }
         let paths = DesktopPaths::from_root(root_dir.clone());
         reject_existing_links_in_derived_paths(&paths)?;
 
@@ -235,16 +259,42 @@ impl DesktopConfigStore {
         };
         atomic_write_json(&paths.config_path, &config)?;
 
-        fs::create_dir_all(&self.system_data_dir).map_err(|error| {
-            DesktopConfigError::invalid(format!("无法创建系统应用数据目录: {error}"))
-        })?;
-        let pointer = BootstrapPointer {
-            schema_version: DESKTOP_CONFIG_SCHEMA_VERSION,
-            root_dir: root_dir_to_string(&root_dir)?,
-        };
-        atomic_write_json(&self.system_data_dir.join("bootstrap.json"), &pointer)?;
+        if bootstrap_mode == BootstrapSaveMode::WritePointer {
+            fs::create_dir_all(&self.system_data_dir).map_err(|error| {
+                DesktopConfigError::invalid(format!("无法创建系统应用数据目录: {error}"))
+            })?;
+            let pointer = BootstrapPointer {
+                schema_version: DESKTOP_CONFIG_SCHEMA_VERSION,
+                root_dir: root_dir_to_string(&root_dir)?,
+            };
+            atomic_write_json(&self.system_data_dir.join("bootstrap.json"), &pointer)?;
+        }
 
         Ok(SavedDesktopConfig { config, paths })
+    }
+
+    fn ensure_bootstrap_points_to(&self, root_dir: &Path) -> Result<(), DesktopConfigError> {
+        let bootstrap_path = self.system_data_dir.join("bootstrap.json");
+        let pointer: BootstrapPointer = read_json(&bootstrap_path)?;
+        if pointer.schema_version != DESKTOP_CONFIG_SCHEMA_VERSION {
+            return Err(DesktopConfigError::invalid("桌面启动配置版本不受支持"));
+        }
+
+        let pointer_root = PathBuf::from(&pointer.root_dir);
+        if !pointer_root.is_absolute() {
+            return Err(DesktopConfigError::invalid("桌面根目录必须是绝对路径"));
+        }
+        let pointer_root_identity = fs::canonicalize(&pointer_root).map_err(|error| {
+            DesktopConfigError::invalid(format!("无法规范化桌面根目录: {error}"))
+        })?;
+        if !paths_equal(&pointer_root_identity, &pointer_root)
+            || !paths_equal(&pointer_root_identity, root_dir)
+        {
+            return Err(DesktopConfigError::invalid(
+                "桌面根配置与启动配置中的根目录不一致",
+            ));
+        }
+        Ok(())
     }
 }
 
