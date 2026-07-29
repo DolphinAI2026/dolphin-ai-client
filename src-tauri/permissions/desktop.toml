@@ -1,0 +1,13 @@
+[[permission]]
+identifier = "desktop-commands"
+description = "Allows the desktop shell to manage setup, login, workspace scope, paths, and runtime recovery."
+commands.allow = [
+  "desktop_get_state",
+  "desktop_save_setup",
+  "desktop_test_service",
+  "desktop_enter_login_setup",
+  "desktop_retry_start",
+  "desktop_update_login",
+  "desktop_update_workspace_entry_scope",
+  "desktop_open_path",
+]

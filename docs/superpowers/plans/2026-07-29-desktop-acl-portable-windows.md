@@ -32,7 +32,7 @@ Run:
 node - <<'NODE'
 const fs = require('fs');
 const acl = JSON.parse(fs.readFileSync('src-tauri/gen/schemas/acl-manifests.json', 'utf8'));
-if (!acl.__app__) throw new Error('missing Tauri app ACL manifest');
+if (!acl['__app-acl__']) throw new Error('missing Tauri app ACL manifest');
 NODE
 ```
 
@@ -82,7 +82,7 @@ const expected = [
   'desktop_open_path',
 ].sort();
 const acl = JSON.parse(fs.readFileSync('src-tauri/gen/schemas/acl-manifests.json', 'utf8'));
-const actual = [...acl.__app__.permissions['desktop-commands'].commands.allow].sort();
+const actual = [...acl['__app-acl__'].permissions['desktop-commands'].commands.allow].sort();
 if (JSON.stringify(actual) !== JSON.stringify(expected)) {
   throw new Error(`desktop ACL mismatch: ${JSON.stringify(actual)}`);
 }
