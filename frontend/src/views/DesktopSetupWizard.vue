@@ -176,11 +176,13 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { FolderOpened, Loading, Refresh } from '@element-plus/icons-vue'
 import {
   DESKTOP_LOGIN_SERVICES,
+  DESKTOP_SETUP_POLL_INTERVAL_MS,
   buildDesktopSetupInput,
   getDesktopState,
   openDesktopPath,
   pickDirectory,
   retryDesktopStart,
+  resolveDesktopSetupView,
   saveDesktopSetup,
   testDesktopService,
   updateDesktopLogin,
@@ -219,17 +221,17 @@ let formHydrated = false
 let polling = false
 let pollTimer: number | undefined
 
-const loginOnly = computed(() => state.value?.setup_scope === 'login_only')
+const viewDecision = computed(() => state.value ? resolveDesktopSetupView(state.value) : null)
+const loginOnly = computed(() => viewDecision.value?.directoryEditable === false)
 const isStarting = computed(() => ['saving_config', 'starting_runtime', 'starting_sidecar']
   .includes(state.value?.phase ?? ''))
 const showFailure = computed(() => (
-  state.value?.phase === 'failed'
-  && state.value.error?.code !== 'DESKTOP_SETUP_CONFIG_INVALID'
+  viewDecision.value?.recovery === 'retry_start'
   && !editingFailedConfig.value
 ))
 const configurationError = computed(() => {
-  if (state.value?.error?.code !== 'DESKTOP_SETUP_CONFIG_INVALID') return ''
-  return safeMessage(state.value.error.message, '桌面配置无效，请检查后重试')
+  if (viewDecision.value?.recovery !== 'edit_config') return ''
+  return safeMessage(state.value?.error?.message, '桌面配置无效，请检查后重试')
 })
 const stateErrorMessage = computed(() => safeMessage(
   state.value?.error?.message,
@@ -279,7 +281,7 @@ function childPath(root: string, child: string): string {
 }
 
 function hydrateForm(snapshot: DesktopStateSnapshot) {
-  rootDir.value = snapshot.config?.root_dir || snapshot.default_root_dir
+  rootDir.value = resolveDesktopSetupView(snapshot).rootDir
   if (snapshot.config) {
     mode.value = snapshot.config.login.mode
     baseUrl.value = snapshot.config.login.base_url
@@ -293,7 +295,7 @@ function applySnapshot(snapshot: DesktopStateSnapshot) {
   state.value = snapshot
   if (!formHydrated) hydrateForm(snapshot)
   if (snapshot.phase !== 'failed') editingFailedConfig.value = false
-  if (snapshot.phase === 'ready') stopPolling()
+  if (resolveDesktopSetupView(snapshot).lifecycleAction === 'wait_for_tauri_navigation') stopPolling()
 }
 
 function stopPolling() {
@@ -426,7 +428,7 @@ async function reselectRoot() {
 
 onMounted(() => {
   void refreshState()
-  pollTimer = window.setInterval(() => void refreshState(), 300)
+  pollTimer = window.setInterval(() => void refreshState(), DESKTOP_SETUP_POLL_INTERVAL_MS)
 })
 
 onBeforeUnmount(stopPolling)

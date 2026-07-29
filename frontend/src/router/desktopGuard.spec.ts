@@ -4,8 +4,14 @@ import {
   resolveDesktopBootstrapRedirect,
   resolveDesktopRedirect,
 } from './desktopGuard'
-import { DESKTOP_LOGIN_SERVICES, buildDesktopSetupInput } from '@/utils/desktop/setup'
+import {
+  DESKTOP_LOGIN_SERVICES,
+  DESKTOP_SETUP_POLL_INTERVAL_MS,
+  buildDesktopSetupInput,
+  resolveDesktopSetupView,
+} from '@/utils/desktop/setup'
 import routerSource from './index.ts?raw'
+import setupWizardSource from '@/views/DesktopSetupWizard.vue?raw'
 
 describe('resolveDesktopRedirect', () => {
   it('在线版不拦截 hidden 路由', () => {
@@ -90,5 +96,76 @@ describe('resolveDesktopRedirect', () => {
         root_dir: 'C:\\Users\\Administrator\\DolphinCode',
         login: { mode: 'control_plane', base_url: 'https://example.com' },
       })
+  })
+
+  it('full scope 固定为两步并开放本地目录字段', () => {
+    expect(resolveDesktopSetupView({
+      phase: 'needs_setup',
+      setup_scope: 'full',
+      config: null,
+      default_root_dir: 'C:\\Users\\Administrator\\DolphinCode',
+      error: null,
+    })).toEqual({
+      steps: ['login_service', 'local_storage'],
+      rootDir: 'C:\\Users\\Administrator\\DolphinCode',
+      directoryEditable: true,
+      recovery: 'none',
+      lifecycleAction: 'continue_polling',
+    })
+  })
+
+  it('login_only 只显示登录服务并保留已保存 root', () => {
+    expect(resolveDesktopSetupView({
+      phase: 'needs_setup',
+      setup_scope: 'login_only',
+      config: {
+        schema_version: 1,
+        root_dir: 'D:\\DolphinCode',
+        login: { mode: 'apaas', base_url: 'https://apaas.example.com/backend' },
+      },
+      default_root_dir: 'C:\\Users\\Administrator\\DolphinCode',
+      error: null,
+    })).toEqual({
+      steps: ['login_service'],
+      rootDir: 'D:\\DolphinCode',
+      directoryEditable: false,
+      recovery: 'none',
+      lifecycleAction: 'continue_polling',
+    })
+  })
+
+  it('启动失败进入重试恢复，配置无效直接回到编辑表单', () => {
+    const baseState = {
+      setup_scope: 'full' as const,
+      config: null,
+      default_root_dir: 'C:\\Users\\Administrator\\DolphinCode',
+    }
+
+    expect(resolveDesktopSetupView({
+      ...baseState,
+      phase: 'failed',
+      error: { code: 'DESKTOP_SETUP_RUNTIME_START_FAILED', message: '启动失败' },
+    }).recovery).toBe('retry_start')
+    expect(resolveDesktopSetupView({
+      ...baseState,
+      phase: 'failed',
+      error: { code: 'DESKTOP_SETUP_CONFIG_INVALID', message: '目录无效' },
+    }).recovery).toBe('edit_config')
+  })
+
+  it('每 300ms 轮询，ready 后等待 Tauri 导航而不由前端跳转', () => {
+    expect(DESKTOP_SETUP_POLL_INTERVAL_MS).toBe(300)
+    expect(resolveDesktopSetupView({
+      phase: 'ready',
+      setup_scope: 'full',
+      config: null,
+      default_root_dir: 'C:\\Users\\Administrator\\DolphinCode',
+      error: null,
+    }).lifecycleAction).toBe('wait_for_tauri_navigation')
+  })
+
+  it('目录选择器只有一个调用点', () => {
+    expect(setupWizardSource.match(/pickDirectory\('选择 Dolphin Code 本地根目录'\)/g))
+      .toHaveLength(1)
   })
 })

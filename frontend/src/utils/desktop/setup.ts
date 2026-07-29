@@ -43,6 +43,20 @@ export interface DesktopStateSnapshot {
   error: { code: string; message: string } | null
 }
 
+export type DesktopSetupStep = 'login_service' | 'local_storage'
+export type DesktopSetupRecovery = 'none' | 'edit_config' | 'retry_start'
+export type DesktopSetupLifecycleAction = 'continue_polling' | 'wait_for_tauri_navigation'
+
+export interface DesktopSetupViewDecision {
+  steps: readonly DesktopSetupStep[]
+  rootDir: string
+  directoryEditable: boolean
+  recovery: DesktopSetupRecovery
+  lifecycleAction: DesktopSetupLifecycleAction
+}
+
+export const DESKTOP_SETUP_POLL_INTERVAL_MS = 300
+
 export const DESKTOP_LOGIN_SERVICES: readonly DesktopLoginServiceOption[] = [
   { mode: 'control_plane', label: 'AI中台', defaultUrl: 'https://om-demo.dfy.definesys.cn', enabled: true },
   { mode: 'apaas', label: 'aPaaS平台', defaultUrl: 'https://apaas-trial.definesys.cn/backend', enabled: true },
@@ -56,6 +70,25 @@ export function buildDesktopSetupInput(
   baseUrl: string,
 ): DesktopSetupInput {
   return { root_dir: rootDir, login: { mode, base_url: baseUrl } }
+}
+
+export function resolveDesktopSetupView(state: DesktopStateSnapshot): DesktopSetupViewDecision {
+  const directoryEditable = state.setup_scope === 'full'
+  const recovery = state.error?.code === 'DESKTOP_SETUP_CONFIG_INVALID'
+    ? 'edit_config'
+    : state.phase === 'failed'
+      ? 'retry_start'
+      : 'none'
+
+  return {
+    steps: directoryEditable ? ['login_service', 'local_storage'] : ['login_service'],
+    rootDir: state.config?.root_dir || state.default_root_dir,
+    directoryEditable,
+    recovery,
+    lifecycleAction: state.phase === 'ready'
+      ? 'wait_for_tauri_navigation'
+      : 'continue_polling',
+  }
 }
 
 async function invokeDesktop<T>(
