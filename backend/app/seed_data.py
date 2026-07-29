@@ -329,6 +329,11 @@ async def bind_default_tenant_platform_env(db: AsyncSession, tenant: Tenant, *, 
 async def seed_initial_data(db: AsyncSession):
     """初始化种子数据"""
 
+    auth_provider = str(settings.auth_provider or "").strip().lower()
+    if auth_provider in {"control_plane", "coding"}:
+        # Control Plane 组织是 Code 模式的唯一租户权威，不创建本地租户影子。
+        return
+
     # 1. 检查是否已有默认租户
     result = await db.execute(
         select(Tenant).where(Tenant.tenant_code == "default")

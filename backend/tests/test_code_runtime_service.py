@@ -1398,6 +1398,53 @@ async def test_default_workspace_open_forwards_request_authorization_when_no_ser
 
 
 @pytest.mark.asyncio
+async def test_default_workspace_open_uses_independent_override_url_and_token(monkeypatch):
+    from app.code_runtime import service
+
+    calls: list[dict] = []
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"specReviewUrl": "http://127.0.0.1:61139/builder/"}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def post(self, url: str, **kwargs):
+            calls.append({"url": url, **kwargs})
+            return FakeResponse()
+
+    monkeypatch.setenv(
+        "DOLPHIN_CODE_CONTROL_PLANE_URL",
+        "https://code.example.com/control-plane",
+    )
+    monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_URL", "http://127.0.0.1:44633")
+    monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_TOKEN", "workspace-token")
+    monkeypatch.setattr(service.httpx, "AsyncClient", FakeClient)
+
+    await service.default_workspace_open(
+        "code-app-1",
+        authorization_header="Bearer user-token",
+    )
+
+    assert calls[0]["url"] == "http://127.0.0.1:44633/api/applications/code-app-1/workspace/open"
+    assert calls[0]["headers"] == {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer workspace-token",
+    }
+
+
+@pytest.mark.asyncio
 async def test_default_workspace_open_omits_delegation_headers_for_user_token(monkeypatch):
     from app.code_runtime import service
 

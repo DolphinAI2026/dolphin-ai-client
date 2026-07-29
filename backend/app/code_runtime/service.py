@@ -429,6 +429,21 @@ def control_plane_base_url() -> str:
     ).rstrip("/")
 
 
+def workspace_open_base_url() -> str:
+    return (
+        os.getenv("DOLPHIN_CODE_WORKSPACE_OPEN_URL", "").strip()
+        or (settings.dolphin_code_workspace_open_url or "").strip()
+        or control_plane_base_url()
+    ).rstrip("/")
+
+
+def workspace_open_token() -> str:
+    return (
+        os.getenv("DOLPHIN_CODE_WORKSPACE_OPEN_TOKEN", "").strip()
+        or (settings.dolphin_code_workspace_open_token or "").strip()
+    )
+
+
 def local_builder_url() -> str:
     return (
         os.getenv("DOLPHIN_CODE_BUILDER_URL", "").strip()
@@ -552,6 +567,28 @@ def _control_plane_headers(
     if not has_user_bearer:
         headers.update(_delegated_identity_headers(delegated_context, shell_session_id=shell_session_id))
     return headers
+
+
+def _workspace_open_headers(
+    authorization_header: str | None = None,
+    *,
+    delegated_context: Any | None = None,
+    shell_session_id: int | None = None,
+    auth_provider: str | None = None,
+) -> dict[str, str]:
+    token = workspace_open_token()
+    if token:
+        return {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+        }
+    return _control_plane_headers(
+        authorization_header,
+        include_content_type=True,
+        delegated_context=delegated_context,
+        shell_session_id=shell_session_id,
+        auth_provider=auth_provider,
+    )
 
 
 def _header_text(value: Any) -> str | None:
@@ -961,7 +998,7 @@ async def default_workspace_open(
     if is_local_code_application_id(external_application_id):
         return local_builder_workspace_open(external_application_id)
 
-    base_url = control_plane_base_url()
+    base_url = workspace_open_base_url()
     body = {"handoffId": handoff_id} if handoff_id else None
     target = f"{base_url}/api/applications/{external_application_id}/workspace/open"
     try:
@@ -973,9 +1010,8 @@ async def default_workspace_open(
         )) as client:
             response = await client.post(
                 target,
-                headers=_control_plane_headers(
+                headers=_workspace_open_headers(
                     authorization_header,
-                    include_content_type=True,
                     delegated_context=delegated_context,
                     shell_session_id=shell_session_id,
                     auth_provider=auth_provider,

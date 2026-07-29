@@ -1,10 +1,10 @@
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app import seed_data
 from app.crypto import encrypt_password
 from app.models import LLMConfig
-from app.models.tenant import Tenant
+from app.models.tenant import Role, Tenant
 
 
 @pytest.mark.asyncio
@@ -108,6 +108,49 @@ def test_builtin_llm_specs_do_not_seed_gpt54(monkeypatch):
 
     assert {spec["model"] for spec in specs} == {"gpt-5.5", "qwen3.6-plus"}
     assert all(spec["config_name"] != "内置 Coding GPT (gpt-5.4)" for spec in specs)
+
+
+@pytest.mark.asyncio
+async def test_control_plane_seed_does_not_create_local_tenant(db_session, monkeypatch):
+    monkeypatch.setattr(seed_data.settings, "auth_provider", "control_plane")
+    calls: list[str] = []
+
+    async def track_platform_env(*_args, **_kwargs):
+        calls.append("apaas")
+
+    async def track_llm(*_args, **_kwargs):
+        calls.append("llm")
+
+    monkeypatch.setattr(seed_data, "bind_default_tenant_platform_env", track_platform_env)
+    monkeypatch.setattr(seed_data, "sync_builtin_llm_configs", track_llm)
+
+    await seed_data.seed_initial_data(db_session)
+
+    assert await db_session.scalar(select(func.count(Tenant.id))) == 0
+    assert await db_session.scalar(select(func.count(Role.id))) == 0
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_apaas_seed_keeps_default_local_tenant(db_session, monkeypatch):
+    monkeypatch.setattr(seed_data.settings, "auth_provider", "apaas")
+
+    async def skip_platform_env(*_args, **_kwargs):
+        return None
+
+    async def skip_llm(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(seed_data, "bind_default_tenant_platform_env", skip_platform_env)
+    monkeypatch.setattr(seed_data, "sync_builtin_llm_configs", skip_llm)
+
+    await seed_data.seed_initial_data(db_session)
+
+    tenant = await db_session.scalar(select(Tenant).where(Tenant.tenant_code == "default"))
+    assert tenant is not None
+    assert await db_session.scalar(
+        select(func.count(Role.id)).where(Role.tenant_id == tenant.id)
+    ) == 3
 
 
 @pytest.mark.asyncio
