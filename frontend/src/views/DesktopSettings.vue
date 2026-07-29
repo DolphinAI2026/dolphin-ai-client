@@ -4,7 +4,7 @@
       <div class="desktop-settings-content">
         <header class="desktop-settings-header">
           <h1>桌面设置</h1>
-          <p>管理登录服务并查看本地运行目录。</p>
+          <p>管理登录服务、工作台入口并查看本地运行目录。</p>
         </header>
 
         <div v-if="loading" class="desktop-settings-loading" aria-live="polite">
@@ -55,6 +55,47 @@
                 />
               </el-form-item>
             </el-form>
+          </section>
+
+          <section class="desktop-settings-section">
+            <div class="desktop-settings-section-copy">
+              <h2>工作台入口</h2>
+              <p>选择桌面工作台中显示的产品入口，不影响当前登录服务。</p>
+            </div>
+
+            <el-form label-position="top" class="desktop-field-form">
+              <el-form-item label="显示入口">
+                <el-radio-group
+                  v-model="workspaceScope"
+                  :disabled="workspaceSaving"
+                  class="desktop-workspace-options"
+                  aria-label="工作台入口"
+                >
+                  <el-radio-button
+                    v-for="option in DESKTOP_WORKSPACE_ENTRY_OPTIONS"
+                    :key="option.value"
+                    :value="option.value"
+                  >
+                    {{ option.label }}
+                  </el-radio-button>
+                </el-radio-group>
+              </el-form-item>
+            </el-form>
+
+            <p v-if="workspaceOperationError" class="desktop-settings-error" aria-live="polite">
+              {{ workspaceOperationError }}
+            </p>
+
+            <div class="desktop-section-actions">
+              <el-button
+                type="primary"
+                :loading="workspaceSaving"
+                :disabled="workspaceSaving || workspaceScope === null"
+                @click="saveWorkspaceEntryScope"
+              >
+                保存入口设置
+              </el-button>
+            </div>
           </section>
 
           <section class="desktop-settings-section">
@@ -113,19 +154,27 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { Document, FolderOpened, Loading } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import BuilderFrame from '@/components/BuilderFrame.vue'
+import { resolveDesktopWorkspaceRedirect } from '@/router/desktopGuard'
 import { useUserStore } from '@/stores/user'
 import {
   DESKTOP_LOGIN_SERVICES,
+  DESKTOP_WORKSPACE_ENTRY_OPTIONS,
   getDesktopState,
   openDesktopPath,
   updateDesktopLogin,
+  updateDesktopWorkspaceEntryScope,
   type DesktopLoginMode,
   type DesktopLoginServiceOption,
   type DesktopPathKind,
+  type DesktopWorkspaceEntryScope,
 } from '@/utils/desktop'
 
+const route = useRoute()
+const router = useRouter()
 const user = useUserStore()
 const loginServices = DESKTOP_LOGIN_SERVICES.filter(service => (
   service.enabled && (service.mode === 'control_plane' || service.mode === 'apaas')
@@ -133,11 +182,14 @@ const loginServices = DESKTOP_LOGIN_SERVICES.filter(service => (
 const mode = ref<DesktopLoginMode>('control_plane')
 const baseUrl = ref('')
 const rootDir = ref('')
+const workspaceScope = ref<DesktopWorkspaceEntryScope | null>(null)
 const loading = ref(true)
 const saving = ref(false)
+const workspaceSaving = ref(false)
 const openingPath = ref<DesktopPathKind | null>(null)
 const loadError = ref('')
 const operationError = ref('')
+const workspaceOperationError = ref('')
 const urlTouched = ref(false)
 const serviceUrls: Record<DesktopLoginMode, string> = {
   control_plane: DESKTOP_LOGIN_SERVICES.find(service => service.mode === 'control_plane')?.defaultUrl || '',
@@ -189,10 +241,37 @@ async function loadSettings() {
     baseUrl.value = snapshot.config.login.base_url
     serviceUrls[mode.value] = baseUrl.value
     rootDir.value = snapshot.config.root_dir || snapshot.default_root_dir
+    workspaceScope.value = snapshot.config.workspace_entry_scope
   } catch {
     loadError.value = '无法读取桌面配置，请稍后重试'
   } finally {
     loading.value = false
+  }
+}
+
+async function saveWorkspaceEntryScope() {
+  if (!workspaceScope.value || workspaceSaving.value) return
+
+  workspaceSaving.value = true
+  workspaceOperationError.value = ''
+  try {
+    const snapshot = await updateDesktopWorkspaceEntryScope(workspaceScope.value)
+    const savedScope = snapshot.config?.workspace_entry_scope
+    if (!savedScope) throw new Error('Desktop workspace entry scope is unavailable')
+
+    workspaceScope.value = savedScope
+    window.dispatchEvent(new CustomEvent<DesktopWorkspaceEntryScope>(
+      'desktop-workspace-entry-scope-changed',
+      { detail: savedScope },
+    ))
+
+    const redirect = resolveDesktopWorkspaceRedirect(savedScope, route.path)
+    if (redirect) await router.replace(redirect)
+    ElMessage.success('工作台入口已保存')
+  } catch {
+    workspaceOperationError.value = '无法保存工作台入口，请稍后重试'
+  } finally {
+    workspaceSaving.value = false
   }
 }
 
@@ -357,6 +436,17 @@ onMounted(() => {
   flex-wrap: wrap;
 }
 
+.desktop-workspace-options {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.desktop-section-actions {
+  margin-top: 16px;
+  display: flex;
+  justify-content: flex-end;
+}
+
 .desktop-settings-error {
   margin-top: 16px;
   color: var(--danger, #ef4444);
@@ -376,6 +466,10 @@ onMounted(() => {
   }
 
   .desktop-settings-actions :deep(.el-button) {
+    width: 100%;
+  }
+
+  .desktop-section-actions :deep(.el-button) {
     width: 100%;
   }
 }

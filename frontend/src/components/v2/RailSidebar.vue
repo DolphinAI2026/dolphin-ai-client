@@ -1,11 +1,24 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { checkAndPromptUpdate } from '@/utils/desktop'
+import {
+  checkAndPromptUpdate,
+  getDesktopState,
+  type DesktopWorkspaceEntryScope,
+} from '@/utils/desktop'
 import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
 import { useCodeApplicationsStore } from '@/stores/codeApplications'
-import { isCodeRoutePath, useModeStore, MODE_META, MODE_ORDER, visibleModeNav, type AppMode } from '@/stores/mode'
+import {
+  desktopModeLabel,
+  isCodeRoutePath,
+  useModeStore,
+  MODE_META,
+  MODE_ORDER,
+  visibleModeNav,
+  visibleModesForDesktopScope,
+  type AppMode,
+} from '@/stores/mode'
 import { aiChatApi, type AIChatSession } from '@/api/aiChat'
 import { codeRuntimeApi } from '@/api/codeRuntime'
 import { authApi } from '@/api/auth'
@@ -36,8 +49,17 @@ const theme = useThemeStore()
 const modeStore = useModeStore()
 const codeApplications = useCodeApplicationsStore()
 
-// 当前路由驱动左栏导航、会话加载和会话路由，避免持久化 mode 污染另一套 shell。
-const currentMode = computed<AppMode>(() => isCodeRoutePath(route.path) ? 'code' : 'builder')
+const desktopWorkspaceEntryScope = ref<DesktopWorkspaceEntryScope>('both')
+const visibleModeOrder = computed(() => __DESKTOP__
+  ? visibleModesForDesktopScope(desktopWorkspaceEntryScope.value)
+  : MODE_ORDER)
+// 当前路由驱动左栏导航、会话加载和会话路由；桌面公共路由收敛到当前可见入口。
+const currentMode = computed<AppMode>(() => {
+  const routeMode: AppMode = isCodeRoutePath(route.path) ? 'code' : 'builder'
+  return __DESKTOP__ && !visibleModeOrder.value.includes(routeMode)
+    ? visibleModeOrder.value[0]
+    : routeMode
+})
 
 // 会话历史 —— 收进左栏单一导航(参考 Claude Code), 页面内层 sidebar 隐掉。
 // 统一使用 aiChatApi 会话; Code 模式只展示 mode=code 的应用会话。
@@ -389,20 +411,53 @@ function closeTenantMenu() {
   userMenuOpen.value = false
 }
 
+function applyDesktopWorkspaceEntryScope(scope: unknown) {
+  if (scope === 'apaas' || scope === 'ai_platform' || scope === 'both') {
+    desktopWorkspaceEntryScope.value = scope
+  }
+}
+
+async function loadDesktopWorkspaceEntryScope() {
+  if (!__DESKTOP__) return
+  try {
+    const snapshot = await getDesktopState()
+    applyDesktopWorkspaceEntryScope(snapshot.config?.workspace_entry_scope)
+  } catch { /* desktop bootstrap owns state errors */ }
+}
+
+function onDesktopWorkspaceEntryScopeChanged(event: Event) {
+  applyDesktopWorkspaceEntryScope(
+    (event as CustomEvent<DesktopWorkspaceEntryScope | undefined>).detail,
+  )
+}
+
 onMounted(() => {
   const startupTasks: Promise<unknown>[] = [
     loadRailApps(),
     loadRailSessions(),
   ]
   startupTasks.push(user.fetchAvailableTenants())
+  if (__DESKTOP__) startupTasks.push(loadDesktopWorkspaceEntryScope())
   void Promise.allSettled(startupTasks)
   window.addEventListener('click', closeTenantMenu)
   window.addEventListener('code-rail-refresh', refreshCodeRail)
+  if (__DESKTOP__) {
+    window.addEventListener(
+      'desktop-workspace-entry-scope-changed',
+      onDesktopWorkspaceEntryScopeChanged,
+    )
+  }
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('click', closeTenantMenu)
   window.removeEventListener('code-rail-refresh', refreshCodeRail)
+  if (__DESKTOP__) {
+    window.removeEventListener(
+      'desktop-workspace-entry-scope-changed',
+      onDesktopWorkspaceEntryScopeChanged,
+    )
+  }
 })
 
 function toggleCollapsed() {
@@ -602,9 +657,15 @@ function renderIcon(name: string): string {
       <span v-html="renderIcon('chevronRight')" />
     </button>
 
-    <div v-if="!effectiveCollapsed" class="rail-mode-switch" role="tablist" aria-label="工作模式">
+    <div
+      v-if="!effectiveCollapsed"
+      class="rail-mode-switch"
+      role="tablist"
+      aria-label="工作模式"
+      :style="{ gridTemplateColumns: `repeat(${visibleModeOrder.length}, minmax(0, 1fr))` }"
+    >
       <button
-        v-for="mode in MODE_ORDER"
+        v-for="mode in visibleModeOrder"
         :key="mode"
         type="button"
         class="rail-mode-btn"
@@ -613,7 +674,7 @@ function renderIcon(name: string): string {
         :aria-selected="mode === currentMode"
         @click="switchMode(mode)"
       >
-        {{ MODE_META[mode].label }}
+        {{ isDesktop ? desktopModeLabel(mode) : MODE_META[mode].label }}
       </button>
     </div>
 
