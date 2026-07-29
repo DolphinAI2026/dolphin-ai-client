@@ -103,7 +103,7 @@ try {
     try {
       $VenvPython = Join-Path $Backend ".venv\Scripts\python.exe"
       if (-not (Test-Path $VenvPython)) {
-        $cmd = Get-PythonCommand
+        $cmd = @(Get-PythonCommand)
         if ($cmd.Length -gt 1) {
           & $cmd[0] @($cmd[1..($cmd.Length - 1)] + @("-m", "venv", ".venv"))
           Assert-NativeSuccess "Python virtual environment creation" $LASTEXITCODE
