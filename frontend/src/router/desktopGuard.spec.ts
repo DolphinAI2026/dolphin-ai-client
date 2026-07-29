@@ -88,6 +88,18 @@ describe('resolveDesktopRedirect', () => {
     expect(setupRouteSource).toContain("meta: { tenantContext: 'none' }")
   })
 
+  it('桌面专用路由只在 desktop build 中注册', () => {
+    const desktopRoutesStart = routerSource.indexOf('const desktopRoutes: RouteRecordRaw[] = __DESKTOP__ ? [')
+    const routesStart = routerSource.indexOf('export const routes: RouteRecordRaw[] = [')
+    const spreadIndex = routerSource.indexOf('...desktopRoutes', routesStart)
+
+    expect(desktopRoutesStart).toBeGreaterThan(-1)
+    expect(routesStart).toBeGreaterThan(desktopRoutesStart)
+    expect(spreadIndex).toBeGreaterThan(routesStart)
+    expect(routerSource.slice(desktopRoutesStart, routesStart)).toContain("path: '/desktop-setup'")
+    expect(routerSource.slice(desktopRoutesStart, routesStart)).toContain("path: '/desktop-settings'")
+  })
+
   it('桌面 bootstrap 在用户 store 和认证恢复前执行', () => {
     const bootstrapGuardIndex = routerSource.indexOf("if (typeof __DESKTOP__ !== 'undefined' && __DESKTOP__) {")
     const userStoreIndex = routerSource.indexOf('const userStore = useUserStore()')

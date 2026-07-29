@@ -20,6 +20,27 @@ import {
 import { normalizeTenantPublicId, resolveTenantUrl } from './tenantUrlGuard'
 import { safeLoginRedirectPath } from './loginRedirect'
 
+const desktopRoutes: RouteRecordRaw[] = __DESKTOP__ ? [
+    {
+      path: '/desktop-setup',
+      name: 'DesktopSetup',
+      component: () => import('@/views/DesktopSetupWizard.vue'),
+      meta: { tenantContext: 'none' }
+    },
+    {
+      path: '/desktop-settings',
+      name: 'DesktopSettings',
+      component: () => import('@/views/DesktopSettings.vue'),
+      meta: { requiresAuth: true, tenantContext: 'none' },
+    },
+    {
+      path: '/desktop-unavailable',
+      name: 'DesktopUnavailable',
+      component: () => import('@/views/DesktopUnavailable.vue'),
+      meta: { requiresAuth: true, tenantContext: 'none' }
+    },
+] : []
+
 export const routes: RouteRecordRaw[] = [
     { path: '/login', name: 'Login',
       component: () => import('@/views/Login.vue') },
@@ -258,24 +279,7 @@ export const routes: RouteRecordRaw[] = [
       }),
       meta: { requiresAuth: true, tenantContext: 'required' }
     },
-    {
-      path: '/desktop-setup',
-      name: 'DesktopSetup',
-      component: () => import('@/views/DesktopSetupWizard.vue'),
-      meta: { tenantContext: 'none' }
-    },
-    {
-      path: '/desktop-settings',
-      name: 'DesktopSettings',
-      component: () => import('@/views/DesktopSettings.vue'),
-      meta: { requiresAuth: true, tenantContext: 'none' },
-    },
-    {
-      path: '/desktop-unavailable',
-      name: 'DesktopUnavailable',
-      component: () => import('@/views/DesktopUnavailable.vue'),
-      meta: { requiresAuth: true, tenantContext: 'none' }
-    },
+    ...desktopRoutes,
     {
       path: '/generate/:id?',
       name: 'Generate',

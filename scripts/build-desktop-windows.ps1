@@ -3,7 +3,12 @@ param(
   [string]$Target = "x86_64-pc-windows-msvc",
   [ValidateSet("nsis", "msi", "all")]
   [string]$Bundle = "nsis",
-  [switch]$SkipInstall
+  [switch]$SkipInstall,
+  [string]$AgentRuntimeRepo = "",
+  [string]$AgenticCodingRoot = "",
+  [string]$CodexVendorRoot = "",
+  [string]$BuilderDist = "",
+  [string]$SuperpowersSource = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -70,7 +75,22 @@ try {
 
   Write-Host "==> [build-desktop-windows.ps1] ROOT=$Root TARGET=$Target BUNDLE=$Bundle"
 
-  Invoke-Step "1/5 Install frontend dependencies" {
+  Invoke-Step "1/6 Materialize Windows local runtime appliance" {
+    $Prepare = Join-Path $Root "scripts\prepare-local-runtime-appliance-windows.ps1"
+    $PrepareArguments = @{}
+    foreach ($Entry in @{
+      AgentRuntimeRepo = $AgentRuntimeRepo
+      AgenticCodingRoot = $AgenticCodingRoot
+      CodexVendorRoot = $CodexVendorRoot
+      BuilderDist = $BuilderDist
+      SuperpowersSource = $SuperpowersSource
+    }.GetEnumerator()) {
+      if ($Entry.Value) { $PrepareArguments[$Entry.Key] = $Entry.Value }
+    }
+    & $Prepare @PrepareArguments
+  }
+
+  Invoke-Step "2/6 Install frontend dependencies" {
     Push-Location $Frontend
     try {
       if (-not $SkipInstall -and -not (Test-Path "node_modules")) {
@@ -82,7 +102,7 @@ try {
     }
   }
 
-  Invoke-Step "2/5 Build frontend desktop bundle" {
+  Invoke-Step "3/6 Build frontend desktop bundle" {
     Push-Location $Frontend
     $PreviousViteDesktop = [Environment]::GetEnvironmentVariable("VITE_DESKTOP", "Process")
     $PreviousViteBaseUrl = [Environment]::GetEnvironmentVariable("VITE_BASE_URL", "Process")
@@ -98,7 +118,7 @@ try {
     }
   }
 
-  Invoke-Step "3/5 Build PyInstaller Windows sidecar" {
+  Invoke-Step "4/6 Build PyInstaller Windows sidecar" {
     Push-Location $Backend
     try {
       $VenvPython = Join-Path $Backend ".venv\Scripts\python.exe"
@@ -130,7 +150,7 @@ try {
     }
   }
 
-  Invoke-Step "4/5 Place sidecar binary" {
+  Invoke-Step "5/6 Place sidecar binary" {
     $BinDir = Join-Path $Tauri "binaries"
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
     $Sidecar = Join-Path $Backend "dist\ruijing-sidecar.exe"
@@ -142,7 +162,7 @@ try {
     Get-Item $Dest | Format-List FullName,Length,LastWriteTime
   }
 
-  Invoke-Step "5/5 Build Tauri Windows installer" {
+  Invoke-Step "6/6 Build Tauri Windows installer" {
     Push-Location $Root
     try {
       if (-not $SkipInstall -and -not (Test-Path "node_modules")) {
@@ -151,6 +171,20 @@ try {
       }
       npx tauri build --target $Target --bundles $Bundle
       Assert-NativeSuccess "Tauri Windows installer build" $LASTEXITCODE
+
+      $ReleaseResources = Join-Path $Tauri "target\$Target\release\resources\agent-runtime"
+      foreach ($RelativePath in @(
+        "bin\agent-runtime.exe",
+        "codex\bin\codex.exe",
+        "agentic-coding\.venv\Scripts\python.exe",
+        "agentic-coding-pack\manifest.yaml",
+        "web\builder\dist\index.html"
+      )) {
+        $ResourcePath = Join-Path $ReleaseResources $RelativePath
+        if (-not (Test-Path -LiteralPath $ResourcePath -PathType Leaf)) {
+          throw "Tauri release resources are missing local runtime file: $RelativePath"
+        }
+      }
     } finally {
       Pop-Location
     }

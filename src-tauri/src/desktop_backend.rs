@@ -659,6 +659,27 @@ impl DesktopBackendInner {
         self.sidecar_generation = None;
         self.sidecar.take()
     }
+
+    fn publish_ready_for_navigation(&mut self, generation: u64) -> bool {
+        if !self.lease.is_active_current(generation) || self.phase != DesktopPhase::StartingSidecar
+        {
+            return false;
+        }
+        self.transition_to(DesktopPhase::Ready, "本地桌面服务已就绪");
+        self.error = None;
+        self.pending_sidecar_error = None;
+        true
+    }
+
+    fn fail_ready_navigation(&mut self, generation: u64, error: DesktopBackendError) -> bool {
+        if !self.lease.is_active_current(generation) || self.phase != DesktopPhase::Ready {
+            return false;
+        }
+        self.take_sidecar();
+        self.pending_sidecar_error = None;
+        self.fail(error);
+        true
+    }
 }
 
 pub struct DesktopBackend {
@@ -1187,25 +1208,28 @@ fn spawn_sidecar(
                 }
                 return;
             }
-            if let Err(error) = navigate_ready(app, port) {
-                let child = {
-                    let mut inner = state.lock();
-                    let child = inner.take_sidecar();
-                    if inner.lease.is_active_current(generation) {
-                        inner.fail(error);
-                    }
-                    child
-                };
+            if !state.lock().publish_ready_for_navigation(generation) {
+                let child = state.lock().take_sidecar();
                 if let Some(child) = child {
                     stop_sidecar(child);
                 }
                 return;
             }
-            let mut inner = state.lock();
-            if inner.lease.is_active_current(generation) {
-                inner.transition_to(DesktopPhase::Ready, "本地桌面服务已就绪");
-                inner.error = None;
-                inner.pending_sidecar_error = None;
+            if let Err(error) = navigate_ready(app, port) {
+                let child = {
+                    let mut inner = state.lock();
+                    let child = inner.sidecar.take();
+                    if inner.fail_ready_navigation(generation, error) {
+                        child
+                    } else {
+                        inner.sidecar = child;
+                        None
+                    }
+                };
+                if let Some(child) = child {
+                    stop_sidecar(child);
+                }
+                return;
             }
         }
         HealthStatus::TimedOut | HealthStatus::Terminated(_) => {
@@ -2176,6 +2200,36 @@ mod tests {
             receiver.try_recv(),
             Err(mpsc::TryRecvError::Empty)
         ));
+    }
+
+    #[test]
+    fn ready_is_published_before_navigation_and_navigation_failure_is_stable() {
+        let (supervisor, _receiver) = LifecycleSupervisor::channel();
+        let backend = fixture_backend(supervisor);
+        let generation = {
+            let mut inner = backend.lock();
+            let generation = inner.lease.request_generation();
+            assert!(inner.lease.try_begin(generation));
+            inner.phase = DesktopPhase::StartingSidecar;
+            generation
+        };
+
+        {
+            let mut inner = backend.lock();
+            assert!(inner.publish_ready_for_navigation(generation));
+            assert_eq!(inner.phase, DesktopPhase::Ready);
+            assert!(inner.error.is_none());
+        }
+
+        let error = DesktopBackendError::sidecar("navigation failed");
+        {
+            let mut inner = backend.lock();
+            assert!(inner.fail_ready_navigation(generation, error));
+            assert_eq!(inner.phase, DesktopPhase::Failed);
+            assert_eq!(inner.error.as_ref().unwrap().message, "navigation failed");
+            assert!(inner.sidecar.is_none());
+            assert!(inner.sidecar_generation.is_none());
+        }
     }
 
     #[test]
