@@ -1,4 +1,5 @@
 export type DesktopLoginMode = 'control_plane' | 'apaas'
+export type DesktopLoginServiceMode = DesktopLoginMode | 'public_account' | 'trial_account'
 
 export type DesktopPhase =
   | 'needs_setup'
@@ -14,6 +15,13 @@ export type DesktopPathKind = 'root' | 'logs'
 export interface DesktopLoginConfig {
   mode: DesktopLoginMode
   base_url: string
+}
+
+export interface DesktopLoginServiceOption {
+  mode: DesktopLoginServiceMode
+  label: string
+  defaultUrl: string
+  enabled: boolean
 }
 
 export interface DesktopConfig {
@@ -33,6 +41,21 @@ export interface DesktopStateSnapshot {
   config: DesktopConfig | null
   default_root_dir: string
   error: { code: string; message: string } | null
+}
+
+export const DESKTOP_LOGIN_SERVICES: readonly DesktopLoginServiceOption[] = [
+  { mode: 'control_plane', label: 'AI中台', defaultUrl: 'https://om-demo.dfy.definesys.cn', enabled: true },
+  { mode: 'apaas', label: 'aPaaS平台', defaultUrl: 'https://apaas-trial.definesys.cn/backend', enabled: true },
+  { mode: 'public_account', label: '公开账号', defaultUrl: '', enabled: false },
+  { mode: 'trial_account', label: '试用账号', defaultUrl: '', enabled: false },
+]
+
+export function buildDesktopSetupInput(
+  rootDir: string,
+  mode: DesktopLoginMode,
+  baseUrl: string,
+): DesktopSetupInput {
+  return { root_dir: rootDir, login: { mode, base_url: baseUrl } }
 }
 
 async function invokeDesktop<T>(

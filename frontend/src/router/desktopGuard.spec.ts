@@ -4,6 +4,7 @@ import {
   resolveDesktopBootstrapRedirect,
   resolveDesktopRedirect,
 } from './desktopGuard'
+import { DESKTOP_LOGIN_SERVICES, buildDesktopSetupInput } from '@/utils/desktop/setup'
 import routerSource from './index.ts?raw'
 
 describe('resolveDesktopRedirect', () => {
@@ -72,5 +73,22 @@ describe('resolveDesktopRedirect', () => {
 
     expect(bootstrapGuardIndex).toBeGreaterThan(-1)
     expect(bootstrapGuardIndex).toBeLessThan(userStoreIndex)
+  })
+
+  it('桌面登录服务只启用 AI中台和 aPaaS平台', () => {
+    expect(DESKTOP_LOGIN_SERVICES).toEqual([
+      { mode: 'control_plane', label: 'AI中台', defaultUrl: 'https://om-demo.dfy.definesys.cn', enabled: true },
+      { mode: 'apaas', label: 'aPaaS平台', defaultUrl: 'https://apaas-trial.definesys.cn/backend', enabled: true },
+      { mode: 'public_account', label: '公开账号', defaultUrl: '', enabled: false },
+      { mode: 'trial_account', label: '试用账号', defaultUrl: '', enabled: false },
+    ])
+  })
+
+  it('初始化提交不包含账号、密码、租户或模型字段', () => {
+    expect(buildDesktopSetupInput('C:\\Users\\Administrator\\DolphinCode', 'control_plane', 'https://example.com'))
+      .toEqual({
+        root_dir: 'C:\\Users\\Administrator\\DolphinCode',
+        login: { mode: 'control_plane', base_url: 'https://example.com' },
+      })
   })
 })
