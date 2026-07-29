@@ -128,6 +128,25 @@
             <code>{{ applicationsPath }}</code>
             <code>{{ appDataPath }}</code>
           </div>
+
+          <el-form label-position="top" class="desktop-form desktop-workspace-entry-form">
+            <el-form-item label="工作台入口">
+              <el-radio-group
+                v-model="workspaceScope"
+                :disabled="formLocked"
+                class="desktop-workspace-entry-options"
+                aria-label="工作台入口"
+              >
+                <el-radio-button
+                  v-for="option in DESKTOP_WORKSPACE_ENTRY_OPTIONS"
+                  :key="option.value"
+                  :value="option.value"
+                >
+                  {{ option.label }}
+                </el-radio-button>
+              </el-radio-group>
+            </el-form-item>
+          </el-form>
         </section>
 
         <p v-if="operationError" class="desktop-message error" aria-live="polite">
@@ -159,7 +178,7 @@
             <el-button
               type="primary"
               :loading="submitting"
-              :disabled="Boolean(rootError)"
+              :disabled="Boolean(rootError) || workspaceScope === null"
               @click="submitSetup"
             >
               保存并进入登录
@@ -264,6 +283,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { FolderOpened, Loading, Refresh } from '@element-plus/icons-vue'
 import {
   DESKTOP_LOGIN_SERVICES,
+  DESKTOP_WORKSPACE_ENTRY_OPTIONS,
   buildDesktopSetupInput,
   getDesktopState,
   openDesktopPath,
@@ -281,6 +301,7 @@ import {
   type DesktopLoginServiceOption,
   type DesktopPhase,
   type DesktopStateSnapshot,
+  type DesktopWorkspaceEntryScope,
 } from '@/utils/desktop'
 
 const state = ref<DesktopStateSnapshot | null>(null)
@@ -288,6 +309,7 @@ const step = ref<DesktopSetupStep>('login_service')
 const mode = ref<DesktopLoginMode>('control_plane')
 const baseUrl = ref('https://om-demo.dfy.definesys.cn')
 const rootDir = ref('')
+const workspaceScope = ref<DesktopWorkspaceEntryScope | null>(null)
 const submitting = ref(false)
 const connectionTesting = ref(false)
 
@@ -366,6 +388,7 @@ function hydrateForm(snapshot: DesktopStateSnapshot) {
   if (snapshot.config) {
     mode.value = snapshot.config.login.mode
     baseUrl.value = snapshot.config.login.base_url
+    workspaceScope.value = snapshot.config.workspace_entry_scope
     serviceUrls[mode.value] = baseUrl.value
     editedModes.add(mode.value)
   }
@@ -483,7 +506,7 @@ async function submitSetup() {
   if (urlError.value) return
   if (!loginOnly.value) {
     rootTouched.value = true
-    if (rootError.value) return
+    if (rootError.value || workspaceScope.value === null) return
   }
 
   submitting.value = true
@@ -491,9 +514,18 @@ async function submitSetup() {
   operationError.value = ''
   const login = { mode: mode.value, base_url: baseUrl.value.trim() }
   try {
-    applySnapshot(loginOnly.value
-      ? await updateDesktopLogin(login)
-      : await saveDesktopSetup(buildDesktopSetupInput(rootDir.value.trim(), mode.value, baseUrl.value.trim())))
+    if (loginOnly.value) {
+      applySnapshot(await updateDesktopLogin(login))
+    } else {
+      const scope = workspaceScope.value
+      if (!scope) return
+      applySnapshot(await saveDesktopSetup(buildDesktopSetupInput(
+        rootDir.value.trim(),
+        mode.value,
+        baseUrl.value.trim(),
+        scope,
+      )))
+    }
   } catch (error) {
     operationError.value = safeMessage(error, '无法保存桌面配置')
   } finally {

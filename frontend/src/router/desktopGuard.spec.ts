@@ -368,6 +368,7 @@ describe('resolveDesktopRedirect', () => {
         schema_version: 1,
         root_dir: 'D:\\DolphinCode',
         login: { mode: 'apaas', base_url: 'https://apaas.example.com/backend' },
+        workspace_entry_scope: 'both',
       },
       default_root_dir: 'C:\\Users\\Administrator\\DolphinCode',
       error: null,
