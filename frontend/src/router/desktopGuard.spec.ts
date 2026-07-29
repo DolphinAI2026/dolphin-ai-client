@@ -3,6 +3,7 @@ import {
   loadDesktopBootstrapDecision,
   resolveDesktopBootstrapRedirect,
   resolveDesktopRedirect,
+  resolveDesktopWorkspaceRedirect,
 } from './desktopGuard'
 import {
   DESKTOP_LOGIN_SERVICES,
@@ -325,11 +326,23 @@ describe('resolveDesktopRedirect', () => {
     ])
   })
 
-  it('初始化提交不包含账号、密码、租户或模型字段', () => {
-    expect(buildDesktopSetupInput('C:\\Users\\Administrator\\DolphinCode', 'control_plane', 'https://example.com'))
+  it('桌面入口范围约束业务路由并写入初始化配置', () => {
+    expect(resolveDesktopWorkspaceRedirect('apaas', '/code/apps')).toBe('/')
+    expect(resolveDesktopWorkspaceRedirect('ai_platform', '/apps')).toBe('/code/apps')
+    expect(resolveDesktopWorkspaceRedirect('ai_platform', '/login')).toBeNull()
+    expect(resolveDesktopWorkspaceRedirect('ai_platform', '/desktop-settings')).toBeNull()
+    expect(resolveDesktopWorkspaceRedirect('both', '/apps')).toBeNull()
+
+    expect(buildDesktopSetupInput(
+      'C:\\Users\\Administrator\\DolphinCode',
+      'control_plane',
+      'https://example.com',
+      'ai_platform',
+    ))
       .toEqual({
         root_dir: 'C:\\Users\\Administrator\\DolphinCode',
         login: { mode: 'control_plane', base_url: 'https://example.com' },
+        workspace_entry_scope: 'ai_platform',
       })
   })
 

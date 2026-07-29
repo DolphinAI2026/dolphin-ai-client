@@ -1,4 +1,9 @@
-import type { DesktopPhase, DesktopStateSnapshot } from '@/utils/desktop'
+import { isCodeRoutePath } from '@/stores/mode'
+import type {
+  DesktopPhase,
+  DesktopStateSnapshot,
+  DesktopWorkspaceEntryScope,
+} from '@/utils/desktop'
 
 export interface DesktopBootstrapDecision {
   readyForDocument: boolean
@@ -30,6 +35,23 @@ export async function loadDesktopBootstrapDecision(
       redirect: resolveDesktopBootstrapRedirect('failed', targetPath),
     }
   }
+}
+
+const DESKTOP_WORKSPACE_SCOPE_EXEMPT_PATHS = new Set([
+  '/desktop-setup',
+  '/login',
+  '/desktop-settings',
+  '/desktop-unavailable',
+])
+
+export function resolveDesktopWorkspaceRedirect(
+  scope: DesktopWorkspaceEntryScope,
+  targetPath: string,
+): string | null {
+  if (DESKTOP_WORKSPACE_SCOPE_EXEMPT_PATHS.has(targetPath)) return null
+  if (scope === 'apaas' && isCodeRoutePath(targetPath)) return '/'
+  if (scope === 'ai_platform' && !isCodeRoutePath(targetPath)) return '/code/apps'
+  return null
 }
 
 // 桌面功能边界守卫纯逻辑。meta.desktop==='hidden' 的路由在桌面 build 下落降级页。

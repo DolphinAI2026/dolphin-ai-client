@@ -12,10 +12,11 @@ import request, {
   getAuthSessionState,
   isAuthSessionAlignmentPending,
 } from '@/utils/request'
-import { getDesktopState } from '@/utils/desktop'
+import { getCachedDesktopState, getDesktopState } from '@/utils/desktop'
 import {
   loadDesktopBootstrapDecision,
   resolveDesktopRedirect,
+  resolveDesktopWorkspaceRedirect,
 } from './desktopGuard'
 import { normalizeTenantPublicId, resolveTenantUrl } from './tenantUrlGuard'
 import { safeLoginRedirectPath } from './loginRedirect'
@@ -331,6 +332,15 @@ export function installRouterGuards(targetRouter: Router): void {
       desktopBootstrapReadyForDocument = desktopDecision.readyForDocument
       if (desktopDecision.redirect) {
         next({ path: desktopDecision.redirect, replace: true })
+        return
+      }
+    }
+
+    const workspaceEntryScope = getCachedDesktopState()?.config?.workspace_entry_scope
+    if (workspaceEntryScope) {
+      const workspaceRedirect = resolveDesktopWorkspaceRedirect(workspaceEntryScope, to.path)
+      if (workspaceRedirect) {
+        next({ path: workspaceRedirect, replace: true })
         return
       }
     }

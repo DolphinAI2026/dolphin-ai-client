@@ -1,5 +1,6 @@
 export type DesktopLoginMode = 'control_plane' | 'apaas'
 export type DesktopLoginServiceMode = DesktopLoginMode | 'public_account' | 'trial_account'
+export type DesktopWorkspaceEntryScope = 'apaas' | 'ai_platform' | 'both'
 
 export type DesktopPhase =
   | 'needs_setup'
@@ -28,11 +29,13 @@ export interface DesktopConfig {
   schema_version: number
   root_dir: string
   login: DesktopLoginConfig
+  workspace_entry_scope: DesktopWorkspaceEntryScope
 }
 
 export interface DesktopSetupInput {
   root_dir: string
   login: DesktopLoginConfig
+  workspace_entry_scope: DesktopWorkspaceEntryScope
 }
 
 export interface DesktopStateSnapshot {
@@ -73,12 +76,23 @@ export const DESKTOP_LOGIN_SERVICES: readonly DesktopLoginServiceOption[] = [
   { mode: 'trial_account', label: '试用账号', defaultUrl: '', enabled: false },
 ]
 
+export const DESKTOP_WORKSPACE_ENTRY_OPTIONS = [
+  { value: 'apaas', label: '仅 aPaaS' },
+  { value: 'ai_platform', label: '仅 AI平台' },
+  { value: 'both', label: '两者都有' },
+] as const
+
 export function buildDesktopSetupInput(
   rootDir: string,
   mode: DesktopLoginMode,
   baseUrl: string,
+  workspaceEntryScope: DesktopWorkspaceEntryScope,
 ): DesktopSetupInput {
-  return { root_dir: rootDir, login: { mode, base_url: baseUrl } }
+  return {
+    root_dir: rootDir,
+    login: { mode, base_url: baseUrl },
+    workspace_entry_scope: workspaceEntryScope,
+  }
 }
 
 export function resolveDesktopSetupView(state: DesktopStateSnapshot): DesktopSetupViewDecision {
@@ -129,12 +143,27 @@ async function invokeDesktop<T>(
   return invoke<T>(command, args)
 }
 
+let cachedDesktopState: DesktopStateSnapshot | null = null
+
+async function invokeDesktopState(
+  command: string,
+  args?: Record<string, unknown>,
+): Promise<DesktopStateSnapshot> {
+  const state = await invokeDesktop<DesktopStateSnapshot>(command, args)
+  cachedDesktopState = state
+  return state
+}
+
+export function getCachedDesktopState(): DesktopStateSnapshot | null {
+  return cachedDesktopState
+}
+
 export function getDesktopState(): Promise<DesktopStateSnapshot> {
-  return invokeDesktop('desktop_get_state')
+  return invokeDesktopState('desktop_get_state')
 }
 
 export function saveDesktopSetup(input: DesktopSetupInput): Promise<DesktopStateSnapshot> {
-  return invokeDesktop('desktop_save_setup', { input })
+  return invokeDesktopState('desktop_save_setup', { input })
 }
 
 export function testDesktopService(login: DesktopLoginConfig): Promise<void> {
@@ -150,7 +179,13 @@ export function retryDesktopStart(): Promise<DesktopStateSnapshot> {
 }
 
 export function updateDesktopLogin(login: DesktopLoginConfig): Promise<DesktopStateSnapshot> {
-  return invokeDesktop('desktop_update_login', { login })
+  return invokeDesktopState('desktop_update_login', { login })
+}
+
+export function updateDesktopWorkspaceEntryScope(
+  scope: DesktopWorkspaceEntryScope,
+): Promise<DesktopStateSnapshot> {
+  return invokeDesktopState('desktop_update_workspace_entry_scope', { scope })
 }
 
 export function openDesktopPath(kind: DesktopPathKind): Promise<void> {
