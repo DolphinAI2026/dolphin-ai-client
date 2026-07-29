@@ -206,20 +206,34 @@ try {
     if ($PackageVersion) {
       $DownloadDir = Join-Path $Root "dist-desktop\windows"
       New-Item -ItemType Directory -Force -Path $DownloadDir | Out-Null
+      $VersionPattern = "(^|[^0-9A-Za-z])$([Regex]::Escape($PackageVersion))([^0-9A-Za-z]|$)"
       $Installer = Get-ChildItem $BundleRoot -Recurse -File -Filter "*.exe" |
         Where-Object { $_.Name -notlike "*.zip" } |
+        Where-Object { $_.Name -match $VersionPattern } |
+        Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
       if ($Installer) {
+        Get-ChildItem $DownloadDir -File -Filter "ruijing-*-windows-x86_64-setup.exe" |
+          Remove-Item -Force
         $NamedInstaller = Join-Path $DownloadDir "ruijing-$PackageVersion-windows-x86_64-setup.exe"
         Copy-Item $Installer.FullName $NamedInstaller -Force
         Write-Host ""
         Write-Host "Download-ready installer: $NamedInstaller"
+      } elseif ($Bundle -in "nsis", "all") {
+        throw "Missing NSIS installer for package version $PackageVersion under $BundleRoot"
       }
-      $Msi = Get-ChildItem $BundleRoot -Recurse -File -Filter "*.msi" | Select-Object -First 1
+      $Msi = Get-ChildItem $BundleRoot -Recurse -File -Filter "*.msi" |
+        Where-Object { $_.Name -match $VersionPattern } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
       if ($Msi) {
+        Get-ChildItem $DownloadDir -File -Filter "ruijing-*-windows-x86_64.msi" |
+          Remove-Item -Force
         $NamedMsi = Join-Path $DownloadDir "ruijing-$PackageVersion-windows-x86_64.msi"
         Copy-Item $Msi.FullName $NamedMsi -Force
         Write-Host "Download-ready MSI: $NamedMsi"
+      } elseif ($Bundle -in "msi", "all") {
+        throw "Missing MSI installer for package version $PackageVersion under $BundleRoot"
       }
     }
   }
