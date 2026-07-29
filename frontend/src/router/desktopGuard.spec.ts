@@ -13,6 +13,7 @@ import {
 } from '@/utils/desktop/setup'
 import routerSource from './index.ts?raw'
 import setupWizardSource from '@/views/DesktopSetupWizard.vue?raw'
+import * as setupWizardModule from '@/views/DesktopSetupWizard.vue'
 import loginSource from '@/views/Login.vue?raw'
 import * as loginModule from '@/views/Login.vue'
 import desktopSettingsSource from '@/views/DesktopSettings.vue?raw'
@@ -427,5 +428,28 @@ describe('resolveDesktopRedirect', () => {
     expect(setupWizardSource).toContain('if (disposed) return')
     expect(setupWizardSource).toContain('disposed = true')
     expect(setupWizardSource).toContain('onBeforeUnmount(disposePolling)')
+  })
+
+  it('失败页拒绝展示凭据、JWT 和 traceback', () => {
+    const safeDesktopFailureMessage = (
+      setupWizardModule as typeof setupWizardModule & {
+        safeDesktopFailureMessage?: (error: unknown, fallback: string) => string
+      }
+    ).safeDesktopFailureMessage
+
+    expect(safeDesktopFailureMessage).toBeTypeOf('function')
+    if (!safeDesktopFailureMessage) return
+
+    const fallback = '本地环境未能启动，请重试或查看日志'
+    for (const sensitive of [
+      'Authorization: Bearer auth-value',
+      'secret=secret-value',
+      'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.signature',
+      'Traceback (most recent call last):\n  File "app.py", line 1',
+    ]) {
+      expect(safeDesktopFailureMessage(sensitive, fallback)).toBe(fallback)
+    }
+    expect(safeDesktopFailureMessage('sidecar 健康检查超时\nignored detail', fallback))
+      .toBe('sidecar 健康检查超时')
   })
 })

@@ -7,6 +7,8 @@ use crate::local_runtime::process_driver::agent_runtime_executable;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::BTreeMap;
+use std::fs::OpenOptions;
+use std::io::{self, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -30,6 +32,19 @@ pub enum DesktopPhase {
     StartingSidecar,
     Ready,
     Failed,
+}
+
+impl DesktopPhase {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::NeedsSetup => "needs_setup",
+            Self::SavingConfig => "saving_config",
+            Self::StartingRuntime => "starting_runtime",
+            Self::StartingSidecar => "starting_sidecar",
+            Self::Ready => "ready",
+            Self::Failed => "failed",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -64,16 +79,135 @@ impl DesktopBackendError {
     fn runtime(message: impl Into<String>) -> Self {
         Self {
             code: "DESKTOP_SETUP_RUNTIME_START_FAILED".to_string(),
-            message: message.into(),
+            message: sanitize_log_line(&message.into()),
         }
     }
 
     fn sidecar(message: impl Into<String>) -> Self {
         Self {
             code: "DESKTOP_SETUP_SIDECAR_START_FAILED".to_string(),
-            message: message.into(),
+            message: sanitize_log_line(&message.into()),
         }
     }
+}
+
+fn map_runtime_error(message: impl Into<String>) -> DesktopBackendError {
+    DesktopBackendError::runtime(message)
+}
+
+fn map_sidecar_error(message: impl Into<String>) -> DesktopBackendError {
+    DesktopBackendError::sidecar(message)
+}
+
+fn sanitize_log_line(line: &str) -> String {
+    let flattened = line
+        .chars()
+        .map(|character| {
+            if matches!(character, '\r' | '\n' | '\t') || character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    let flattened = flattened.trim();
+    if flattened.is_empty() {
+        return "(empty)".to_string();
+    }
+
+    let lowercase = flattened.to_ascii_lowercase();
+    let redact_entire_line = [
+        "traceback",
+        "authorization:",
+        "authorization=",
+        "authorization =",
+        "password=",
+        "password =",
+        "\"password\":",
+        "'password':",
+        "api_key=",
+        "api_key =",
+        "api-key=",
+        "\"api_key\":",
+        "'api_key':",
+        "secret=",
+        "secret =",
+        "\"secret\":",
+        "'secret':",
+        "access_token",
+        "refresh_token",
+        "id_token",
+        "encryption_key",
+        "private_key",
+        "authentication_response",
+    ]
+    .iter()
+    .any(|marker| lowercase.contains(marker));
+    if redact_entire_line || contains_jwt(flattened) || contains_url_credentials(flattened) {
+        return "[REDACTED]".to_string();
+    }
+
+    for marker in ["token=", "token =", "\"token\":", "'token':"] {
+        if let Some(index) = lowercase.find(marker) {
+            return format!("{}[REDACTED]", &flattened[..index + marker.len()]);
+        }
+    }
+
+    flattened.to_string()
+}
+
+fn contains_jwt(line: &str) -> bool {
+    line.split(|character: char| {
+        character.is_whitespace()
+            || matches!(
+                character,
+                '"' | '\'' | ',' | ';' | '(' | ')' | '[' | ']' | '{' | '}'
+            )
+    })
+    .any(|candidate| {
+        let parts = candidate.split('.').collect::<Vec<_>>();
+        parts.len() == 3
+            && parts[0].starts_with("eyJ")
+            && parts.iter().all(|part| {
+                !part.is_empty()
+                    && part.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+                    })
+            })
+    })
+}
+
+fn contains_url_credentials(line: &str) -> bool {
+    let Some(scheme_end) = line.find("://") else {
+        return false;
+    };
+    let authority = &line[scheme_end + 3..];
+    authority
+        .split(['/', '?', '#'])
+        .next()
+        .is_some_and(|value| value.contains('@'))
+}
+
+fn write_diagnostic_log(
+    logs_dir: &Path,
+    file_name: &str,
+    phase: DesktopPhase,
+    code: &str,
+    message: &str,
+) -> io::Result<()> {
+    std::fs::create_dir_all(logs_dir)?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(logs_dir.join(file_name))?;
+    writeln!(
+        file,
+        "time={} phase={} code={} message={}",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        phase.as_str(),
+        sanitize_log_line(code),
+        sanitize_log_line(message),
+    )
 }
 
 impl From<DesktopConfigError> for DesktopBackendError {
@@ -284,6 +418,44 @@ struct DesktopBackendInner {
     shutdown_intent_enqueued: bool,
     shutdown_recovery_started: bool,
     shutdown_complete: bool,
+    log_write_failed: bool,
+}
+
+impl DesktopBackendInner {
+    fn write_diagnostic(
+        &mut self,
+        file_name: &str,
+        phase: DesktopPhase,
+        code: &str,
+        message: &str,
+    ) {
+        let Some(config) = self.config.as_ref() else {
+            return;
+        };
+        let logs_dir = DesktopPaths::from_root(config.root_dir.clone()).logs_dir;
+        if write_diagnostic_log(&logs_dir, file_name, phase, code, message).is_err() {
+            self.log_write_failed = true;
+        }
+    }
+
+    fn transition_to(&mut self, phase: DesktopPhase, message: &str) {
+        self.phase = phase;
+        self.write_diagnostic("desktop.log", phase, "DESKTOP_SETUP_PHASE_CHANGED", message);
+    }
+
+    fn fail(&mut self, mut error: DesktopBackendError) {
+        self.phase = DesktopPhase::Failed;
+        self.write_diagnostic(
+            "desktop.log",
+            DesktopPhase::Failed,
+            &error.code,
+            &error.message,
+        );
+        if self.log_write_failed && !error.message.contains("日志写入失败") {
+            error.message.push_str("；日志写入失败");
+        }
+        self.error = Some(error);
+    }
 }
 
 pub struct DesktopBackend {
@@ -319,6 +491,7 @@ impl DesktopBackend {
                 shutdown_intent_enqueued: false,
                 shutdown_recovery_started: false,
                 shutdown_complete: false,
+                log_write_failed: false,
             }),
             config_store,
             default_root_dir,
@@ -364,8 +537,7 @@ impl DesktopBackend {
         inner.worker_failed = true;
         inner.shutdown_intent_enqueued = false;
         inner.pending_sidecar_error = None;
-        inner.phase = DesktopPhase::Failed;
-        inner.error = Some(error);
+        inner.fail(error);
     }
 
     fn submit_locked(
@@ -394,7 +566,7 @@ impl DesktopBackend {
         let mut inner = self.lock();
         Self::ensure_accepting(&inner)?;
         let generation = inner.lease.request_generation();
-        inner.phase = DesktopPhase::SavingConfig;
+        inner.transition_to(DesktopPhase::SavingConfig, "保存桌面配置");
         inner.setup_scope = DesktopSetupScope::Full;
         inner.error = None;
         self.submit_locked(&mut inner, LifecycleIntent::SaveSetup { generation, input })?;
@@ -408,7 +580,10 @@ impl DesktopBackend {
             return Ok(self.snapshot_from_inner(&inner));
         }
         let generation = inner.lease.request_generation();
-        inner.phase = DesktopPhase::StartingRuntime;
+        inner.transition_to(
+            DesktopPhase::StartingRuntime,
+            "重试启动本地 Runtime Manager",
+        );
         inner.error = None;
         self.submit_locked(&mut inner, LifecycleIntent::Retry { generation })?;
         Ok(self.snapshot_from_inner(&inner))
@@ -421,7 +596,7 @@ impl DesktopBackend {
             return Err(DesktopBackendError::config("桌面配置尚未初始化"));
         }
         let generation = inner.lease.request_generation();
-        inner.phase = DesktopPhase::NeedsSetup;
+        inner.transition_to(DesktopPhase::NeedsSetup, "进入登录服务配置");
         inner.setup_scope = DesktopSetupScope::LoginOnly;
         inner.error = None;
         self.submit_locked(&mut inner, LifecycleIntent::EnterLoginSetup { generation })
@@ -437,7 +612,7 @@ impl DesktopBackend {
             return Err(DesktopBackendError::config("桌面配置尚未初始化"));
         }
         let generation = inner.lease.request_generation();
-        inner.phase = DesktopPhase::SavingConfig;
+        inner.transition_to(DesktopPhase::SavingConfig, "保存登录服务配置");
         inner.setup_scope = DesktopSetupScope::LoginOnly;
         inner.error = None;
         self.submit_locked(
@@ -639,8 +814,7 @@ fn set_launch_failed(app: &AppHandle, generation: u64, error: DesktopBackendErro
         if !inner.lease.is_active_current(generation) {
             return;
         }
-        inner.phase = DesktopPhase::Failed;
-        inner.error = Some(error);
+        inner.fail(error);
         inner.packaged_url.clone()
     };
     let _ = navigate_packaged(app, &packaged_url);
@@ -655,13 +829,37 @@ fn log_sidecar_events(
         while let Some(event) = rx.recv().await {
             match event {
                 CommandEvent::Stdout(bytes) => {
-                    print!("[sidecar] {}", String::from_utf8_lossy(&bytes));
+                    let state = app.state::<DesktopBackend>();
+                    let mut inner = state.lock();
+                    let phase = inner.phase;
+                    inner.write_diagnostic(
+                        "sidecar.log",
+                        phase,
+                        "DESKTOP_SIDECAR_STDOUT",
+                        &String::from_utf8_lossy(&bytes),
+                    );
                 }
                 CommandEvent::Stderr(bytes) => {
-                    eprint!("[sidecar] {}", String::from_utf8_lossy(&bytes));
+                    let state = app.state::<DesktopBackend>();
+                    let mut inner = state.lock();
+                    let phase = inner.phase;
+                    inner.write_diagnostic(
+                        "sidecar.log",
+                        phase,
+                        "DESKTOP_SIDECAR_STDERR",
+                        &String::from_utf8_lossy(&bytes),
+                    );
                 }
                 CommandEvent::Error(error) => {
-                    eprintln!("[sidecar] process stream error: {error}");
+                    let state = app.state::<DesktopBackend>();
+                    let mut inner = state.lock();
+                    let phase = inner.phase;
+                    inner.write_diagnostic(
+                        "sidecar.log",
+                        phase,
+                        "DESKTOP_SIDECAR_STREAM_ERROR",
+                        &error,
+                    );
                 }
                 CommandEvent::Terminated(payload) => {
                     let message = match (payload.code, payload.signal) {
@@ -669,8 +867,18 @@ fn log_sidecar_events(
                         (_, Some(signal)) => format!("sidecar terminated by signal {signal}"),
                         _ => "sidecar terminated unexpectedly".to_string(),
                     };
-                    let error = DesktopBackendError::sidecar(message);
+                    let error = map_sidecar_error(message);
                     let state = app.state::<DesktopBackend>();
+                    {
+                        let mut inner = state.lock();
+                        let phase = inner.phase;
+                        inner.write_diagnostic(
+                            "sidecar.log",
+                            phase,
+                            "DESKTOP_SIDECAR_TERMINATED",
+                            &error.message,
+                        );
+                    }
                     let _ = state.queue_sidecar_terminated(generation, error);
                     break;
                 }
@@ -697,13 +905,23 @@ fn spawn_sidecar(
     let agent_runtime_path = agent_runtime_executable(&state.agent_runtime_root);
     let launch =
         SidecarLaunch::from_config(config, port, manager_url.as_str(), manager_token.as_str());
+    {
+        let mut inner = state.lock();
+        let phase = inner.phase;
+        inner.write_diagnostic(
+            "sidecar.log",
+            phase,
+            "DESKTOP_SIDECAR_STARTING",
+            "启动 sidecar 进程",
+        );
+    }
     let mut command = match app.shell().sidecar("ruijing-sidecar") {
         Ok(command) => command.args(launch.args),
         Err(error) => {
             set_launch_failed(
                 app,
                 generation,
-                DesktopBackendError::sidecar(format!("找不到桌面 sidecar: {error}")),
+                map_sidecar_error(format!("找不到桌面 sidecar: {error}")),
             );
             return;
         }
@@ -728,7 +946,7 @@ fn spawn_sidecar(
             set_launch_failed(
                 app,
                 generation,
-                DesktopBackendError::sidecar(format!("无法启动桌面 sidecar: {error}")),
+                map_sidecar_error(format!("无法启动桌面 sidecar: {error}")),
             );
             return;
         }
@@ -761,8 +979,7 @@ fn spawn_sidecar(
                     let mut inner = state.lock();
                     let child = inner.sidecar.take();
                     if inner.lease.is_active_current(generation) {
-                        inner.phase = DesktopPhase::Failed;
-                        inner.error = Some(error);
+                        inner.fail(error);
                     }
                     child
                 };
@@ -773,7 +990,7 @@ fn spawn_sidecar(
             }
             let mut inner = state.lock();
             if inner.lease.is_active_current(generation) {
-                inner.phase = DesktopPhase::Ready;
+                inner.transition_to(DesktopPhase::Ready, "本地桌面服务已就绪");
                 inner.error = None;
                 inner.pending_sidecar_error = None;
             }
@@ -781,14 +998,13 @@ fn spawn_sidecar(
         HealthStatus::TimedOut | HealthStatus::Terminated(_) => {
             let error = match health {
                 HealthStatus::Terminated(error) => error,
-                _ => DesktopBackendError::sidecar("sidecar 健康检查超时"),
+                _ => map_sidecar_error("sidecar 健康检查超时"),
             };
             let child = {
                 let mut inner = state.lock();
                 let child = inner.sidecar.take();
                 if inner.lease.is_active_current(generation) {
-                    inner.phase = DesktopPhase::Failed;
-                    inner.error = Some(error);
+                    inner.fail(error);
                     inner.pending_sidecar_error = None;
                 }
                 child
@@ -821,10 +1037,7 @@ fn run_full_start(app: &AppHandle, generation: u64, config: &DesktopConfig) {
                 set_launch_failed(
                     app,
                     generation,
-                    DesktopBackendError::runtime(format!(
-                        "无法启动本地 Runtime Manager: {}",
-                        error.message
-                    )),
+                    map_runtime_error(format!("无法启动本地 Runtime Manager: {}", error.message)),
                 );
                 return;
             }
@@ -844,7 +1057,7 @@ fn run_full_start(app: &AppHandle, generation: u64, config: &DesktopConfig) {
             return;
         }
         inner.runtime = Some(manager);
-        inner.phase = DesktopPhase::StartingSidecar;
+        inner.transition_to(DesktopPhase::StartingSidecar, "启动桌面 sidecar");
     }
     spawn_sidecar(app, generation, config, manager_url, manager_token);
 }
@@ -864,7 +1077,7 @@ fn run_initialize(app: &AppHandle, generation: u64) {
         Ok(None) => {
             let mut inner = state.lock();
             if inner.lease.is_active_current(generation) {
-                inner.phase = DesktopPhase::NeedsSetup;
+                inner.transition_to(DesktopPhase::NeedsSetup, "等待桌面首次配置");
                 inner.setup_scope = DesktopSetupScope::Full;
                 inner.config = None;
                 inner.error = None;
@@ -873,7 +1086,7 @@ fn run_initialize(app: &AppHandle, generation: u64) {
         Err(error) => {
             let mut inner = state.lock();
             if inner.lease.is_active_current(generation) {
-                inner.phase = DesktopPhase::NeedsSetup;
+                inner.transition_to(DesktopPhase::NeedsSetup, "桌面配置无效，等待重新配置");
                 inner.setup_scope = DesktopSetupScope::Full;
                 inner.config = None;
                 inner.error = Some(error.into());
@@ -886,9 +1099,9 @@ fn run_initialize(app: &AppHandle, generation: u64) {
                 if !inner.lease.is_active_current(generation) {
                     return;
                 }
-                inner.phase = DesktopPhase::StartingRuntime;
                 inner.setup_scope = DesktopSetupScope::Full;
                 inner.config = Some(config.clone());
+                inner.transition_to(DesktopPhase::StartingRuntime, "启动本地 Runtime Manager");
                 inner.error = None;
             }
             run_full_start(app, generation, &config);
@@ -911,7 +1124,7 @@ fn run_save_setup(app: &AppHandle, generation: u64, input: DesktopSetupInput) {
         Err(error) => {
             let mut inner = state.lock();
             if inner.lease.is_active_current(generation) {
-                inner.phase = DesktopPhase::NeedsSetup;
+                inner.transition_to(DesktopPhase::NeedsSetup, "桌面配置保存失败");
                 inner.setup_scope = DesktopSetupScope::Full;
                 inner.error = Some(error.into());
             }
@@ -924,8 +1137,8 @@ fn run_save_setup(app: &AppHandle, generation: u64, input: DesktopSetupInput) {
         if !inner.lease.is_active_current(generation) {
             return;
         }
-        inner.phase = DesktopPhase::StartingRuntime;
         inner.config = Some(config.clone());
+        inner.transition_to(DesktopPhase::StartingRuntime, "启动本地 Runtime Manager");
         inner.error = None;
     }
     run_full_start(app, generation, &config);
@@ -942,8 +1155,7 @@ fn run_enter_login_setup(app: &AppHandle, generation: u64) {
     if let Err(error) = navigation_result {
         let mut inner = state.lock();
         if inner.lease.is_active_current(generation) {
-            inner.phase = DesktopPhase::Failed;
-            inner.error = Some(error);
+            inner.fail(error);
         }
     }
 }
@@ -969,10 +1181,10 @@ fn run_retry(app: &AppHandle, generation: u64) {
                 let mut inner = state.lock();
                 let runtime = inner.runtime.take();
                 if inner.lease.is_active_current(generation) {
-                    inner.phase = DesktopPhase::NeedsSetup;
                     inner.setup_scope = DesktopSetupScope::Full;
                     inner.config = None;
                     inner.error = Some(DesktopBackendError::config("桌面配置尚未初始化"));
+                    inner.transition_to(DesktopPhase::NeedsSetup, "重试时缺少桌面配置");
                 }
                 runtime
             };
@@ -984,9 +1196,9 @@ fn run_retry(app: &AppHandle, generation: u64) {
                 let mut inner = state.lock();
                 let runtime = inner.runtime.take();
                 if inner.lease.is_active_current(generation) {
-                    inner.phase = DesktopPhase::NeedsSetup;
                     inner.setup_scope = DesktopSetupScope::Full;
                     inner.error = Some(error.into());
+                    inner.transition_to(DesktopPhase::NeedsSetup, "重试时桌面配置无效");
                 }
                 runtime
             };
@@ -1015,10 +1227,13 @@ fn run_retry(app: &AppHandle, generation: u64) {
         let mut inner = state.lock();
         if let Some(runtime) = inner.runtime.as_ref() {
             let credentials = (runtime.base_url.clone(), runtime.token.clone());
-            inner.phase = DesktopPhase::StartingSidecar;
+            inner.transition_to(DesktopPhase::StartingSidecar, "重试启动桌面 sidecar");
             Some(credentials)
         } else {
-            inner.phase = DesktopPhase::StartingRuntime;
+            inner.transition_to(
+                DesktopPhase::StartingRuntime,
+                "重试启动本地 Runtime Manager",
+            );
             None
         }
     };
@@ -1049,8 +1264,7 @@ fn run_update_login(app: &AppHandle, generation: u64, login: DesktopLoginConfig)
     if let Err(error) = navigation_result {
         let mut inner = state.lock();
         if inner.lease.is_active_current(generation) {
-            inner.phase = DesktopPhase::Failed;
-            inner.error = Some(error);
+            inner.fail(error);
         }
         return;
     }
@@ -1065,7 +1279,7 @@ fn run_update_login(app: &AppHandle, generation: u64, login: DesktopLoginConfig)
         Err(error) => {
             let mut inner = state.lock();
             if inner.lease.is_active_current(generation) {
-                inner.phase = DesktopPhase::NeedsSetup;
+                inner.transition_to(DesktopPhase::NeedsSetup, "登录服务配置保存失败");
                 inner.setup_scope = DesktopSetupScope::LoginOnly;
                 inner.error = Some(error.into());
             }
@@ -1082,10 +1296,13 @@ fn run_update_login(app: &AppHandle, generation: u64, login: DesktopLoginConfig)
         inner.error = None;
         if let Some(runtime) = inner.runtime.as_ref() {
             let credentials = (runtime.base_url.clone(), runtime.token.clone());
-            inner.phase = DesktopPhase::StartingSidecar;
+            inner.transition_to(DesktopPhase::StartingSidecar, "重新启动桌面 sidecar");
             Some(credentials)
         } else {
-            inner.phase = DesktopPhase::StartingRuntime;
+            inner.transition_to(
+                DesktopPhase::StartingRuntime,
+                "重新启动本地 Runtime Manager",
+            );
             None
         }
     };
@@ -1110,8 +1327,7 @@ fn run_sidecar_terminated(app: &AppHandle, generation: u64, error: DesktopBacken
         }
         let sidecar = inner.sidecar.take();
         inner.pending_sidecar_error = None;
-        inner.phase = DesktopPhase::Failed;
-        inner.error = Some(error);
+        inner.fail(error);
         (sidecar, inner.packaged_url.clone())
     };
     if let Some(sidecar) = sidecar {
@@ -1495,6 +1711,129 @@ mod tests {
         let error = DesktopBackendError::runtime("cannot bind local runtime manager");
         assert_eq!(error.code, "DESKTOP_SETUP_RUNTIME_START_FAILED");
         assert!(!error.message.contains("LOCAL_RUNTIME_MANAGER_UNAVAILABLE"));
+    }
+
+    #[test]
+    fn diagnostics_redact_tokens_and_passwords() {
+        let line = sanitize_log_line("token=abc password=secret Authorization: Bearer xyz");
+        assert!(!line.contains("abc"));
+        assert!(!line.contains("secret"));
+        assert!(!line.contains("xyz"));
+        assert!(line.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn diagnostics_redact_json_secrets_jwts_and_tracebacks() {
+        for secret in [
+            r#"response={"access_token":"access-value"}"#,
+            "api_key=api-value",
+            "secret=secret-value",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.signature",
+            "Traceback (most recent call last):\n  File \"app.py\", line 1",
+        ] {
+            let line = sanitize_log_line(secret);
+            assert_eq!(line, "[REDACTED]", "sensitive input: {secret}");
+        }
+    }
+
+    #[test]
+    fn launch_failures_keep_distinct_codes() {
+        assert_eq!(
+            map_runtime_error("bind failed").code,
+            "DESKTOP_SETUP_RUNTIME_START_FAILED"
+        );
+        assert_eq!(
+            map_sidecar_error("health timeout").code,
+            "DESKTOP_SETUP_SIDECAR_START_FAILED"
+        );
+    }
+
+    #[test]
+    fn diagnostic_log_is_utf8_structured_and_sanitized() {
+        let logs_dir = std::env::temp_dir().join(format!(
+            "dolphin-desktop-diagnostics-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        write_diagnostic_log(
+            &logs_dir,
+            "desktop.log",
+            DesktopPhase::Failed,
+            "DESKTOP_SETUP_RUNTIME_START_FAILED",
+            "bind failed token=manager-secret",
+        )
+        .unwrap();
+
+        let contents = std::fs::read_to_string(logs_dir.join("desktop.log")).unwrap();
+        assert!(contents.contains("time="));
+        assert!(contents.contains("phase=failed"));
+        assert!(contents.contains("code=DESKTOP_SETUP_RUNTIME_START_FAILED"));
+        assert!(contents.contains("message=bind failed token=[REDACTED]"));
+        assert!(!contents.contains("manager-secret"));
+        assert_eq!(contents.lines().count(), 1);
+
+        std::fs::remove_dir_all(logs_dir).unwrap();
+    }
+
+    #[test]
+    fn launch_failure_preserves_error_when_diagnostic_log_cannot_open() {
+        let blocked_root = std::env::temp_dir().join(format!(
+            "dolphin-desktop-blocked-log-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::write(&blocked_root, b"not a directory").unwrap();
+        let (supervisor, _receiver) = LifecycleSupervisor::channel();
+        let backend = fixture_backend(supervisor);
+        {
+            let mut inner = backend.lock();
+            inner.config.as_mut().unwrap().root_dir = blocked_root.clone();
+            inner.fail(map_runtime_error("bind failed"));
+        }
+
+        let error = backend.snapshot().error.unwrap();
+        assert_eq!(error.code, "DESKTOP_SETUP_RUNTIME_START_FAILED");
+        assert_eq!(error.message, "bind failed；日志写入失败");
+
+        std::fs::remove_file(blocked_root).unwrap();
+    }
+
+    #[test]
+    fn desktop_path_kind_rejects_arbitrary_paths() {
+        assert!(serde_json::from_str::<DesktopPathKind>(r#""root""#).is_ok());
+        assert!(serde_json::from_str::<DesktopPathKind>(r#""logs""#).is_ok());
+        assert!(serde_json::from_str::<DesktopPathKind>(r#""/tmp/arbitrary""#).is_err());
+    }
+
+    #[test]
+    fn retry_is_failed_only_and_single_flight() {
+        let (supervisor, receiver) = LifecycleSupervisor::channel();
+        let backend = fixture_backend(supervisor);
+        let initial_generation = backend.lock().lease.desired_generation;
+
+        backend.lock().phase = DesktopPhase::Ready;
+        assert_eq!(backend.queue_retry().unwrap().phase, DesktopPhase::Ready);
+        assert_eq!(backend.lock().lease.desired_generation, initial_generation);
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+
+        backend.lock().phase = DesktopPhase::Failed;
+        let first = backend.queue_retry().unwrap();
+        let retry_generation = backend.lock().lease.desired_generation;
+        let second = backend.queue_retry().unwrap();
+        assert_eq!(first.phase, DesktopPhase::StartingRuntime);
+        assert_eq!(second.phase, DesktopPhase::StartingRuntime);
+        assert_eq!(backend.lock().lease.desired_generation, retry_generation);
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(LifecycleIntent::Retry { generation }) if generation == retry_generation
+        ));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
     }
 
     #[test]

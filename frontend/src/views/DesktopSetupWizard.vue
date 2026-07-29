@@ -171,6 +171,30 @@
   </main>
 </template>
 
+<script lang="ts">
+function containsJwt(value: string): boolean {
+  return value.split(/[\s"'(),;[\]{}]+/).some((candidate) => {
+    const parts = candidate.split('.')
+    return parts.length === 3
+      && parts[0].startsWith('eyJ')
+      && parts.every(part => part.length > 0 && /^[A-Za-z0-9_-]+$/.test(part))
+  })
+}
+
+export function safeDesktopFailureMessage(error: unknown, fallback: string): string {
+  const raw = typeof error === 'string'
+    ? error
+    : error && typeof error === 'object' && 'message' in error
+      ? String((error as { message?: unknown }).message ?? '')
+      : ''
+  const firstLine = raw.split(/\r?\n/).find(line => line.trim())?.trim() ?? ''
+  const containsSensitiveValue = /traceback|authorization\s*:|(?:password|token|api[_ -]?key|secret|access[_ -]?token|refresh[_ -]?token|id[_ -]?token|encryption[_ -]?key|private[_ -]?key|authentication[_ -]?response)["']?\s*[:=]/i
+    .test(firstLine)
+  if (!firstLine || containsSensitiveValue || containsJwt(firstLine)) return fallback
+  return firstLine.slice(0, 240)
+}
+</script>
+
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { FolderOpened, Loading, Refresh } from '@element-plus/icons-vue'
@@ -248,18 +272,7 @@ const applicationsPath = computed(() => childPath(rootDir.value, 'applications')
 const appDataPath = computed(() => childPath(rootDir.value, '.appdata'))
 const formLocked = computed(() => submitting.value || isStarting.value)
 
-function safeMessage(error: unknown, fallback: string): string {
-  const raw = typeof error === 'string'
-    ? error
-    : error && typeof error === 'object' && 'message' in error
-      ? String((error as { message?: unknown }).message ?? '')
-      : ''
-  const firstLine = raw.split(/\r?\n/).find(line => line.trim())?.trim() ?? ''
-  if (!firstLine || /traceback|(?:token|password|api[_ -]?key)\s*[:=]|\b[A-Z][A-Z0-9_]{2,}\s*=/i.test(firstLine)) {
-    return fallback
-  }
-  return firstLine.slice(0, 240)
-}
+const safeMessage = safeDesktopFailureMessage
 
 function validateServiceUrl(value: string): string {
   try {
