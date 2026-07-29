@@ -101,3 +101,10 @@ def test_is_federation_false_when_empty(monkeypatch):
     from app.config import settings
     monkeypatch.setattr(settings, "public_account_base_url", "")
     assert runtime.is_federation() is False
+
+
+def test_subprocess_window_kwargs_hide_console_on_windows():
+    assert runtime.subprocess_window_kwargs(windows=True) == {
+        "creationflags": 0x08000000,
+    }
+    assert runtime.subprocess_window_kwargs(windows=False) == {}

@@ -10,6 +10,8 @@ import os
 import re
 from pathlib import Path
 
+from app import runtime
+
 
 class GitError(Exception):
     """git 命令非零退出。"""
@@ -42,6 +44,7 @@ async def _git(ws_path: Path, *args: str) -> tuple[int, str, str]:
         "git", "-C", str(ws_path), *args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        **runtime.subprocess_window_kwargs(),
     )
     out, err = await proc.communicate()
     return proc.returncode or 0, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")

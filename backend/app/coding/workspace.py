@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Awaitable, Callable, Optional, Union
 from enum import Enum
 
+from app import runtime
 from app.coding.form_component_editor import normalize_form_component_editor_artifacts
 from app.coding.runtime_env import ensure_node_tool_env, resolve_executable
 
@@ -446,6 +447,7 @@ def _resolve_default_npm_registry() -> str:
             text=True,
             timeout=5,
             env=env,
+            **runtime.subprocess_window_kwargs(),
         )
         resolved_registry = (result.stdout or "").strip()
         if result.returncode == 0 and resolved_registry and resolved_registry != "undefined":
@@ -1220,6 +1222,7 @@ class WorkspaceManager:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=_apaas_backend_build_env(),
+            **runtime.subprocess_window_kwargs(),
         )
         stdout, stderr = await proc.communicate()
         return proc.returncode, stdout, stderr
@@ -1242,6 +1245,7 @@ class WorkspaceManager:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            **runtime.subprocess_window_kwargs(),
         )
         stdout, stderr = await proc.communicate()
         return proc.returncode, stdout, stderr
@@ -1498,6 +1502,7 @@ class WorkspaceManager:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=env,
+            **runtime.subprocess_window_kwargs(),
         )
         stdout, _ = await proc.communicate()
         output = stdout.decode("utf-8", errors="replace").strip()
@@ -1660,6 +1665,7 @@ class WorkspaceManager:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 env=env,
+                **runtime.subprocess_window_kwargs(),
             )
             await proc.communicate()
             if proc.returncode != 0:
@@ -1736,6 +1742,7 @@ class WorkspaceManager:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 env=env,
+                **runtime.subprocess_window_kwargs(),
             )
 
             output_chunks: list[str] = []
@@ -1856,6 +1863,7 @@ class WorkspaceManager:
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.STDOUT,
                         env=env,
+                        **runtime.subprocess_window_kwargs(),
                     )
                     output_chunks: list[str] = []
                     while True:
@@ -2253,6 +2261,7 @@ class WorkspaceManager:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            **runtime.subprocess_window_kwargs(),
         )
         self._serve_processes[ws_id] = {
             "process": proc, "port": port, "kind": kind,
@@ -2661,6 +2670,7 @@ const INJECT_CODE = `(function(params) {{
             cwd=str(ws_path),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            **runtime.subprocess_window_kwargs(),
         )
         self._debug_processes[ws_id] = {"process": proc}
 
@@ -3718,6 +3728,7 @@ export default { install, activate, staticComponents }
                 npm_exec, "install", "element-ui@^2.15.14", "--no-audit", "--no-fund",
                 cwd=str(ws_path), env=env,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                **runtime.subprocess_window_kwargs(),
             )
             await proc.wait()
         except Exception:
@@ -5312,14 +5323,14 @@ export default {{
                 "-out", str(https_dir / "server.crt"),
                 "-days", "365", "-nodes",
                 "-subj", "/CN=localhost"
-            ], check=True, capture_output=True)
+            ], check=True, capture_output=True, **runtime.subprocess_window_kwargs())
             # 生成 CSR（可选，部分参考项目有）
             subprocess.run([
                 "openssl", "req", "-new",
                 "-key", str(https_dir / "server.key"),
                 "-out", str(https_dir / "server.csr"),
                 "-subj", "/CN=localhost"
-            ], check=True, capture_output=True)
+            ], check=True, capture_output=True, **runtime.subprocess_window_kwargs())
         except Exception as e:
             print(f"[WARN] 生成 HTTPS 证书失败: {e}，debug 模式可能需要手动添加证书")
 

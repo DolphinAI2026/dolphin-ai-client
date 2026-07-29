@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import ntpath
 import os
 import re
 import secrets
@@ -92,6 +93,34 @@ def _text(value: object) -> str:
     return str(value or "").strip()
 
 
+def local_workspace_path_text(value: str | Path) -> str:
+    path = str(value)
+    if os.name != "nt":
+        return path
+    if path.lower().startswith("\\\\?\\unc\\"):
+        return "\\\\" + path[8:]
+    if path.startswith("\\\\?\\"):
+        return path[4:]
+    return path
+
+
+def _workspace_path_identity(
+    value: str | Path,
+    *,
+    windows: bool | None = None,
+) -> str:
+    if windows is None:
+        windows = os.name == "nt"
+    path = str(value)
+    if not windows:
+        return os.path.normcase(os.path.normpath(path))
+    if path.lower().startswith("\\\\?\\unc\\"):
+        path = "\\\\" + path[8:]
+    elif path.startswith("\\\\?\\"):
+        path = path[4:]
+    return ntpath.normcase(ntpath.normpath(path))
+
+
 def _manager_diagnostic(response: httpx.Response) -> tuple[str, str] | None:
     try:
         payload = response.json()
@@ -171,7 +200,7 @@ def _validate_workspace_directory(raw_path: str) -> Path:
         repository_path = Path(raw_path).resolve(strict=True)
     except OSError as exc:
         raise _error(409, _WORKSPACE_INVALID, "注册的本地 Git 工作区不存在") from exc
-    if str(repository_path) != raw_path:
+    if _workspace_path_identity(repository_path) != _workspace_path_identity(raw_path):
         raise _error(409, _WORKSPACE_INVALID, "注册工作区路径不能是别名或符号链接")
     if not repository_path.is_dir():
         raise _error(409, _WORKSPACE_INVALID, "注册的本地 Git 工作区不是目录")
@@ -186,9 +215,9 @@ def _validate_workspace_directory(raw_path: str) -> Path:
         ).resolve(strict=True)
     except (GitCommandError, OSError) as exc:
         raise _error(409, _WORKSPACE_INVALID, "注册的本地工作区不是 Git 仓库") from exc
-    if git_top_level != repository_path:
+    if _workspace_path_identity(git_top_level) != _workspace_path_identity(repository_path):
         raise _error(409, _WORKSPACE_INVALID, "注册路径必须是 Git 顶层目录")
-    return repository_path
+    return Path(local_workspace_path_text(repository_path))
 
 
 def _validate_workspace_path(workspace: RegisteredWorkspace) -> Path:
@@ -346,16 +375,24 @@ async def ensure_registered_local_workspace(
     ws_dir = ws_dir.expanduser()
     if not ws_dir.is_absolute():
         raise _error(409, _WORKSPACE_INVALID, "本地应用目录必须是绝对路径")
-    resolved_abs = str(ws_dir.resolve(strict=False))
+    resolved_abs = local_workspace_path_text(ws_dir.resolve(strict=False))
 
-    existing = (
+    candidates = (
         await db.execute(
             select(RegisteredWorkspace).where(
                 RegisteredWorkspace.tenant_id == int(ctx.tenant_id),
-                RegisteredWorkspace.abs_path == resolved_abs,
             )
         )
-    ).scalar_one_or_none()
+    ).scalars().all()
+    existing = next(
+        (
+            candidate
+            for candidate in candidates
+            if _workspace_path_identity(candidate.abs_path)
+            == _workspace_path_identity(resolved_abs)
+        ),
+        None,
+    )
     if existing is not None:
         if existing.user_id != int(ctx.user.id):
             raise _error(403, _WORKSPACE_FORBIDDEN, "无权使用该本地应用目录")
@@ -381,6 +418,7 @@ async def ensure_registered_local_workspace(
             capture_output=True,
             check=True,
             timeout=30,
+            **runtime.subprocess_window_kwargs(),
         )
         subprocess.run(
             ["git", "commit", "--allow-empty", "-m", "init"],
@@ -395,13 +433,14 @@ async def ensure_registered_local_workspace(
                 "GIT_COMMITTER_NAME": "dolphin-code",
                 "GIT_COMMITTER_EMAIL": "code@local",
             },
+            **runtime.subprocess_window_kwargs(),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise _error(503, _PREPARATION_FAILED, "无法初始化本地应用 Git 目录") from exc
 
     workspace = RegisteredWorkspace(
         ws_id=f"{int(ctx.user.id)}_{uuid.uuid4().hex[:8]}",
-        abs_path=str(ws_dir.resolve()),
+        abs_path=local_workspace_path_text(ws_dir.resolve()),
         user_id=int(ctx.user.id),
         tenant_id=int(ctx.tenant_id),
         workspace_type="code-local-application",
@@ -432,16 +471,24 @@ async def rebind_registered_local_workspace(
     ws_dir = Path(workspace_path).expanduser()
     if not ws_dir.is_absolute():
         raise _error(409, _WORKSPACE_INVALID, "本地应用目录必须是绝对路径")
-    resolved_abs = str(ws_dir.resolve(strict=False))
-    occupied = (
+    resolved_abs = local_workspace_path_text(ws_dir.resolve(strict=False))
+    candidates = (
         await db.execute(
             select(RegisteredWorkspace).where(
                 RegisteredWorkspace.tenant_id == int(ctx.tenant_id),
-                RegisteredWorkspace.abs_path == resolved_abs,
                 RegisteredWorkspace.id != workspace.id,
             )
         )
-    ).scalar_one_or_none()
+    ).scalars().all()
+    occupied = next(
+        (
+            candidate
+            for candidate in candidates
+            if _workspace_path_identity(candidate.abs_path)
+            == _workspace_path_identity(resolved_abs)
+        ),
+        None,
+    )
     if occupied is not None:
         if occupied.user_id != int(ctx.user.id):
             raise _error(403, _WORKSPACE_FORBIDDEN, "无权使用该本地应用目录")
@@ -461,6 +508,7 @@ async def rebind_registered_local_workspace(
                 capture_output=True,
                 check=True,
                 timeout=30,
+                **runtime.subprocess_window_kwargs(),
             )
             subprocess.run(
                 ["git", "commit", "--allow-empty", "-m", "init"],
@@ -475,6 +523,7 @@ async def rebind_registered_local_workspace(
                     "GIT_COMMITTER_NAME": "dolphin-code",
                     "GIT_COMMITTER_EMAIL": "code@local",
                 },
+                **runtime.subprocess_window_kwargs(),
             )
         except (OSError, subprocess.SubprocessError) as exc:
             raise _error(503, _PREPARATION_FAILED, "无法初始化本地应用 Git 目录") from exc

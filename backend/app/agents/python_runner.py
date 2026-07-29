@@ -47,6 +47,7 @@ async def run_python_in_dir(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env={**os.environ, "PYTHONUNBUFFERED": "1"},
+            **runtime.subprocess_window_kwargs(),
         )
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)

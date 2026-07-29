@@ -19,6 +19,7 @@ _normalize_database_url 适配 sqlite 路径。存储后端 desktop≠web, 勿�
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -30,6 +31,17 @@ ENV_SERVER_DATA_DIR = "RUIJING_SERVER_DATA_DIR"
 ENV_FRONTEND_DIR = "DESKTOP_FRONTEND_DIR"
 
 _HOME_DATA_DIR_NAME = ".ruijing-builder"
+
+
+def subprocess_window_kwargs(*, windows: bool | None = None) -> dict[str, int]:
+    """桌面端后台子进程在 Windows 上不创建控制台窗口。"""
+    if windows is None:
+        windows = os.name == "nt"
+    if not windows:
+        return {}
+    return {
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+    }
 
 
 def is_frozen() -> bool:

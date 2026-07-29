@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import TypedDict
 
+from app import runtime
 from app.engineering_sessions.models import GitState
 
 _GIT_TIMEOUT = 90
@@ -76,6 +77,7 @@ def git(
             text=True,
             timeout=_GIT_TIMEOUT,
             env=env,
+            **runtime.subprocess_window_kwargs(),
         )
     except subprocess.TimeoutExpired as exc:
         raise GitCommandError(

@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from app import runtime
+
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]  # backend/
 DEFAULT_CFR_JAR = _BACKEND_ROOT / "vendor" / "cfr-0.152.jar"
 _TIMEOUT_SECONDS = 20
@@ -45,6 +47,7 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
         text=True,
         errors="replace",
         timeout=_TIMEOUT_SECONDS,
+        **runtime.subprocess_window_kwargs(),
     )
 
 

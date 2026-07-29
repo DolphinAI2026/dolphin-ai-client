@@ -29,6 +29,7 @@ from app.code_runtime.local_runtime import (
     default_local_workspace_path,
     default_local_workspace_root,
     ensure_registered_local_workspace,
+    local_workspace_path_text,
 )
 from app.code_runtime.execution_target import ExecutionTarget
 from app.models import Application, RegisteredWorkspace
@@ -698,7 +699,10 @@ def _local_application_data(*, app_name: str, app_code: str) -> dict[str, Any]:
 def default_local_code_application_workspace(app_code: str) -> dict[str, str]:
     root = default_local_workspace_root().expanduser().resolve(strict=False)
     path = default_local_workspace_path(app_code).expanduser().resolve(strict=False)
-    return {"workspace_root": str(root), "workspace_path": str(path)}
+    return {
+        "workspace_root": local_workspace_path_text(root),
+        "workspace_path": local_workspace_path_text(path),
+    }
 
 
 def is_local_code_application_id(application_id: str) -> bool:
@@ -774,10 +778,11 @@ async def list_code_applications(
         items: list[dict[str, Any]] = []
         for workspace in rows:
             application_id = str(workspace.apaas_app_id or "").strip()
-            app_code = Path(workspace.abs_path).name
+            workspace_path = local_workspace_path_text(workspace.abs_path)
+            app_code = Path(workspace_path).name
             app_name = str(workspace.display_name or app_code).strip() or app_code
             if normalized_keyword and normalized_keyword not in " ".join(
-                (app_name, app_code, workspace.abs_path)
+                (app_name, app_code, workspace_path)
             ).lower():
                 continue
             created_at = workspace.created_at.isoformat() if workspace.created_at else None
@@ -797,7 +802,7 @@ async def list_code_applications(
                 "forms": 0,
                 "roles": 0,
                 "dicts": 0,
-                "local_workspace_path": workspace.abs_path,
+                "local_workspace_path": workspace_path,
                 "workspace_id": workspace.ws_id,
                 "repository": None,
                 "owner": None,

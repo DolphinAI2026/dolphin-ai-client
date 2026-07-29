@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
+from app import runtime
 from app.config import settings
 
 
@@ -118,7 +119,13 @@ def _doctor_check_mvn() -> dict:
             "hint": "装 Maven 或者把 mvn 加到 PATH。Mac 用 brew install maven。",
         }
     try:
-        result = subprocess.run([mvn, "-v"], capture_output=True, text=True, timeout=10)
+        result = subprocess.run(
+            [mvn, "-v"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            **runtime.subprocess_window_kwargs(),
+        )
         ver_line = (result.stdout or result.stderr).split("\n")[0]
         return {
             "ok": True, "severity": "info", "check": "mvn",
@@ -150,7 +157,13 @@ def _doctor_check_java() -> dict:
             "hint": f"安装 JDK {expected_jdk if expected_jdk != 'auto' else '8/17'}，或配置 JAVA_HOME。",
         }
     try:
-        result = subprocess.run([java, "-version"], capture_output=True, text=True, timeout=10)
+        result = subprocess.run(
+            [java, "-version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            **runtime.subprocess_window_kwargs(),
+        )
         ver_str = result.stderr or result.stdout
         m = re.search(r'version\s+"([\d._]+)"', ver_str)
         if not m:

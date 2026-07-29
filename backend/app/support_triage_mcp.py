@@ -9,6 +9,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
+from app import runtime
 from app.support_triage_records import write_support_triage_record
 
 
@@ -102,6 +103,7 @@ async def _run_git(repo: Path, args: list[str], *, timeout: float = 120.0) -> di
         *args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        **runtime.subprocess_window_kwargs(),
     )
     try:
         stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)

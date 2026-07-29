@@ -18,6 +18,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
+from app import runtime
 from app.coding.form_component_editor import (
     normalize_form_component_editor_artifacts,
     normalize_form_component_dual_apaas_json,
@@ -411,6 +412,7 @@ def _resolve_default_npm_registry() -> str:
             text=True,
             timeout=5,
             env=env,
+            **runtime.subprocess_window_kwargs(),
         )
         resolved_registry = (result.stdout or "").strip()
         if result.returncode == 0 and resolved_registry and resolved_registry != "undefined":
@@ -617,6 +619,7 @@ async def _run_command(
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=str(workspace_path),
                 env=_build_command_env(command),
+                **runtime.subprocess_window_kwargs(),
             )
         else:
             proc = await asyncio.create_subprocess_shell(
@@ -625,6 +628,7 @@ async def _run_command(
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=str(workspace_path),
                 env=_build_command_env(command),
+                **runtime.subprocess_window_kwargs(),
             )
         try:
             output = await asyncio.wait_for(
@@ -659,6 +663,7 @@ async def _spawn_one_serve(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=env,
+            **runtime.subprocess_window_kwargs(),
         )
     except Exception as e:
         await _emit_progress(progress_callback, f"[{label}] 启动失败: {e}\n")
@@ -842,6 +847,7 @@ async def _start_serve(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=env,
+            **runtime.subprocess_window_kwargs(),
         )
     except Exception as e:
         return _json.dumps({"status": "error", "message": f"启动失败: {e}"})

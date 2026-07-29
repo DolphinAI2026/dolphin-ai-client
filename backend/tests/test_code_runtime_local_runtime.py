@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base
+from app.code_runtime import local_runtime as local_runtime_module
 from app.engineering_sessions.models import EngineeringSession
 from app.harness.llm_resolver import ResolvedLLMConfig
 from app.models import Application, RegisteredWorkspace
@@ -183,6 +184,16 @@ def _manager_status(
         "builder_url": "http://127.0.0.1:19090/builder/",
         "started_at": "2026-07-20T00:00:00Z",
     }
+
+
+def test_workspace_path_identity_accepts_equivalent_windows_paths():
+    assert local_runtime_module._workspace_path_identity(
+        r"\\?\C:\Users\Administrator\DolphinCode\applications\crm",
+        windows=True,
+    ) == local_runtime_module._workspace_path_identity(
+        r"C:/Users/Administrator/DolphinCode/applications/crm",
+        windows=True,
+    )
 
 
 def _client(

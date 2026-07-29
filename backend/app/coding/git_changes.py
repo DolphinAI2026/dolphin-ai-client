@@ -22,6 +22,8 @@ import subprocess
 from functools import lru_cache
 from pathlib import Path
 
+from app import runtime
+
 logger = logging.getLogger(__name__)
 
 _GIT_TIMEOUT = 60  # 基线提交可能要加几千个文件，给足余量
@@ -65,6 +67,7 @@ def _git(ws_path: Path, *args: str, identity: bool = False) -> subprocess.Comple
         cmd, capture_output=True, text=True, timeout=_GIT_TIMEOUT,
         # 防止外层环境变量(GIT_DIR / GIT_INDEX_FILE 等)串进来
         env={"PATH": os.environ.get("PATH", ""), "HOME": str(Path.home())},
+        **runtime.subprocess_window_kwargs(),
     )
 
 
