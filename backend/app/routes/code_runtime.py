@@ -1337,9 +1337,14 @@ async def list_code_runtime_rail_history(
     request: Request,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    source: Literal["local", "remote"] = "remote",
 ):
     started = time.monotonic()
-    if runtime.is_desktop() and ctx.user.account_source == "control_plane":
+    if (
+        source == "remote"
+        and runtime.is_desktop()
+        and ctx.user.account_source == "control_plane"
+    ):
         try:
             result = await _desktop_remote_rail_history(ctx, db)
         except Exception:
@@ -1365,6 +1370,9 @@ async def list_code_runtime_rail_history(
             external_application_id,
             literal("session:") + cast(AIChatSession.id, String),
         )
+        source_filters = []
+        if source == "local":
+            source_filters.append(external_application_id.like("local-%"))
         representative_shells = (
             select(
                 AIChatSession.id.label("shell_session_id"),
@@ -1396,6 +1404,7 @@ async def list_code_runtime_rail_history(
                         CodeRuntimeBinding.external_application_id != "",
                     ),
                 ),
+                *source_filters,
             )
             .subquery()
         )

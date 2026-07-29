@@ -3801,6 +3801,61 @@ async def test_desktop_rail_history_uses_remote_builder_shells_and_caches_openab
 
 
 @pytest.mark.asyncio
+async def test_desktop_local_rail_history_excludes_cached_remote_shells(
+    db_session,
+    monkeypatch,
+):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import list_code_runtime_rail_history
+
+    monkeypatch.setenv("DESKTOP_MODE", "1")
+    ctx = SimpleNamespace(
+        tenant_id=0,
+        user=SimpleNamespace(id=11, account_source="control_plane"),
+        control_plane_tenant_id="tenant-1",
+    )
+    db_session.add_all([
+        AIChatSession(
+            tenant_id=0,
+            control_plane_tenant_id="tenant-1",
+            user_id=11,
+            title="本地 CRM",
+            mode="code",
+            status="active",
+            external_application_id="local-crm",
+        ),
+        AIChatSession(
+            tenant_id=0,
+            control_plane_tenant_id="tenant-1",
+            user_id=11,
+            title="远端 CRM",
+            mode="code",
+            status="active",
+            external_application_id="remote-crm",
+        ),
+    ])
+    await db_session.commit()
+
+    async def unexpected_remote_history(*_args):
+        raise AssertionError("local rail history must not request remote Builder history")
+
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_desktop_remote_rail_history",
+        unexpected_remote_history,
+    )
+
+    result = await list_code_runtime_rail_history(
+        _request(),
+        ctx,
+        db_session,
+        source="local",
+    )
+
+    assert [app["external_application_id"] for app in result["apps"]] == ["local-crm"]
+
+
+@pytest.mark.asyncio
 async def test_list_code_runtime_rail_history_excludes_builder_workspace_code_sessions(db_session):
     from app.routes.code_runtime import list_code_runtime_rail_history
 

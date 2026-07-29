@@ -20,7 +20,12 @@ import {
   type AppMode,
 } from '@/stores/mode'
 import { aiChatApi, type AIChatSession } from '@/api/aiChat'
-import { codeRuntimeApi } from '@/api/codeRuntime'
+import {
+  CODE_APPLICATION_SOURCE_CHANGED_EVENT,
+  codeRuntimeApi,
+  loadStoredCodeApplicationSource,
+  type CodeApplicationSource,
+} from '@/api/codeRuntime'
 import { authApi } from '@/api/auth'
 import {
   getControlPlaneCodeSession,
@@ -48,6 +53,9 @@ const user = useUserStore()
 const theme = useThemeStore()
 const modeStore = useModeStore()
 const codeApplications = useCodeApplicationsStore()
+const codeApplicationSource = ref<CodeApplicationSource>(
+  __DESKTOP__ ? loadStoredCodeApplicationSource('local') : 'remote',
+)
 
 const desktopWorkspaceEntryScope = ref<DesktopWorkspaceEntryScope>('both')
 const visibleModeOrder = computed(() => __DESKTOP__
@@ -84,7 +92,7 @@ async function loadRailApps() {
     if (mode === 'code') {
       const page = await codeApplications.load(
         { tenantId: user.tenantId || 0, tenantEpoch: 0 },
-        { pageSize: 100 },
+        { source: codeApplicationSource.value, pageSize: 100 },
       )
       if (seq !== railAppsSeq || mode !== currentMode.value) return
       const items = page?.items || []
@@ -121,7 +129,7 @@ async function loadRailSessions() {
   const mode = currentMode.value
   try {
     if (mode === 'code') {
-      const history = await codeRuntimeApi.listRailHistory()
+      const history = await codeRuntimeApi.listRailHistory(codeApplicationSource.value)
       if (seq !== railSessionsSeq || mode !== currentMode.value) return
       codeRailHistory.value = history
       aiSessions.value = []
@@ -431,6 +439,13 @@ function onDesktopWorkspaceEntryScopeChanged(event: Event) {
   )
 }
 
+function onCodeApplicationSourceChanged(event: Event) {
+  const source = (event as CustomEvent<CodeApplicationSource | undefined>).detail
+  if (source !== 'local' && source !== 'remote') return
+  codeApplicationSource.value = source
+  refreshCodeRail()
+}
+
 onMounted(() => {
   const startupTasks: Promise<unknown>[] = [
     loadRailApps(),
@@ -443,6 +458,10 @@ onMounted(() => {
   window.addEventListener('code-rail-refresh', refreshCodeRail)
   if (__DESKTOP__) {
     window.addEventListener(
+      CODE_APPLICATION_SOURCE_CHANGED_EVENT,
+      onCodeApplicationSourceChanged,
+    )
+    window.addEventListener(
       'desktop-workspace-entry-scope-changed',
       onDesktopWorkspaceEntryScopeChanged,
     )
@@ -453,6 +472,10 @@ onBeforeUnmount(() => {
   window.removeEventListener('click', closeTenantMenu)
   window.removeEventListener('code-rail-refresh', refreshCodeRail)
   if (__DESKTOP__) {
+    window.removeEventListener(
+      CODE_APPLICATION_SOURCE_CHANGED_EVENT,
+      onCodeApplicationSourceChanged,
+    )
     window.removeEventListener(
       'desktop-workspace-entry-scope-changed',
       onDesktopWorkspaceEntryScopeChanged,

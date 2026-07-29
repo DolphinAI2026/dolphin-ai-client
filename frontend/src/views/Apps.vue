@@ -418,7 +418,13 @@ import AppIcon from '@/components/common/AppIcon.vue'
 import { handleError } from '@/utils/errorHandler'
 import { isDesktop, openExternal } from '@/utils/desktop'
 import { applicationApi, type ApplicationDeliveryAssetItem, type ApplicationDeliveryAssetsResponse } from '@/api/application'
-import { codeRuntimeApi, type CodeApplication, type CodeApplicationSource } from '@/api/codeRuntime'
+import {
+  codeRuntimeApi,
+  loadStoredCodeApplicationSource,
+  storeCodeApplicationSource,
+  type CodeApplication,
+  type CodeApplicationSource,
+} from '@/api/codeRuntime'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import { useCodeApplicationsStore } from '@/stores/codeApplications'
 import { isCodeRoutePath } from '@/stores/mode'
@@ -463,7 +469,9 @@ const codeApplicationSources: Array<{ label: string; value: CodeApplicationSourc
   { label: '本地应用', value: 'local' },
   { label: '远程应用', value: 'remote' },
 ]
-const codeApplicationSource = ref<CodeApplicationSource>(isDesktop ? loadStoredCodeSource() : 'remote')
+const codeApplicationSource = ref<CodeApplicationSource>(
+  isDesktop ? loadStoredCodeApplicationSource('local') : 'remote',
+)
 const pageTitle = computed(() => isCodeMode.value ? 'Code 应用' : '我的应用')
 const pageSubtitle = computed(() =>
   isCodeMode.value
@@ -540,14 +548,6 @@ function startNewApp() {
     return
   }
   router.push('/')
-}
-
-function loadStoredCodeSource(): CodeApplicationSource {
-  try {
-    return localStorage.getItem('dolphin-code-application-source-v1') === 'remote' ? 'remote' : 'local'
-  } catch {
-    return 'local'
-  }
 }
 
 function startNewCodeApp() {
@@ -1070,9 +1070,7 @@ watch(isCodeMode, () => {
 })
 watch(codeApplicationSource, source => {
   if (!isCodeMode.value) return
-  if (isDesktop) {
-    try { localStorage.setItem('dolphin-code-application-source-v1', source) } catch { /* private mode */ }
-  }
+  if (isDesktop) storeCodeApplicationSource(source)
   apps.value = []
   activeTab.value = 'all'
   currentPage.value = 1

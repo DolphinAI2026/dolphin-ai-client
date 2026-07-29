@@ -56,10 +56,15 @@ describe('RailSidebar unified session source (SP2b)', () => {
   })
 
   it('keeps the application-scoped sessions returned by Code rail history', () => {
-    expect(railSidebarSource).toContain('codeRuntimeApi.listRailHistory')
+    expect(railSidebarSource).toContain('codeRuntimeApi.listRailHistory(codeApplicationSource.value)')
     expect(railSidebarSource).toContain('codeRailHistory.value = history')
     expect(railSidebarSource).not.toContain('hydrateCodeRailHistory')
     expect(railSidebarSource).not.toContain('codeRuntimeApi.listAgentSessions')
+  })
+
+  it('keeps desktop Code applications and history on the selected local or remote source', () => {
+    expect(railSidebarSource).toContain('source: codeApplicationSource.value')
+    expect(railSidebarSource).toContain('CODE_APPLICATION_SOURCE_CHANGED_EVENT')
   })
 
   it('shows a newly created Code conversation before history refresh finishes', () => {

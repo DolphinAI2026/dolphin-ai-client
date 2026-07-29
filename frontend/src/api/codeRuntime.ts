@@ -11,6 +11,24 @@ export const CODE_RUNTIME_WORKSPACE_OPEN_TIMEOUT_MS = 690_000
 
 export type CodeApplicationSource = 'local' | 'remote'
 
+export const CODE_APPLICATION_SOURCE_STORAGE_KEY = 'dolphin-code-application-source-v1'
+export const CODE_APPLICATION_SOURCE_CHANGED_EVENT = 'code-application-source-changed'
+
+export function loadStoredCodeApplicationSource(
+  fallback: CodeApplicationSource,
+): CodeApplicationSource {
+  try {
+    const stored = localStorage.getItem(CODE_APPLICATION_SOURCE_STORAGE_KEY)
+    if (stored === 'local' || stored === 'remote') return stored
+  } catch { /* private mode */ }
+  return fallback
+}
+
+export function storeCodeApplicationSource(source: CodeApplicationSource): void {
+  try { localStorage.setItem(CODE_APPLICATION_SOURCE_STORAGE_KEY, source) } catch { /* private mode */ }
+  window.dispatchEvent(new CustomEvent(CODE_APPLICATION_SOURCE_CHANGED_EVENT, { detail: source }))
+}
+
 export interface CodeApplication extends MergedApplication {
   id: string
   external_application_id: string
@@ -173,8 +191,11 @@ export const codeRuntimeApi = {
       { local_workspace_path: localWorkspacePath },
     )
   },
-  listRailHistory() {
-    return request.get<any, CodeRailHistoryResponse>('/code/rail/history', { headers: controlPlaneCodeAuthorization() })
+  listRailHistory(source: CodeApplicationSource = 'remote') {
+    return request.get<any, CodeRailHistoryResponse>('/code/rail/history', {
+      params: { source },
+      ...(source === 'local' ? {} : { headers: controlPlaneCodeAuthorization() }),
+    })
   },
   listAgentSessions(shellSessionId: string) {
     return request.get<any, { sessions: CodeAgentSessionRecord[] }>(
