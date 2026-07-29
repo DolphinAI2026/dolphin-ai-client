@@ -864,6 +864,29 @@ impl DesktopBackend {
         Ok(self.snapshot_from_inner(&inner))
     }
 
+    fn persist_login_update(
+        &self,
+        generation: u64,
+        login: DesktopLoginConfig,
+    ) -> Result<Option<DesktopConfig>, DesktopBackendError> {
+        let mut inner = self.lock();
+        if !inner.lease.is_active_current(generation) || inner.phase != DesktopPhase::SavingConfig {
+            return Ok(None);
+        }
+        let config = inner
+            .config
+            .as_ref()
+            .ok_or_else(|| DesktopBackendError::config("桌面配置尚未初始化"))?;
+        let saved = self.config_store.save(DesktopSetupInput {
+            root_dir: config.root_dir.to_string_lossy().into_owned(),
+            login,
+            workspace_entry_scope: config.workspace_entry_scope,
+        })?;
+        let config = saved.config;
+        inner.config = Some(config.clone());
+        Ok(Some(config))
+    }
+
     fn queue_sidecar_terminated(
         &self,
         generation: u64,
@@ -1511,11 +1534,13 @@ fn run_retry(app: &AppHandle, generation: u64) {
 
 fn run_update_login(app: &AppHandle, generation: u64, login: DesktopLoginConfig) {
     let state = app.state::<DesktopBackend>();
-    let config = match state.lock().config.clone() {
-        Some(config) => config,
-        None => return,
+    let packaged_url = {
+        let inner = state.lock();
+        if inner.config.is_none() {
+            return;
+        }
+        inner.packaged_url.clone()
     };
-    let packaged_url = state.lock().packaged_url.clone();
     let navigation_result = navigate_packaged(app, &packaged_url);
     let sidecar = state.lock().take_sidecar();
     if let Some(sidecar) = sidecar {
@@ -1531,29 +1556,24 @@ fn run_update_login(app: &AppHandle, generation: u64, login: DesktopLoginConfig)
     if !state.operation_is_current(generation, DesktopPhase::SavingConfig) {
         return;
     }
-    let saved = match state.config_store.save(DesktopSetupInput {
-        root_dir: config.root_dir.to_string_lossy().into_owned(),
-        login,
-        workspace_entry_scope: config.workspace_entry_scope,
-    }) {
-        Ok(saved) => saved,
+    let config = match state.persist_login_update(generation, login) {
+        Ok(Some(config)) => config,
+        Ok(None) => return,
         Err(error) => {
             let mut inner = state.lock();
             if inner.lease.is_active_current(generation) {
                 inner.transition_to(DesktopPhase::NeedsSetup, "登录服务配置保存失败");
                 inner.setup_scope = DesktopSetupScope::LoginOnly;
-                inner.error = Some(error.into());
+                inner.error = Some(error);
             }
             return;
         }
     };
-    let config = saved.config;
     let manager_credentials = {
         let mut inner = state.lock();
         if !inner.lease.is_active_current(generation) {
             return;
         }
-        inner.config = Some(config.clone());
         inner.error = None;
         if let Some(runtime) = inner.runtime.as_ref() {
             let credentials = (runtime.base_url.clone(), runtime.token.clone());
@@ -1919,9 +1939,18 @@ mod tests {
         DesktopConfig, DesktopLoginConfig, DesktopLoginMode, WorkspaceEntryScope,
     };
     use std::cell::{Cell, RefCell};
+    use std::fs;
     use std::io::Write;
     use std::net::TcpListener;
     use std::path::PathBuf;
+
+    fn unique_backend_test_dir(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "dolphin-desktop-backend-{label}-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+        ))
+    }
 
     fn fixture_config(mode: DesktopLoginMode) -> DesktopConfig {
         DesktopConfig {
@@ -1965,6 +1994,50 @@ mod tests {
         assert_eq!(PathBuf::from(input.root_dir), config.root_dir);
         assert_eq!(input.login, config.login);
         assert_eq!(input.workspace_entry_scope, WorkspaceEntryScope::Apaas);
+    }
+
+    #[test]
+    fn in_flight_login_update_preserves_newer_workspace_scope() {
+        let temp = unique_backend_test_dir("workspace-scope-login-update");
+        let config_store = DesktopConfigStore::new(temp.join("system"));
+        let mut setup_input = fixture_setup_input();
+        setup_input.root_dir = temp.join("DolphinCode").to_string_lossy().into_owned();
+        let saved = config_store.save(setup_input).unwrap();
+        let (supervisor, receiver) = LifecycleSupervisor::channel();
+        let backend = DesktopBackend::new(
+            config_store.clone(),
+            saved.config.root_dir.clone(),
+            PathBuf::from("/tmp/agent-runtime"),
+            tauri::Url::parse("tauri://localhost/index.html").unwrap(),
+            supervisor,
+        );
+        backend.lock().config = Some(saved.config);
+
+        backend
+            .queue_update_login(fixture_config(DesktopLoginMode::Apaas).login)
+            .unwrap();
+        let (generation, login) = match receiver.recv().unwrap() {
+            LifecycleIntent::UpdateLogin { generation, login } => (generation, login),
+            _ => panic!("expected login update intent"),
+        };
+        assert!(backend.begin_operation(generation));
+
+        backend
+            .update_workspace_entry_scope(WorkspaceEntryScope::AiPlatform)
+            .unwrap();
+        let config = backend
+            .persist_login_update(generation, login)
+            .unwrap()
+            .unwrap();
+
+        let loaded = config_store.load().unwrap().unwrap().config;
+        assert_eq!(config, loaded);
+        assert_eq!(
+            loaded.workspace_entry_scope,
+            WorkspaceEntryScope::AiPlatform
+        );
+
+        fs::remove_dir_all(temp).unwrap();
     }
 
     #[test]
