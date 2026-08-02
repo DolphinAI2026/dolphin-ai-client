@@ -53,6 +53,14 @@ APAAS_HTTP_TIMEOUT = 180.0
 _call_log_buffer: list = []
 _call_log_lock = threading.Lock()
 
+# The Builder shows the platform app list immediately before importing one of
+# its rows.  aPaaS can rate-limit the second identical query, so reuse the
+# just-fetched list for a short window.  The token is part of the key, which
+# prevents data from one session being used by another session.
+_app_list_cache: dict[tuple[str, str, str, int, int], tuple[float, list]] = {}
+_app_list_cache_lock = threading.Lock()
+_APP_LIST_CACHE_TTL = 30.0
+
 
 def collect_call_log(
     method: str, url: str, request_body: str,
@@ -1406,7 +1414,13 @@ class APaaSClient:
 
     async def query_app_detail(self, app_id: str) -> dict:
         """查询单个应用详情（从应用列表中按 appId 过滤）"""
-        apps = await self.query_app_list()
+        cache_key = (self.base_url, self.tenant_id, self.token or "", 1, 200)
+        now = time.monotonic()
+        with _app_list_cache_lock:
+            cached = _app_list_cache.get(cache_key)
+            apps = cached[1] if cached and now - cached[0] <= _APP_LIST_CACHE_TTL else None
+        if apps is None:
+            apps = await self.query_app_list()
         for app in apps:
             if str(app.get("id", "")) == str(app_id) or str(app.get("appId", "")) == str(app_id):
                 return app
@@ -1648,7 +1662,11 @@ class APaaSClient:
             if data.get("code") == "ok":
                 result = data.get("table", [])
                 logger.info(f"查询到 {len(result)} 个应用")
-                return result if isinstance(result, list) else []
+                result = result if isinstance(result, list) else []
+                cache_key = (self.base_url, self.tenant_id, self.token or "", page, page_size)
+                with _app_list_cache_lock:
+                    _app_list_cache[cache_key] = (time.monotonic(), result)
+                return result
             return []
 
     async def query_operate_logs(
