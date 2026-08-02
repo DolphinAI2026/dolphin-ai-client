@@ -197,3 +197,45 @@ async def test_import_from_platform_falls_back_to_current_user_credential_when_e
         ("https://apaas-stale.example.com/backend", "TID_FALLBACK", "stale-token"),
         ("https://apaas-current.example.com/backend", "TID_FALLBACK", "current-token"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_import_from_platform_uses_effective_tenant_when_context_has_no_tenant(
+    db_session,
+):
+    tenant = Tenant(
+        tenant_name="effective tenant",
+        tenant_code="effective-import",
+        apaas_tenant_id_str="TID_EFFECTIVE",
+    )
+    user = User(username="effective-owner", hashed_password="x", is_active=True)
+    db_session.add_all([tenant, user])
+    await db_session.flush()
+    env = PlatformEnv(
+        tenant_id=tenant.id,
+        env_name="effective-default",
+        base_url="https://apaas-effective.example.com/backend",
+        platform_tenant_id="TID_EFFECTIVE",
+        token="effective-token",
+        is_default=True,
+        status="connected",
+    )
+    db_session.add(env)
+    await db_session.commit()
+
+    response = await crud.import_from_platform(
+        crud.ImportFromPlatformRequest(env_id=env.id, apaas_app_id="remote-effective"),
+        AuthContext(
+            user=user,
+            tenant_id=0,
+            tenant_role="platform_admin",
+            org_permissions={"*": True},
+            tenant_access_scope="unscoped",
+        ),
+        db_session,
+    )
+
+    assert response.platform_env_id == env.id
+    saved = await db_session.get(Application, response.id)
+    assert saved is not None
+    assert saved.tenant_id == tenant.id

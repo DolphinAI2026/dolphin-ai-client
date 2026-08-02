@@ -14,7 +14,7 @@ from app.database import get_db
 from app.models import User, Application, DocumentVersion, ChangePlan, ApiCallLog, PlatformEnv, Conversation, ConfigSnapshot, Tenant, APaaSUserCredential
 from app.auth import get_current_user
 from app.schemas import ApplicationCreate, ApplicationPageResponse, ApplicationResponse, MergedAppResponse
-from app.deps import get_auth_context, AuthContext
+from app.deps import get_auth_context, AuthContext, resolve_effective_tenant_id
 from app.permissions import check_resource_permission, Action
 from jose import JWTError, jwt
 from app.config import settings, APP_DEPLOY_ABSTRACT
@@ -133,10 +133,11 @@ def _application_stage_clause(stage: str | None):
 
 async def _resolve_current_apaas_tenant_id(db: AsyncSession, ctx: AuthContext) -> str:
     """Return the aPaaS tenant bound to the currently selected AI Builder tenant."""
-    if not ctx.tenant_id:
+    tenant_id = await resolve_effective_tenant_id(db, ctx)
+    if not tenant_id:
         return ""
     result = await db.execute(
-        select(Tenant.apaas_tenant_id_str).where(Tenant.id == ctx.tenant_id)
+        select(Tenant.apaas_tenant_id_str).where(Tenant.id == tenant_id)
     )
     return str(result.scalar_one_or_none() or "").strip()
 
@@ -150,11 +151,12 @@ async def _resolve_apaas_call_context(db: AsyncSession, ctx: AuthContext) -> tup
     tenant platform environment token, then the per-local-tenant user
     credential, before falling back to the legacy field.
     """
+    effective_tenant_id = await resolve_effective_tenant_id(db, ctx)
     bound_tenant_id = await _resolve_current_apaas_tenant_id(db, ctx)
 
     env_result = await db.execute(
         select(PlatformEnv)
-        .where(PlatformEnv.tenant_id == ctx.tenant_id)
+        .where(PlatformEnv.tenant_id == effective_tenant_id)
         .where(PlatformEnv.status == "connected")
         .order_by(desc(PlatformEnv.is_default), desc(PlatformEnv.updated_at), desc(PlatformEnv.id))
         .limit(1)
@@ -171,7 +173,7 @@ async def _resolve_apaas_call_context(db: AsyncSession, ctx: AuthContext) -> tup
     cred_result = await db.execute(
         select(APaaSUserCredential)
         .where(APaaSUserCredential.user_id == ctx.user.id)
-        .where(APaaSUserCredential.local_tenant_id == ctx.tenant_id)
+        .where(APaaSUserCredential.local_tenant_id == effective_tenant_id)
         .where(APaaSUserCredential.status == "connected")
         .order_by(desc(APaaSUserCredential.last_login_at), desc(APaaSUserCredential.updated_at), desc(APaaSUserCredential.id))
         .limit(1)
@@ -198,7 +200,8 @@ async def _list_remote_apps_for_current_builder_tenant(
     ctx: AuthContext,
 ) -> tuple[list, str | None, str | None]:
     """List remote low-code apps through the current local tenant binding."""
-    env = await _resolve_platform_env_for_tenant(db, ctx.tenant_id)
+    effective_tenant_id = await resolve_effective_tenant_id(db, ctx)
+    env = await _resolve_platform_env_for_tenant(db, effective_tenant_id)
     if env:
         token = (env.token or getattr(ctx.user, "apaas_token", "") or "").strip()
         if not token and not (env.username and env.password_enc):
@@ -1322,7 +1325,8 @@ async def _resolve_import_apaas_context(
     aPaaS bindings, so a stale env id from the UI should not block import when
     the current tenant still has a valid default env or user credential.
     """
-    env = await _resolve_platform_env_for_tenant(db, ctx.tenant_id, requested_env_id)
+    effective_tenant_id = await resolve_effective_tenant_id(db, ctx)
+    env = await _resolve_platform_env_for_tenant(db, effective_tenant_id, requested_env_id)
     if env:
         token = ((env.token or getattr(ctx.user, "apaas_token", "")) or "").strip()
         if token or (env.username and env.password_enc):
@@ -1330,7 +1334,7 @@ async def _resolve_import_apaas_context(
         logger.warning(
             "import platform app: resolved env=%s for tenant=%s has no usable token or credentials, falling back to user credential",
             env.id,
-            ctx.tenant_id,
+            effective_tenant_id,
         )
 
     base_url, tenant_id, token, source = await _resolve_apaas_call_context(db, ctx)
@@ -1345,7 +1349,7 @@ async def _resolve_import_apaas_context(
                 await db.execute(
                     select(PlatformEnv).where(
                         PlatformEnv.id == source_env_id,
-                        PlatformEnv.tenant_id == ctx.tenant_id,
+                        PlatformEnv.tenant_id == effective_tenant_id,
                     )
                 )
             ).scalar_one_or_none()
@@ -1379,7 +1383,9 @@ async def _query_import_app_detail_with_fallbacks(
         (base_url, platform_tenant_id, token, credential_source),
     ]
 
-    if env and env.username and env.password_enc:
+    env_relogin_attempted = False
+    if env and env.username and env.password_enc and not token:
+        env_relogin_attempted = True
         try:
             password = decrypt_password(env.password_enc)
             login_client = APaaSClient(
@@ -1404,11 +1410,12 @@ async def _query_import_app_detail_with_fallbacks(
         except Exception:
             logger.info("import platform app: environment re-login failed", exc_info=True)
 
+    effective_tenant_id = await resolve_effective_tenant_id(db, ctx)
     credential_result = await db.execute(
         select(APaaSUserCredential)
         .where(
             APaaSUserCredential.user_id == ctx.user.id,
-            APaaSUserCredential.local_tenant_id == ctx.tenant_id,
+            APaaSUserCredential.local_tenant_id == effective_tenant_id,
             APaaSUserCredential.status == "connected",
         )
         .order_by(
@@ -1483,6 +1490,30 @@ async def _query_import_app_detail_with_fallbacks(
             return detail, source, client
         except Exception as exc:
             last_error = exc
+            if env and env.username and env.password_enc and not env_relogin_attempted:
+                env_relogin_attempted = True
+                try:
+                    password = decrypt_password(env.password_enc)
+                    login_client = APaaSClient(
+                        base_url=env.base_url,
+                        tenant_id=env.platform_tenant_id,
+                    )
+                    login_result = await login_client.login(env.username, password)
+                    refreshed = (login_result.get("token") or "").strip()
+                    if refreshed:
+                        env.token = refreshed
+                        env.status = "connected"
+                        await db.commit()
+                        candidates.append(
+                            (
+                                env.base_url,
+                                env.platform_tenant_id,
+                                refreshed,
+                                f"platform_env:{env.id}",
+                            )
+                        )
+                except Exception:
+                    logger.info("import platform app: deferred environment re-login failed", exc_info=True)
 
     if last_error:
         raise last_error
@@ -1499,6 +1530,8 @@ async def import_from_platform(
     from app.platform_sync import sync_from_platform_full
     from app.services.config_to_spec import config_to_markdown
 
+    effective_tenant_id = await resolve_effective_tenant_id(db, ctx)
+
     # 1. 获取当前租户可用的 aPaaS 调用上下文。env_id 只作为优先项，避免新绑定链路
     # 已能列应用，但导入仍卡在旧 PlatformEnv.id 强校验上。
     env, base_url, platform_tenant_id, token, credential_source = await _resolve_import_apaas_context(
@@ -1511,7 +1544,7 @@ async def import_from_platform(
     # 2. 检查是否已导入
     existing = await db.execute(
         select(Application).where(
-            Application.tenant_id == ctx.tenant_id,
+            Application.tenant_id == effective_tenant_id,
             Application.apaas_app_id == body.apaas_app_id,
         )
     )
@@ -1530,10 +1563,20 @@ async def import_from_platform(
             body.apaas_app_id,
         )
     except Exception as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="平台 token 已过期，请在环境管理中重新登录后再导入",
-        ) from exc
+        detail = (
+            "平台 token 已过期，请在环境管理中重新登录后再导入"
+            if is_apaas_token_error(str(exc))
+            else "查询平台应用详情失败，请稍后重试"
+        )
+        logger.warning(
+            "平台应用导入详情查询失败 app_id=%s env_id=%s source=%s error=%s",
+            body.apaas_app_id,
+            resolved_env_id,
+            credential_source,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(status_code=400, detail=detail) from exc
 
     if not app_detail:
         raise HTTPException(status_code=404, detail="平台上未找到该应用")
@@ -1623,7 +1666,7 @@ async def import_from_platform(
     config_str = _dump_preview_config(config)
     new_app = Application(
         user_id=ctx.user.id,
-        tenant_id=ctx.tenant_id,
+        tenant_id=effective_tenant_id,
         created_by=ctx.user.id,
         app_name=app_name,
         app_code=resolved_app_code,
