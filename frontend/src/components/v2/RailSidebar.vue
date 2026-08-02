@@ -197,6 +197,23 @@ function toggleGroup(label: string) {
 
 const creatingCodeAgentSession = ref(false)
 const sessionGroups = computed<{ label: string; items: RailSession[]; shellSessionId?: string }[]>(() => {
+  if (currentMode.value === 'code' && user.isTenantAdmin) {
+    const map = new Map<string, RailSession[]>()
+    for (const s of railSessions.value) {
+      const userLabel = s.userLabel || '未标识用户'
+      const sandboxLabel = s.sandboxLabel || '未标识沙箱'
+      const key = `${userLabel} / ${sandboxLabel}`
+      if (!map.has(key)) map.set(key, [])
+      map.get(key)!.push(s)
+    }
+    return [...map.entries()].map(([label, items]) => ({
+      label: `用户：${label.split(' / ')[0]} · 沙箱：${label.split(' / ')[1]}`,
+      items,
+      ...(items.find(s => s.shellSessionId)?.shellSessionId
+        ? { shellSessionId: items.find(s => s.shellSessionId)!.shellSessionId }
+        : {}),
+    }))
+  }
   if (effectiveGroupBy.value === 'app') {
     const map = new Map<string, RailSession[]>()
     for (const s of railSessions.value) {

@@ -3732,6 +3732,43 @@ async def test_list_code_runtime_rail_history_excludes_unscoped_shells_for_contr
 
 
 @pytest.mark.asyncio
+async def test_tenant_admin_code_rail_history_includes_all_users_and_grouping_metadata(db_session):
+    from app.routes.code_runtime import list_code_runtime_rail_history
+
+    db_session.add_all([
+        AIChatSession(
+            tenant_id=7,
+            user_id=11,
+            title="Alice Code",
+            mode="code",
+            status="active",
+            external_application_id="alice-app",
+        ),
+        AIChatSession(
+            tenant_id=7,
+            user_id=12,
+            title="Bob Code",
+            mode="code",
+            status="active",
+            external_application_id="alice-app",
+        ),
+    ])
+    await db_session.commit()
+
+    context = SimpleNamespace(
+        user=SimpleNamespace(id=11, account_source="apaas", is_platform_admin=False),
+        tenant_id=7,
+        tenant_role="tenant_admin",
+        control_plane_tenant_id=None,
+    )
+
+    result = await list_code_runtime_rail_history(_request(), context, db_session)
+
+    assert {app["user_id"] for app in result["apps"]} == {11, 12}
+    assert all("user_name" in app for app in result["apps"])
+
+
+@pytest.mark.asyncio
 async def test_desktop_rail_history_uses_remote_builder_shells_and_caches_openable_ids(
     db_session,
     monkeypatch,
