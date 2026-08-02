@@ -194,9 +194,9 @@ export const codeRuntimeApi = {
       { local_workspace_path: localWorkspacePath },
     )
   },
-  listRailHistory(source: CodeApplicationSource = 'remote') {
+  listRailHistory(source: CodeApplicationSource = 'remote', scope: 'user' | 'tenant' = 'user') {
     return request.get<any, CodeRailHistoryResponse>('/code/rail/history', {
-      params: { source },
+      params: { source, scope },
       ...(source === 'local' ? {} : { headers: controlPlaneCodeAuthorization() }),
     })
   },

@@ -3762,10 +3762,16 @@ async def test_tenant_admin_code_rail_history_includes_all_users_and_grouping_me
         control_plane_tenant_id=None,
     )
 
-    result = await list_code_runtime_rail_history(_request(), context, db_session)
+    result = await list_code_runtime_rail_history(
+        _request(), context, db_session, scope="tenant"
+    )
 
     assert {app["user_id"] for app in result["apps"]} == {11, 12}
     assert all("user_name" in app for app in result["apps"])
+
+    user_result = await list_code_runtime_rail_history(_request(), context, db_session)
+    assert {app["user_id"] for app in user_result["apps"] if "user_id" in app} == set()
+    assert len(user_result["apps"]) == 1
 
 
 @pytest.mark.asyncio

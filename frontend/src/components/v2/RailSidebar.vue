@@ -197,23 +197,6 @@ function toggleGroup(label: string) {
 
 const creatingCodeAgentSession = ref(false)
 const sessionGroups = computed<{ label: string; items: RailSession[]; shellSessionId?: string }[]>(() => {
-  if (currentMode.value === 'code' && user.isTenantAdmin) {
-    const map = new Map<string, RailSession[]>()
-    for (const s of railSessions.value) {
-      const userLabel = s.userLabel || '未标识用户'
-      const sandboxLabel = s.sandboxLabel || '未标识沙箱'
-      const key = `${userLabel} / ${sandboxLabel}`
-      if (!map.has(key)) map.set(key, [])
-      map.get(key)!.push(s)
-    }
-    return [...map.entries()].map(([label, items]) => ({
-      label: `用户：${label.split(' / ')[0]} · 沙箱：${label.split(' / ')[1]}`,
-      items,
-      ...(items.find(s => s.shellSessionId)?.shellSessionId
-        ? { shellSessionId: items.find(s => s.shellSessionId)!.shellSessionId }
-        : {}),
-    }))
-  }
   if (effectiveGroupBy.value === 'app') {
     const map = new Map<string, RailSession[]>()
     for (const s of railSessions.value) {
@@ -1966,13 +1949,13 @@ html[data-theme="dark"] .rail-item { color: #a8b5c8; }
 .rail-sess-label {
   display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0;
   border: none; background: none; cursor: pointer;
-  font-size: 11px; color: var(--text-3, #777); padding: 4px 4px;
+  font-size: 13px; font-weight: 600; color: var(--text-2, #aaa); padding: 5px 4px;
 }
 .rail-sess-label:hover { color: var(--text-2, #aaa); }
 .rail-sess-chev { display: inline-flex; transition: transform .12s; }
 .rail-sess-chev.collapsed { transform: rotate(-90deg); }
 .rail-sess-chev :deep(svg) { width: 12px; height: 12px; }
-.rail-sess-glabel { flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rail-sess-glabel { flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
 .rail-sess-cnt { font-size: 10px; opacity: .7; }
 .rail-sess-item {
   display: flex; align-items: center; gap: 6px;

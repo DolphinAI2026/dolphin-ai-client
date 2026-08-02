@@ -1355,8 +1355,12 @@ async def list_code_runtime_rail_history(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
     source: Literal["local", "remote"] = "remote",
+    scope: Literal["user", "tenant"] = "user",
 ):
     started = time.monotonic()
+    tenant_history = scope == "tenant"
+    if tenant_history and not _can_view_tenant_code_history(ctx):
+        raise HTTPException(status_code=403, detail="仅租户管理员可查看租户级 Code 历史")
     if (
         source == "remote"
         and runtime.is_desktop()
@@ -1390,7 +1394,7 @@ async def list_code_runtime_rail_history(
         source_filters = []
         if source == "local":
             source_filters.append(external_application_id.like("local-%"))
-        user_scope = [] if _can_view_tenant_code_history(ctx) else [AIChatSession.user_id == ctx.user.id]
+        user_scope = [] if tenant_history else [AIChatSession.user_id == ctx.user.id]
         representative_shells = (
             select(
                 AIChatSession.id.label("shell_session_id"),
@@ -1449,7 +1453,7 @@ async def list_code_runtime_rail_history(
                     select(CodeRuntimeAgentSession)
                     .where(
                         _code_session_scope(CodeRuntimeAgentSession, ctx),
-                        *([] if _can_view_tenant_code_history(ctx) else [CodeRuntimeAgentSession.user_id == ctx.user.id]),
+                        *([] if tenant_history else [CodeRuntimeAgentSession.user_id == ctx.user.id]),
                         CodeRuntimeAgentSession.session_id.in_(shell_session_ids),
                         CodeRuntimeAgentSession.deleted_at.is_(None),
                     )
@@ -1492,7 +1496,7 @@ async def list_code_runtime_rail_history(
                 "runtime_session_id": binding.runtime_session_id if binding else None,
                 "sessions": [],
             }
-            if _can_view_tenant_code_history(ctx):
+            if tenant_history:
                 app["user_id"] = int(session.user_id)
                 app["user_name"] = user_names.get(int(session.user_id), str(session.user_id))
             if not binding:
@@ -1505,7 +1509,7 @@ async def list_code_runtime_rail_history(
                 _runtime_agent_snapshot_item(
                     snapshot,
                     current_runtime_id,
-                    include_sandbox=_can_view_tenant_code_history(ctx),
+                    include_sandbox=tenant_history,
                 )
                 for snapshot in snapshots_by_shell.get(int(session.id), [])
             ]
@@ -1519,7 +1523,7 @@ async def list_code_runtime_rail_history(
                         binding,
                         current_runtime_id,
                         session.title,
-                        include_sandbox=_can_view_tenant_code_history(ctx),
+                        include_sandbox=tenant_history,
                     ),
                 )
             apps.append(app)
