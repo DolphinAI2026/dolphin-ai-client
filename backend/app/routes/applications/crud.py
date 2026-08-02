@@ -1357,6 +1357,138 @@ async def _resolve_import_apaas_context(
     return source_env, base_url, tenant_id, token, source
 
 
+async def _query_import_app_detail_with_fallbacks(
+    db: AsyncSession,
+    ctx: AuthContext,
+    env: PlatformEnv | None,
+    base_url: str,
+    platform_tenant_id: str,
+    token: str,
+    credential_source: str,
+    app_id: str,
+) -> tuple[dict, str, APaaSClient]:
+    """Query an app using the current binding, then other valid user tokens.
+
+    A tenant environment token can expire independently of the user's current
+    aPaaS session.  The list dialog and import action are separate requests, so
+    the dialog may still render while the cached environment token has become
+    unusable.  Do not replace a shared tenant token with a user credential;
+    only use the latter as a request-local fallback.
+    """
+    candidates: list[tuple[str, str, str, str]] = [
+        (base_url, platform_tenant_id, token, credential_source),
+    ]
+
+    if env and env.username and env.password_enc:
+        try:
+            password = decrypt_password(env.password_enc)
+            login_client = APaaSClient(
+                base_url=env.base_url,
+                tenant_id=env.platform_tenant_id,
+            )
+            login_result = await login_client.login(env.username, password)
+            refreshed = (login_result.get("token") or "").strip()
+            if refreshed:
+                env.token = refreshed
+                env.status = "connected"
+                await db.commit()
+                candidates.insert(
+                    0,
+                    (
+                        env.base_url,
+                        env.platform_tenant_id,
+                        refreshed,
+                        f"platform_env:{env.id}",
+                    ),
+                )
+        except Exception:
+            logger.info("import platform app: environment re-login failed", exc_info=True)
+
+    credential_result = await db.execute(
+        select(APaaSUserCredential)
+        .where(
+            APaaSUserCredential.user_id == ctx.user.id,
+            APaaSUserCredential.local_tenant_id == ctx.tenant_id,
+            APaaSUserCredential.status == "connected",
+        )
+        .order_by(
+            desc(APaaSUserCredential.last_login_at),
+            desc(APaaSUserCredential.updated_at),
+            desc(APaaSUserCredential.id),
+        )
+        .limit(1)
+    )
+    credential = credential_result.scalar_one_or_none()
+    if credential:
+        credential_token = (credential.token or "").strip()
+        if credential_token:
+            candidates.append(
+                (
+                    (credential.base_url or base_url).rstrip("/"),
+                    (credential.apaas_tenant_id or platform_tenant_id).strip(),
+                    credential_token,
+                    f"user_credential:{credential.id}",
+                )
+            )
+        if not credential_token and credential.password_enc:
+            try:
+                password = decrypt_password(credential.password_enc)
+                login_client = APaaSClient(
+                    base_url=(credential.base_url or base_url).rstrip("/"),
+                    tenant_id=(credential.apaas_tenant_id or platform_tenant_id).strip(),
+                )
+                login_result = await login_client.login(credential.account, password)
+                refreshed = (login_result.get("token") or "").strip()
+                if refreshed:
+                    credential.token = refreshed
+                    credential.status = "connected"
+                    await db.commit()
+                    candidates.insert(
+                        0,
+                        (
+                            (credential.base_url or base_url).rstrip("/"),
+                            (credential.apaas_tenant_id or platform_tenant_id).strip(),
+                            refreshed,
+                            f"user_credential:{credential.id}",
+                        ),
+                    )
+            except Exception:
+                logger.info("import platform app: user credential re-login failed", exc_info=True)
+
+    legacy_token = (getattr(ctx.user, "apaas_token", "") or "").strip()
+    if legacy_token and legacy_token != token:
+        candidates.append(
+            (
+                (getattr(ctx.user, "apaas_base_url", "") or base_url).rstrip("/"),
+                (getattr(ctx.user, "apaas_tenant_id", "") or platform_tenant_id).strip(),
+                legacy_token,
+                "user_legacy",
+            )
+        )
+
+    seen: set[tuple[str, str, str]] = set()
+    last_error: Exception | None = None
+    for candidate_base_url, candidate_tenant_id, candidate_token, source in candidates:
+        key = (candidate_base_url, candidate_tenant_id, candidate_token)
+        if not candidate_token or key in seen:
+            continue
+        seen.add(key)
+        try:
+            client = APaaSClient(
+                base_url=candidate_base_url,
+                tenant_id=candidate_tenant_id,
+                token=candidate_token,
+            )
+            detail = await client.query_app_detail(app_id)
+            return detail, source, client
+        except Exception as exc:
+            last_error = exc
+
+    if last_error:
+        raise last_error
+    raise RuntimeError("no usable aPaaS token")
+
+
 @router.post("/import-from-platform", response_model=ApplicationResponse)
 async def import_from_platform(
     body: ImportFromPlatformRequest,
@@ -1385,34 +1517,23 @@ async def import_from_platform(
     )
     existing_app = existing.scalar_one_or_none()
 
-    # 3. 创建 client，获取应用信息
-    client = APaaSClient(
-        base_url=base_url,
-        tenant_id=platform_tenant_id,
-        token=token,
-    )
-
+    # 3. 获取应用信息；失败时在候选凭据之间回退。
     try:
-        app_detail = await client.query_app_detail(body.apaas_app_id)
-    except Exception:
-        # token 可能过期，尝试刷新
-        if env and env.username and env.password_enc:
-            try:
-                password = decrypt_password(env.password_enc)
-                login_result = await client.login(env.username, password)
-                env.token = login_result.get("token", "")
-                env.status = "connected"
-                await db.commit()
-                client = APaaSClient(
-                    base_url=env.base_url,
-                    tenant_id=env.platform_tenant_id,
-                    token=env.token,
-                )
-                app_detail = await client.query_app_detail(body.apaas_app_id)
-            except Exception as e:
-                raise HTTPException(status_code=400, detail=f"获取应用信息失败: {e}")
-        else:
-            raise HTTPException(status_code=400, detail="token 过期且无登录凭据")
+        app_detail, credential_source, client = await _query_import_app_detail_with_fallbacks(
+            db,
+            ctx,
+            env,
+            base_url,
+            platform_tenant_id,
+            token,
+            credential_source,
+            body.apaas_app_id,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="平台 token 已过期，请在环境管理中重新登录后再导入",
+        ) from exc
 
     if not app_detail:
         raise HTTPException(status_code=404, detail="平台上未找到该应用")

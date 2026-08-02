@@ -10,6 +10,7 @@ from app.routes.applications import crud
 
 class FakeAPaaSClient:
     calls: list[tuple[str, str, str | None]] = []
+    failing_tokens: set[str] = set()
 
     def __init__(self, *, base_url: str, tenant_id: str, token: str | None = None):
         self.base_url = base_url
@@ -19,6 +20,8 @@ class FakeAPaaSClient:
 
     async def query_app_detail(self, app_id: str) -> dict:
         assert self.token
+        if self.token in self.failing_tokens:
+            raise RuntimeError("token expired")
         return {
             "id": app_id,
             "appName": "平台导入应用",
@@ -47,6 +50,7 @@ def patch_import_dependencies(monkeypatch):
     from app.services import config_to_spec
 
     FakeAPaaSClient.calls = []
+    FakeAPaaSClient.failing_tokens = set()
     monkeypatch.setattr(crud, "APaaSClient", FakeAPaaSClient)
     monkeypatch.setattr(platform_sync, "sync_from_platform_full", _fake_sync_from_platform_full)
     monkeypatch.setattr(config_to_spec, "config_to_markdown", _fake_config_to_markdown)
@@ -144,3 +148,52 @@ async def test_import_from_platform_uses_user_credential_without_platform_env(db
     assert saved.tenant_id == tenant.id
     assert saved.platform_env_id is None
     assert saved.apaas_app_id == "remote-cred"
+
+
+@pytest.mark.asyncio
+async def test_import_from_platform_falls_back_to_current_user_credential_when_env_token_expired(
+    db_session,
+):
+    tenant = Tenant(
+        tenant_name="fallback tenant",
+        tenant_code="fallback-import",
+        apaas_tenant_id_str="TID_FALLBACK",
+    )
+    user = User(username="fallback-owner", hashed_password="x", is_active=True)
+    db_session.add_all([tenant, user])
+    await db_session.flush()
+    env = PlatformEnv(
+        tenant_id=tenant.id,
+        env_name="stale-env",
+        base_url="https://apaas-stale.example.com/backend",
+        platform_tenant_id="TID_FALLBACK",
+        token="stale-token",
+        is_default=True,
+        status="connected",
+    )
+    credential = APaaSUserCredential(
+        user_id=user.id,
+        local_tenant_id=tenant.id,
+        apaas_user_id="U_FALLBACK",
+        apaas_tenant_id="TID_FALLBACK",
+        base_url="https://apaas-current.example.com/backend",
+        account="fallback-owner",
+        password_enc=encrypt_password("unused-after-token-fallback"),
+        token="current-token",
+        status="connected",
+    )
+    db_session.add_all([env, credential])
+    await db_session.commit()
+    FakeAPaaSClient.failing_tokens = {"stale-token"}
+
+    response = await crud.import_from_platform(
+        crud.ImportFromPlatformRequest(env_id=env.id, apaas_app_id="remote-fallback"),
+        AuthContext(user=user, tenant_id=tenant.id, tenant_role="tenant_admin", org_permissions={}),
+        db_session,
+    )
+
+    assert response.apaas_app_id == "remote-fallback"
+    assert FakeAPaaSClient.calls[-2:] == [
+        ("https://apaas-stale.example.com/backend", "TID_FALLBACK", "stale-token"),
+        ("https://apaas-current.example.com/backend", "TID_FALLBACK", "current-token"),
+    ]
