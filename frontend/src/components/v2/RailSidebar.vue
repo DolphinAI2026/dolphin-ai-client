@@ -1666,6 +1666,246 @@ html[data-theme="dark"] .rail-expand-top {
   color: var(--text-3);
 }
 
+/* Sidebar refinement: quieter chrome, clearer hierarchy, and a stronger active state. */
+.rail {
+  width: 248px;
+  background: #f7f9fc;
+  border-right: 1px solid #e3e8f0;
+}
+
+.rail-brand {
+  min-height: 72px;
+  padding: 16px 16px 14px;
+  gap: 11px;
+  border-bottom: 1px solid #e8edf4;
+}
+
+.rail-logo {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  box-shadow: 0 7px 16px rgba(31, 82, 177, 0.18);
+}
+
+.rail-title {
+  font-size: 15px;
+  letter-spacing: -0.02em;
+}
+
+.rail-brand-copy::after {
+  content: 'AI 应用工作台';
+  display: block;
+  margin-top: 4px;
+  color: #8a96a8;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+}
+
+.rail-collapse-top {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: #77859a;
+}
+
+.rail-mode-switch {
+  margin: 14px 14px 10px;
+  padding: 3px;
+  gap: 3px;
+  border: 1px solid #e1e7f0;
+  border-radius: 10px;
+  background: #eef2f7;
+}
+
+.rail-mode-btn {
+  height: 30px;
+  border-radius: 8px;
+  color: #7b8799;
+  font-size: 12px;
+}
+
+.rail-mode-btn.active {
+  color: #1f56c7;
+  background: #fff;
+  box-shadow: 0 2px 7px rgba(25, 52, 96, 0.09);
+}
+
+.rail-scroll {
+  gap: 3px;
+  padding: 9px 12px 12px;
+}
+
+.rail-scroll::before {
+  content: '工作区';
+  display: block;
+  padding: 4px 10px 7px;
+  color: #9aa6b7;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+.rail-item {
+  min-height: 40px;
+  gap: 11px;
+  padding: 0 11px;
+  border-radius: 10px;
+  color: #56657a;
+  font-size: 13px;
+  transition: background .16s ease, color .16s ease, transform .16s ease;
+}
+
+.rail-item:hover {
+  color: #274d92;
+  background: #edf3ff;
+  transform: translateX(1px);
+}
+
+.rail-item.active {
+  color: #1f56c7;
+  background: #e9f1ff;
+  font-weight: 650;
+}
+
+.rail-item.active::before {
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 0 4px 4px 0;
+}
+
+.rail-item-icon {
+  width: 20px;
+  height: 20px;
+  color: #7d8ca3;
+}
+
+.rail-item.active .rail-item-icon,
+.rail-item:hover .rail-item-icon {
+  color: #2f65d5;
+}
+
+.rail-item-badge {
+  min-width: 20px;
+  height: 20px;
+  background: #dce9ff;
+  color: #2860ca;
+}
+
+.rail-sessions {
+  margin-top: 13px;
+  padding: 13px 9px 0;
+  border-top: 1px solid #e7ecf3;
+}
+
+.rail-sess-cap {
+  color: #97a3b4;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .1em;
+}
+
+.rail-sess-group {
+  margin-top: 5px;
+}
+
+.rail-sess-item {
+  min-height: 31px;
+  border-radius: 8px;
+  color: #68768a;
+}
+
+.rail-sess-item:hover,
+.rail-sess-item.active {
+  color: #2458bd;
+  background: #edf3ff;
+}
+
+.rail-hub {
+  margin: 5px 12px 8px;
+  padding: 11px 11px 0;
+  border-top: 1px solid #e5eaf2;
+}
+
+.rail-hub .rail-item-icon { color: #c88710; }
+
+.rail-foot {
+  padding: 12px 12px 14px;
+  border-top: 1px solid #e3e8f0;
+  background: #f4f7fb;
+}
+
+.rail-console {
+  gap: 8px;
+}
+
+.rail-console-label {
+  margin: 0 4px 1px;
+  color: #94a0b1;
+  font-size: 10px;
+  letter-spacing: .1em;
+}
+
+.tenant-switch {
+  min-height: 38px;
+  padding: 0 11px;
+  border-color: #e0e6ee;
+  border-radius: 10px;
+  background: #fff;
+  color: #34445b;
+}
+
+.tenant-switch:hover,
+.tenant-switch.open {
+  border-color: #b9cdf5;
+  background: #eef4ff;
+  color: #2458bd;
+}
+
+.account-row {
+  min-height: 48px;
+  margin-top: 2px;
+  padding: 10px 4px 0;
+  border-top-color: #e1e7f0;
+}
+
+.rail-avatar {
+  width: 30px;
+  height: 30px;
+  background: #285bd0;
+  box-shadow: 0 3px 8px rgba(40, 91, 208, .22);
+}
+
+.rail-user-name { color: #273952; }
+.rail-user-status { color: #8b98aa; }
+
+html[data-theme="dark"] .rail {
+  background: #151b25;
+  border-right-color: #273243;
+}
+
+html[data-theme="dark"] .rail-brand,
+html[data-theme="dark"] .rail-sessions,
+html[data-theme="dark"] .rail-hub,
+html[data-theme="dark"] .rail-foot,
+html[data-theme="dark"] .account-row {
+  border-color: #273243;
+}
+
+html[data-theme="dark"] .rail-foot { background: #121822; }
+html[data-theme="dark"] .rail-scroll::before,
+html[data-theme="dark"] .rail-console-label,
+html[data-theme="dark"] .rail-sess-cap { color: #748198; }
+html[data-theme="dark"] .tenant-switch { background: #1b2431; border-color: #2a374a; color: #d6deeb; }
+html[data-theme="dark"] .rail-item { color: #a8b5c8; }
+
+.rail-collapsed .rail-scroll::before,
+.rail-collapsed .rail-brand-copy { display: none; }
+.rail-collapsed .rail-brand { border-bottom: 0; }
+.rail-collapsed .rail-foot { background: transparent; }
+
 /* (deleted) html[data-theme="dark"] .accent-swatch.active — accent picker 死代码 */
 
 /* 得小帆·共性能力 共用入口(导航与页脚之间) */
@@ -1746,4 +1986,46 @@ html[data-theme="dark"] .rail-expand-top {
 .account-chev.open { transform: rotate(180deg); }
 .logout-row { width: 100%; }
 .logout-row:hover { color: #d9685e; }
+
+/* Final visual pass (kept at the end so it wins over legacy compatibility rules). */
+.rail { width: 248px; background: #f7f9fc; border-right-color: #e3e8f0; }
+.rail-brand { min-height: 72px; padding: 16px; border-bottom: 1px solid #e8edf4; }
+.rail-logo { width: 32px; height: 32px; border-radius: 9px; }
+.rail-brand-copy::after { content: 'AI 应用工作台'; display: block; margin-top: 4px; color: #8a96a8; font-size: 10.5px; font-weight: 500; letter-spacing: .03em; }
+.rail-mode-switch { margin: 14px 14px 10px; padding: 3px; gap: 3px; border-color: #e1e7f0; border-radius: 10px; background: #eef2f7; }
+.rail-mode-btn { height: 30px; border-radius: 8px; }
+.rail-mode-btn.active { color: #1f56c7; background: #fff; box-shadow: 0 2px 7px rgba(25,52,96,.09); }
+.rail-scroll { gap: 3px; padding: 9px 12px 12px; }
+.rail-scroll::before { content: '工作区'; display: block; padding: 4px 10px 7px; color: #9aa6b7; font-size: 10px; font-weight: 700; letter-spacing: .1em; }
+.rail-item { min-height: 40px; gap: 11px; padding: 0 11px; border-radius: 10px; color: #56657a; font-size: 13px; transition: background .16s ease, color .16s ease, transform .16s ease; }
+.rail-item:hover { color: #274d92; background: #edf3ff; transform: translateX(1px); }
+.rail-item.active { color: #1f56c7; background: #e9f1ff; font-weight: 650; }
+.rail-item.active::before { left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 0 4px 4px 0; }
+.rail-item-icon { width: 20px; height: 20px; color: #7d8ca3; }
+.rail-item.active .rail-item-icon, .rail-item:hover .rail-item-icon { color: #2f65d5; }
+.rail-item-badge { min-width: 20px; height: 20px; background: #dce9ff; color: #2860ca; }
+.rail-sessions { margin-top: 13px; padding: 13px 9px 0; border-top: 1px solid #e7ecf3; }
+.rail-sess-cap { color: #97a3b4; font-size: 10px; font-weight: 700; letter-spacing: .1em; }
+.rail-sess-item { min-height: 31px; border-radius: 8px; color: #68768a; }
+.rail-sess-item:hover, .rail-sess-item.active { color: #2458bd; background: #edf3ff; }
+.rail-hub { margin: 5px 12px 8px; padding: 11px 11px 0; border-top: 1px solid #e5eaf2; }
+.rail-hub .rail-item-icon { color: #c88710; }
+.rail-foot { padding: 12px 12px 14px; border-top: 1px solid #e3e8f0; background: #f4f7fb; }
+.rail-console { gap: 8px; }
+.rail-console-label { margin: 0 4px 1px; color: #94a0b1; font-size: 10px; letter-spacing: .1em; }
+.tenant-switch { min-height: 38px; padding: 0 11px; border-color: #e0e6ee; border-radius: 10px; background: #fff; color: #34445b; }
+.tenant-switch:hover, .tenant-switch.open { border-color: #b9cdf5; background: #eef4ff; color: #2458bd; }
+.account-row { min-height: 48px; margin-top: 2px; padding: 10px 4px 0; border-top-color: #e1e7f0; }
+.rail-avatar { width: 30px; height: 30px; background: #285bd0; box-shadow: 0 3px 8px rgba(40,91,208,.22); }
+.rail-user-name { color: #273952; }
+.rail-user-status { color: #8b98aa; }
+.rail-collapsed .rail-scroll::before, .rail-collapsed .rail-brand-copy { display: none; }
+.rail-collapsed .rail-brand { border-bottom: 0; }
+.rail-collapsed .rail-foot { background: transparent; }
+html[data-theme="dark"] .rail { background: #151b25; border-right-color: #273243; }
+html[data-theme="dark"] .rail-brand, html[data-theme="dark"] .rail-sessions, html[data-theme="dark"] .rail-hub, html[data-theme="dark"] .rail-foot, html[data-theme="dark"] .account-row { border-color: #273243; }
+html[data-theme="dark"] .rail-foot { background: #121822; }
+html[data-theme="dark"] .rail-scroll::before, html[data-theme="dark"] .rail-console-label, html[data-theme="dark"] .rail-sess-cap { color: #748198; }
+html[data-theme="dark"] .tenant-switch { background: #1b2431; border-color: #2a374a; color: #d6deeb; }
+html[data-theme="dark"] .rail-item { color: #a8b5c8; }
 </style>
