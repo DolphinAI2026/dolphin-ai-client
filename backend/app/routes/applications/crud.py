@@ -164,7 +164,7 @@ async def _resolve_apaas_call_context(db: AsyncSession, ctx: AuthContext) -> tup
     env = env_result.scalar_one_or_none()
     if env and (env.token or "").strip():
         return (
-            (settings.apaas_base_url or env.base_url or "").rstrip("/"),
+            (env.base_url or settings.apaas_base_url or "").rstrip("/"),
             (env.platform_tenant_id or bound_tenant_id or "").strip(),
             (env.token or "").strip(),
             f"platform_env:{env.id}",
@@ -181,14 +181,14 @@ async def _resolve_apaas_call_context(db: AsyncSession, ctx: AuthContext) -> tup
     cred = cred_result.scalar_one_or_none()
     if cred and (cred.token or "").strip():
         return (
-            (settings.apaas_base_url or cred.base_url or "").rstrip("/"),
+            (cred.base_url or settings.apaas_base_url or "").rstrip("/"),
             (cred.apaas_tenant_id or bound_tenant_id or "").strip(),
             (cred.token or "").strip(),
             f"user_credential:{cred.id}",
         )
 
     return (
-        (settings.apaas_base_url or ctx.user.apaas_base_url or "").rstrip("/"),
+        (ctx.user.apaas_base_url or settings.apaas_base_url or "").rstrip("/"),
         (bound_tenant_id or ctx.apaas_tenant_id or ctx.user.apaas_tenant_id or "").strip(),
         (ctx.user.apaas_token or "").strip(),
         "user_legacy",
