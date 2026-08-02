@@ -134,6 +134,39 @@ async def test_list_applications_include_config_false_omits_preview_keeps_counts
 
 
 @pytest.mark.asyncio
+async def test_list_applications_uses_effective_tenant_for_unscoped_platform_admin(db_session):
+    tenant, user = await _seed_user(db_session)
+    db_session.add(Application(
+        user_id=user.id,
+        tenant_id=tenant.id,
+        created_by=user.id,
+        app_name="Imported App",
+        app_code="imported-app",
+        status="completed",
+        apaas_app_id="remote-imported",
+    ))
+    await db_session.commit()
+
+    result = await list_applications(
+        AuthContext(
+            user=user,
+            tenant_id=0,
+            tenant_role="platform_admin",
+            org_permissions={"*": True},
+            tenant_access_scope="unscoped",
+        ),
+        db_session,
+        team_scope=None,
+        include_remote=False,
+        source_filter=None,
+        include_config=False,
+        app_type="low-code",
+    )
+
+    assert [app.apaas_app_id for app in result] == ["remote-imported"]
+
+
+@pytest.mark.asyncio
 async def test_list_applications_uses_current_tenant_platform_env_for_remote_apps(db_session, monkeypatch):
     from app.routes.applications import crud
 

@@ -438,9 +438,10 @@ async def list_applications(
     app_type: Optional[str] = Query(None),  # low-code / ai-code / all
 ):
     """获取应用列表（本地 + 得帆云平台合并）"""
+    effective_tenant_id = await resolve_effective_tenant_id(db, ctx)
     requested_app_type = _normalize_application_type(app_type)
     # 1. 查本地应用
-    query = select(Application).where(Application.tenant_id == ctx.tenant_id)
+    query = select(Application).where(Application.tenant_id == effective_tenant_id)
     if requested_app_type:
         query = query.where(Application.app_type == requested_app_type)
     if team_scope and team_scope.isdigit():
@@ -456,7 +457,7 @@ async def list_applications(
     try:
         from app.models import PlatformEnv
         env_result = await db.execute(
-            select(PlatformEnv).where(PlatformEnv.tenant_id == ctx.tenant_id)
+            select(PlatformEnv).where(PlatformEnv.tenant_id == effective_tenant_id)
         )
         all_envs = env_result.scalars().all()
         for env in all_envs:
