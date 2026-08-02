@@ -179,6 +179,13 @@ def _code_session_scope(model: Any, ctx: AuthContext):
     return model.tenant_id == ctx.tenant_id
 
 
+def _can_view_tenant_code_history(ctx: AuthContext) -> bool:
+    return bool(
+        getattr(ctx.user, "is_platform_admin", False)
+        or getattr(ctx, "tenant_role", "member") in {"platform_admin", "tenant_admin"}
+    )
+
+
 def _code_session_matches_context(session: AIChatSession, ctx: AuthContext) -> bool:
     control_plane_tenant_id = _control_plane_code_tenant_id(ctx)
     if control_plane_tenant_id:
@@ -968,9 +975,11 @@ def _runtime_session_placeholder(
     binding: CodeRuntimeBinding,
     runtime_session_id: str,
     fallback_title: str | None = None,
+    *,
+    include_sandbox: bool = False,
 ) -> dict[str, Any]:
     timestamp = binding.updated_at.isoformat() if binding.updated_at else None
-    return {
+    result = {
         "runtimeSessionId": runtime_session_id,
         "title": str(fallback_title or "").strip() or "未命名会话",
         "state": "running",
@@ -982,16 +991,21 @@ def _runtime_session_placeholder(
         "capabilityStale": False,
         "codexSessionResumable": True,
     }
+    if include_sandbox:
+        result["sandboxInstanceId"] = binding.sandbox_instance_id
+    return result
 
 
 def _runtime_agent_snapshot_item(
     row: CodeRuntimeAgentSession,
     current_runtime_id: str,
+    *,
+    include_sandbox: bool = False,
 ) -> dict[str, Any]:
     created_at = row.runtime_created_at or row.created_at
     updated_at = row.runtime_updated_at or row.updated_at
     last_active_at = row.last_active_at or updated_at
-    return {
+    result = {
         "runtimeSessionId": row.runtime_session_id,
         "title": row.title or row.summary or "未命名会话",
         "summary": row.summary,
@@ -1005,6 +1019,9 @@ def _runtime_agent_snapshot_item(
         "capabilityStale": bool(row.capability_stale),
         "codexSessionResumable": bool(row.codex_session_resumable),
     }
+    if include_sandbox:
+        result["sandboxInstanceId"] = row.sandbox_instance_id
+    return result
 
 
 async def _runtime_session_detail_or_none(
@@ -1373,11 +1390,12 @@ async def list_code_runtime_rail_history(
         source_filters = []
         if source == "local":
             source_filters.append(external_application_id.like("local-%"))
+        user_scope = [] if _can_view_tenant_code_history(ctx) else [AIChatSession.user_id == ctx.user.id]
         representative_shells = (
             select(
                 AIChatSession.id.label("shell_session_id"),
                 func.row_number().over(
-                    partition_by=representative_shell_key,
+                    partition_by=(AIChatSession.user_id, representative_shell_key),
                     order_by=(
                         AIChatSession.updated_at.desc(),
                         CodeRuntimeBinding.updated_at.desc(),
@@ -1389,7 +1407,7 @@ async def list_code_runtime_rail_history(
             .outerjoin(Application, Application.id == AIChatSession.app_id)
             .where(
                 _code_session_scope(AIChatSession, ctx),
-                AIChatSession.user_id == ctx.user.id,
+                *user_scope,
                 AIChatSession.mode == "code",
                 AIChatSession.status != "archived",
                 or_(AIChatSession.app_id.is_(None), Application.app_type == "ai-code"),
@@ -1431,7 +1449,7 @@ async def list_code_runtime_rail_history(
                     select(CodeRuntimeAgentSession)
                     .where(
                         _code_session_scope(CodeRuntimeAgentSession, ctx),
-                        CodeRuntimeAgentSession.user_id == ctx.user.id,
+                        *([] if _can_view_tenant_code_history(ctx) else [CodeRuntimeAgentSession.user_id == ctx.user.id]),
                         CodeRuntimeAgentSession.session_id.in_(shell_session_ids),
                         CodeRuntimeAgentSession.deleted_at.is_(None),
                     )
@@ -1449,6 +1467,15 @@ async def list_code_runtime_rail_history(
         for snapshot in snapshot_rows:
             snapshots_by_shell.setdefault(int(snapshot.session_id), []).append(snapshot)
 
+        user_ids = {int(session.user_id) for session, _binding in rows if session.user_id}
+        user_names: dict[int, str] = {}
+        if user_ids:
+            user_rows = await db.execute(select(User.id, User.display_name, User.username).where(User.id.in_(user_ids)))
+            user_names = {
+                int(user_id): str(display_name or username or user_id)
+                for user_id, display_name, username in user_rows.all()
+            }
+
         apps: list[dict[str, Any]] = []
         for session, binding in rows:
             external_id = str(
@@ -1465,6 +1492,9 @@ async def list_code_runtime_rail_history(
                 "runtime_session_id": binding.runtime_session_id if binding else None,
                 "sessions": [],
             }
+            if _can_view_tenant_code_history(ctx):
+                app["user_id"] = int(session.user_id)
+                app["user_name"] = user_names.get(int(session.user_id), str(session.user_id))
             if not binding:
                 apps.append(app)
                 continue
@@ -1472,7 +1502,11 @@ async def list_code_runtime_rail_history(
                 binding.runtime_session_id or ""
             ).strip() if binding else ""
             app["sessions"] = [
-                _runtime_agent_snapshot_item(snapshot, current_runtime_id)
+                _runtime_agent_snapshot_item(
+                    snapshot,
+                    current_runtime_id,
+                    include_sandbox=_can_view_tenant_code_history(ctx),
+                )
                 for snapshot in snapshots_by_shell.get(int(session.id), [])
             ]
             if binding and current_runtime_id and not any(
@@ -1485,6 +1519,7 @@ async def list_code_runtime_rail_history(
                         binding,
                         current_runtime_id,
                         session.title,
+                        include_sandbox=_can_view_tenant_code_history(ctx),
                     ),
                 )
             apps.append(app)

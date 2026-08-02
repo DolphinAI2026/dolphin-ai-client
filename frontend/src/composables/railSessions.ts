@@ -23,6 +23,10 @@ export interface RailSession {
   shellSessionId?: string
   runtimeSessionId?: string
   current?: boolean
+  userKey?: string
+  userLabel?: string
+  sandboxKey?: string
+  sandboxLabel?: string
 }
 
 export function normalizeAiSessions(
@@ -91,6 +95,8 @@ export function normalizeCodeRailHistory(history: CodeRailHistoryResponse | null
     const shellSessionId = String(app.shell_session_id || '').trim()
     if (!shellSessionId) continue
     const appName = String(app.app_name || app.app_code || app.external_application_id || '未关联应用').trim()
+    const userKey = String(app.user_id || '').trim()
+    const userLabel = String(app.user_name || app.user_id || '').trim()
     const runtimeSessions = app.sessions || []
     if (!runtimeSessions.length) {
       out.push({
@@ -102,6 +108,7 @@ export function normalizeCodeRailHistory(history: CodeRailHistoryResponse | null
         runtimeSessionId: undefined,
         current: false,
         source: 'code-shell',
+        ...(userKey ? { userKey, userLabel: userLabel || userKey, sandboxKey: 'unknown-sandbox', sandboxLabel: '未标识沙箱' } : {}),
       })
       continue
     }
@@ -118,6 +125,12 @@ export function normalizeCodeRailHistory(history: CodeRailHistoryResponse | null
         runtimeSessionId,
         current: Boolean(session.current),
         source: 'code-agent',
+        ...(userKey ? { userKey, userLabel: userLabel || userKey } : {}),
+        ...(userKey || session.sandboxInstanceId
+          ? session.sandboxInstanceId
+            ? { sandboxKey: String(session.sandboxInstanceId).trim(), sandboxLabel: String(session.sandboxInstanceId).trim() }
+            : { sandboxKey: 'unknown-sandbox', sandboxLabel: '未标识沙箱' }
+          : {}),
       })
     }
   }

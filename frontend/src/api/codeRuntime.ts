@@ -93,6 +93,7 @@ export interface CodeAgentSessionRecord {
   deletedAt?: string | null
   capabilityStale?: boolean | null
   codexSessionResumable?: boolean | null
+  sandboxInstanceId?: string | null
 }
 
 export interface CodeRailHistoryApp {
@@ -103,6 +104,8 @@ export interface CodeRailHistoryApp {
   runtime_session_id?: string | null
   sessions: CodeAgentSessionRecord[]
   error?: string | null
+  user_id?: number | null
+  user_name?: string | null
 }
 
 export interface CodeRailHistoryResponse {
