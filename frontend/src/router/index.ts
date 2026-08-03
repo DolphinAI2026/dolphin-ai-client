@@ -311,6 +311,7 @@ let previewStatusRestoreFailures = 0
 let previewStatusRestoreRetryAt = 0
 const PREVIEW_STATUS_RETRY_DELAYS_MS = [0, 1_000, 5_000, 30_000]
 let desktopBootstrapReadyForDocument = false
+let userRefreshRevision: number | null = null
 
 async function restorePreviewStatus(): Promise<boolean> {
   const previewStore = usePreviewStore()
@@ -382,6 +383,23 @@ export function installRouterGuards(targetRouter: Router): void {
   }
 
   if (to.meta.requiresAuth) {
+    // A tab can retain the previous Pinia user after its signed session
+    // changes. Refresh once per committed session before resolving the
+    // tenant URL, including the canonical `/apps` entry without tenantId.
+    const session = getAuthSessionState()
+    if (
+      to.meta.tenantContext === 'required'
+      && userStore.user
+      && session.token
+      && userRefreshRevision !== session.revision
+    ) {
+      userRefreshRevision = session.revision
+      try {
+        await userStore.fetchUser()
+      } catch {
+        // Tenant URL resolution remains fail-closed if the refresh is unavailable.
+      }
+    }
     const tenantResolution = await resolveTenantUrl(to, userStore, modeStore)
     if (tenantResolution !== true) {
       if (tenantResolution === false) {
