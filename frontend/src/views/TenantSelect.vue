@@ -77,9 +77,11 @@ const handleSelect = async (tenant: TenantOption) => {
     && !controller.signal.aborted
   )
   try {
+    const localTenantId = Number(tenant.tenant_id)
+    if (!Number.isSafeInteger(localTenantId) || !tenant.tenant_public_id) return
     commit = await userStore.selectTenant(
       selectionToken.value,
-      tenant.tenant_id,
+      localTenantId,
       tenant.tenant_public_id,
       controller.signal,
     )

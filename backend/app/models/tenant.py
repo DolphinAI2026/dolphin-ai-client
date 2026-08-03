@@ -38,6 +38,10 @@ class Tenant(Base):
         String(40), nullable=True, unique=True,
         comment="aPaaS 平台租户 ID；NULL=不强绑单一 apaas tenant",
     )
+    control_plane_tenant_id_str: Mapped[Optional[str]] = mapped_column(
+        String(80), nullable=True, unique=True, index=True,
+        comment="Control Plane 组织 ID；CP 登录时的权威租户身份",
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

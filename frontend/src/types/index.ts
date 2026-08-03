@@ -10,6 +10,8 @@ export interface User {
   tenant_name?: string
   control_plane_tenant_id?: string | null
   control_plane_tenant_name?: string | null
+  account_source?: 'apaas' | 'control_plane' | 'coding' | 'desktop' | string | null
+  tenant_authority?: 'builder' | 'control_plane' | string | null
   tenant_role?: string
   org_permissions?: Record<string, boolean>
 }
@@ -47,8 +49,8 @@ export interface PublicBuilderAuthSettings {
 }
 
 export interface TenantOption {
-  tenant_id: number
-  tenant_public_id: string
+  tenant_id: number | string
+  tenant_public_id?: string | null
   tenant_name: string
   tenant_code: string
 }

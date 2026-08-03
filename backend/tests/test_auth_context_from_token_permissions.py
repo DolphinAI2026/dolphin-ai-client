@@ -168,6 +168,85 @@ async def test_control_plane_code_resolves_bound_local_tenant(shared_db):
     assert query_ctx.tenant_id == tenant.id
     assert query_ctx.apaas_tenant_id == "850079360340721665"
 
+    async with shared_db() as db:
+        persisted = await db.get(Tenant, tenant.id)
+        assert persisted.control_plane_tenant_id_str == "0"
+        assert header_ctx.tenant_access_scope == "control_plane_code"
+
+
+@pytest.mark.asyncio
+async def test_control_plane_code_prefers_stable_id_over_duplicate_name(shared_db):
+    from app.deps import get_auth_context_from_token
+
+    async with shared_db() as db:
+        mapped = Tenant(
+            tenant_name="同名组织",
+            tenant_code="mapped",
+            control_plane_tenant_id_str="cp-1",
+            apaas_tenant_id_str="apaas-1",
+        )
+        unrelated = Tenant(
+            tenant_name="同名组织",
+            tenant_code="unrelated",
+            apaas_tenant_id_str="apaas-2",
+        )
+        user = User(
+            username="cp-user",
+            hashed_password="x",
+            account_source="control_plane",
+            is_platform_admin=True,
+        )
+        db.add_all([mapped, unrelated, user])
+        await db.commit()
+        user_id = user.id
+
+    token = create_control_plane_code_token(
+        user_id,
+        control_plane_tenant_id="cp-1",
+        control_plane_tenant_name="同名组织",
+    )
+    ctx = await get_auth_context_from_token(token)
+    assert ctx.tenant_id == mapped.id
+    assert ctx.apaas_tenant_id == "apaas-1"
+
+
+@pytest.mark.asyncio
+async def test_control_plane_me_keeps_local_projection_as_builder_tenant(shared_db, monkeypatch):
+    from app.deps import AuthContext
+    from app.routes.auth.tenants_admin import get_me
+
+    async with shared_db() as db:
+        tenant = Tenant(
+            tenant_name="Builder 投影",
+            tenant_code="builder-projection",
+            control_plane_tenant_id_str="cp-builder",
+        )
+        user = User(
+            username="cp-builder-user",
+            hashed_password="x",
+            account_source="control_plane",
+            is_platform_admin=True,
+        )
+        db.add_all([tenant, user])
+        await db.flush()
+        ctx = AuthContext(
+            user=user,
+            tenant_id=tenant.id,
+            tenant_role="platform_admin",
+            org_permissions={"*": True},
+            tenant_access_scope="control_plane_code",
+            control_plane_tenant_id="cp-builder",
+            control_plane_tenant_name="CP 组织",
+        )
+        monkeypatch.setattr("app.runtime.is_desktop", lambda: False)
+        response = await get_me(ctx, db)
+
+    assert response.tenant_id == tenant.id
+    assert response.tenant_name == "Builder 投影"
+    assert response.control_plane_tenant_id == "cp-builder"
+    assert response.control_plane_tenant_name == "CP 组织"
+    assert response.tenant_authority == "control_plane"
+
 
 def test_wildcard_org_permission_allows_specific_actions():
     from app.permissions import has_org_permission, Action

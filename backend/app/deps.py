@@ -174,28 +174,41 @@ async def _resolve_control_plane_code_context(
     user: User,
     payload: dict,
 ) -> AuthContext | None:
-    """Resolve a Code organization to its bound local Builder tenant.
+    """Resolve the CP authority to its local Builder projection.
 
-    Control Plane Code tickets intentionally do not carry the local ``tid``.
-    That is correct for the Code tab, but Builder tenant-scoped endpoints still
-    need a local tenant to select the right PlatformEnv.  During the current
-    federation transition the durable link is the organization name plus the
-    local tenant's explicit aPaaS binding.  Only an unambiguous active match is
-    accepted; otherwise we retain the Code-only context instead of guessing.
+    ``control_plane_tenant_id_str`` is the durable mapping.  The old
+    name-based match is retained only as a one-time, unambiguous backfill for
+    installations created before the mapping column existed; it is never used
+    as the long-term lookup key and never falls back to a default local tenant.
     """
     context = _control_plane_code_context(user, payload)
-    if not context or not context.control_plane_tenant_name:
+    if not context:
         return context
 
     result = await db.execute(
         select(Tenant).where(
             Tenant.status == 1,
-            Tenant.tenant_name == context.control_plane_tenant_name,
-            Tenant.apaas_tenant_id_str.is_not(None),
-            Tenant.apaas_tenant_id_str != "",
+            Tenant.control_plane_tenant_id_str == context.control_plane_tenant_id,
         )
     )
     matches = result.scalars().all()
+    if not matches and context.control_plane_tenant_name:
+        # Compatibility migration for legacy rows. Require an aPaaS binding so
+        # an unrelated local tenant with the same display name is not selected.
+        legacy_result = await db.execute(
+            select(Tenant).where(
+                Tenant.status == 1,
+                Tenant.control_plane_tenant_id_str.is_(None),
+                Tenant.tenant_name == context.control_plane_tenant_name,
+                Tenant.apaas_tenant_id_str.is_not(None),
+                Tenant.apaas_tenant_id_str != "",
+            )
+        )
+        matches = legacy_result.scalars().all()
+        if len(matches) == 1:
+            matches[0].control_plane_tenant_id_str = context.control_plane_tenant_id
+            await db.commit()
+
     if len(matches) != 1:
         if matches:
             logger.warning(
@@ -210,7 +223,9 @@ async def _resolve_control_plane_code_context(
     tenant = matches[0]
     context.tenant_id = tenant.id
     context.apaas_tenant_id = str(tenant.apaas_tenant_id_str).strip() or None
-    context.tenant_access_scope = "tenant"
+    # Keep the CP authority visible even when a local projection is present.
+    # Builder resources use tenant_id; Code resources use control_plane_tenant_id.
+    context.tenant_access_scope = "control_plane_code"
     return context
 
 

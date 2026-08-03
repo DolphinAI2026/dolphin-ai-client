@@ -161,6 +161,8 @@ async def init_db():
             "ALTER TABLE tenants ADD COLUMN contact_email VARCHAR(128)",
             "ALTER TABLE tenants ADD COLUMN apaas_env_id INTEGER",
             "ALTER TABLE tenants ADD COLUMN apaas_tenant_id_str VARCHAR(40)",
+            "ALTER TABLE tenants ADD COLUMN control_plane_tenant_id_str VARCHAR(80)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_tenants_control_plane_tenant_id ON tenants(control_plane_tenant_id_str)",
             # PlatformEnv columns added after early installs. Existing dev/prod
             # MySQL tables may predate these fields; login now queries them.
             "ALTER TABLE platform_envs ADD COLUMN alias VARCHAR(50)",

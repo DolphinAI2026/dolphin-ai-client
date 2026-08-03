@@ -361,8 +361,9 @@ const userAccount = computed(() => user.user?.username || '')
 const userName = computed(() => user.user?.display_name || userAccount.value || '未登录')
 const userAvatarText = computed(() => Array.from(userName.value.trim())[0]?.toUpperCase() || 'U')
 const tenantOptions = computed(() => user.availableTenants || [])
-const currentTenantValue = computed(() => currentMode.value === 'code'
-  ? (getControlPlaneCodeSession()?.tenantId || '')
+const isControlPlaneTenantAuthority = computed(() => user.user?.tenant_authority === 'control_plane')
+const currentTenantValue = computed(() => isControlPlaneTenantAuthority.value
+  ? (user.user?.control_plane_tenant_id || getControlPlaneCodeSession()?.tenantId || '')
   : (user.tenantId ? String(user.tenantId) : ''))
 function looksLikeLongId(value?: string | null) {
   return /^\d{12,}$/.test(String(value || '').trim())
@@ -386,7 +387,7 @@ function tenantSubtitle(tenant?: { tenant_name?: string | null; tenant_code?: st
 }
 
 const currentTenantLabel = computed(() => {
-  if (currentMode.value === 'code') {
+  if (isControlPlaneTenantAuthority.value && getControlPlaneCodeSession()?.tenantName) {
     return getControlPlaneCodeSession()?.tenantName || '未选择组织'
   }
   if (__DESKTOP__) {
@@ -517,10 +518,11 @@ async function selectTenant(value: string) {
   tenantMenuOpen.value = false
   const tenant = tenantOptions.value.find(item => String(item.tenant_id) === value)
   if (!tenant || value === currentTenantValue.value) return
-  if (currentMode.value === 'code' && !__DESKTOP__) {
+  if (isControlPlaneTenantAuthority.value && !__DESKTOP__) {
     const session = getControlPlaneCodeSession()
-    if (!session) return
-    const next = await authApi.switchControlPlaneCodeTenant(value, session.token)
+    const authToken = session?.token || user.token
+    if (!authToken) return
+    const next = await authApi.switchControlPlaneCodeTenant(value, authToken)
     setControlPlaneCodeSession(next.access_token)
     window.location.reload()
     return
@@ -531,10 +533,12 @@ async function selectTenant(value: string) {
   }
   const targetPublicId = tenant.tenant_public_id
   if (!targetPublicId) return
+  const localTenantId = Number(tenant.tenant_id)
+  if (!Number.isSafeInteger(localTenantId)) return
   const navigationEpoch = user.advanceTenantNavigationEpoch()
   const destination = withTenantId(MODE_META[currentMode.value].home, targetPublicId)
   await user.switchTenantContext(
-    tenant.tenant_id,
+    localTenantId,
     targetPublicId,
     destination,
     navigationEpoch,

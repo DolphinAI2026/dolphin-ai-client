@@ -1747,6 +1747,18 @@ async def switch_tenant(
     本地兜底平台管理员可以切到任意 active 租户；aPaaS 登录用户仅限自己可登录的
     active membership。aPaaS 平台管理员的全量租户同步不等于拥有工作台登录权限。
     """
+    if (
+        ctx.user.account_source == "control_plane"
+        and not runtime.is_desktop()
+        and (
+            ctx.tenant_access_scope == "control_plane_code"
+            or bool(getattr(ctx, "control_plane_tenant_id", None))
+        )
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Control Plane 登录必须通过组织切换，不能切换 Builder 本地租户",
+        )
     if runtime.is_desktop() and ctx.user.account_source == "control_plane":
         token = control_plane_access_token(ctx.user)
         if not token:

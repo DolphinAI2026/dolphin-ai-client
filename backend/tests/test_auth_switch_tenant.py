@@ -689,6 +689,31 @@ async def test_control_plane_code_switch_is_tab_scoped_and_does_not_touch_local_
 
 
 @pytest.mark.asyncio
+async def test_control_plane_context_rejects_builder_local_switch(db_session):
+    user = User(
+        username="remote-admin",
+        hashed_password=get_password_hash("secret"),
+        account_source="control_plane",
+        is_active=True,
+    )
+    tenant = Tenant(tenant_name="Builder 投影", tenant_code="cp-local-switch")
+    db_session.add_all([user, tenant])
+    await db_session.flush()
+    ctx = AuthContext(
+        user=user,
+        tenant_id=tenant.id,
+        tenant_role="platform_admin",
+        org_permissions={"*": True},
+        tenant_access_scope="control_plane_code",
+        control_plane_tenant_id="cp-1",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await switch_tenant(TenantSwitchRequest(tenant_id=tenant.id), ctx, db_session)
+    assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_create_tenant_requires_platform_admin(db_session):
     user, _ = await _seed_user_and_tenants(db_session, num_tenants=1, member_indices=[0])
     ctx = AuthContext(user=user, tenant_id=1, tenant_role="member", org_permissions={})

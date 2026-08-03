@@ -6,7 +6,7 @@ const TENANT_SWITCH_MARKER_KEY = 'tenant-url-switch'
 const TENANT_SWITCH_MARKER_TTL_MS = 30_000
 
 export interface TenantUrlTenant {
-  tenant_id: number
+  tenant_id: number | string
   tenant_public_id?: string | null
 }
 
@@ -116,9 +116,13 @@ export function classifyTenantTarget({
   ))
   if (!tenant) return { kind: 'reject', reason: 'inaccessible' }
 
-  return !isArray && raw === target
-    ? { kind: 'switch', tenantId: tenant.tenant_id, tenantPublicId: target }
-    : { kind: 'canonicalize', tenantPublicId: target }
+  if (!isArray && raw === target) {
+    const tenantId = Number(tenant.tenant_id)
+    if (Number.isSafeInteger(tenantId)) {
+      return { kind: 'switch', tenantId, tenantPublicId: target }
+    }
+  }
+  return { kind: 'canonicalize', tenantPublicId: target }
 }
 
 function routeReplace(

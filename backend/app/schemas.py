@@ -29,6 +29,8 @@ class UserInfo(BaseModel):
     tenant_public_id: Optional[str] = None
     control_plane_tenant_id: Optional[str] = None
     control_plane_tenant_name: Optional[str] = None
+    account_source: Optional[str] = None
+    tenant_authority: Optional[str] = None
     tenant_role: Optional[str] = None
     org_permissions: Optional[dict] = None
 

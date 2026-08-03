@@ -989,10 +989,11 @@ async def list_my_tenants(
     已明确绑定 PlatformEnv 的本地租户；未绑定的本地租户仍不在工作台切换范围内。
     """
     if (
-        ctx.user.account_source == "control_plane"
+        str(ctx.user.account_source or "").strip().lower() == "control_plane"
         and (
             runtime.is_desktop()
             or ctx.tenant_access_scope == "control_plane_code"
+            or bool(getattr(ctx, "control_plane_tenant_id", None))
         )
     ):
         token = control_plane_access_token(ctx.user)
@@ -1418,14 +1419,10 @@ async def get_me(ctx: Annotated[AuthContext, Depends(get_platform_auth_context)]
 
     is_desktop_control_plane_account = (
         ctx.user.account_source == "control_plane"
-        and (
-            (
-                runtime.is_desktop()
-                and bool((ctx.user.coding_tenant_id or "").strip())
-            )
-            or ctx.tenant_access_scope == "control_plane_code"
-        )
+        and runtime.is_desktop()
+        and bool((getattr(ctx, "control_plane_tenant_id", None) or ctx.user.coding_tenant_id or "").strip())
     )
+    is_control_plane_account = ctx.user.account_source == "control_plane"
     control_plane_tenant_id = (
         getattr(ctx, "control_plane_tenant_id", None)
         or (ctx.user.coding_tenant_id or "").strip()
@@ -1463,11 +1460,13 @@ async def get_me(ctx: Annotated[AuthContext, Depends(get_platform_auth_context)]
         ),
         tenant_public_id=tenant_public_id,
         control_plane_tenant_id=(
-            control_plane_tenant_id if is_desktop_control_plane_account else None
+            control_plane_tenant_id if is_control_plane_account else None
         ),
         control_plane_tenant_name=(
-            control_plane_tenant_name if is_desktop_control_plane_account else None
+            control_plane_tenant_name if is_control_plane_account else None
         ),
         tenant_role=ctx.tenant_role,
         org_permissions=control_plane_permissions,
+        account_source=ctx.user.account_source,
+        tenant_authority="control_plane" if is_control_plane_account else "builder",
     )
