@@ -19,7 +19,7 @@ from app.database import Base
 from app import models  # noqa: F401  register ORM mappings
 from app.models import User
 from app.models.tenant import Tenant, UserTenant, Role
-from app.auth import create_access_token
+from app.auth import create_access_token, create_control_plane_code_token
 
 
 @pytest_asyncio.fixture
@@ -123,6 +123,50 @@ async def test_control_plane_tenant_claim_is_preserved_for_header_and_query_cont
 
     assert header_ctx.control_plane_tenant_id == "0"
     assert query_ctx.control_plane_tenant_id == "0"
+
+
+@pytest.mark.asyncio
+async def test_control_plane_code_resolves_bound_local_tenant(shared_db):
+    """Code org tickets must use the matching bound Builder tenant for env APIs."""
+    from app.deps import get_auth_context, get_auth_context_from_token
+
+    async with shared_db() as db:
+        tenant = Tenant(
+            tenant_name="admin 的组织",
+            tenant_code="admin-org",
+            apaas_tenant_id_str="850079360340721665",
+        )
+        db.add(tenant)
+        await db.flush()
+        user = User(
+            username="admin",
+            hashed_password="x",
+            account_source="control_plane",
+            is_platform_admin=True,
+        )
+        db.add(user)
+        await db.commit()
+        user_id = user.id
+
+    token = create_control_plane_code_token(
+        user_id,
+        control_plane_tenant_id="0",
+        control_plane_tenant_name="admin 的组织",
+        control_plane_tenant_role="platform_admin",
+        control_plane_permissions={"*": True},
+    )
+
+    async with shared_db() as db:
+        header_ctx = await get_auth_context(
+            HTTPAuthorizationCredentials(scheme="Bearer", credentials=token),
+            db,
+        )
+    query_ctx = await get_auth_context_from_token(token)
+
+    assert header_ctx.tenant_id == tenant.id
+    assert header_ctx.apaas_tenant_id == "850079360340721665"
+    assert query_ctx.tenant_id == tenant.id
+    assert query_ctx.apaas_tenant_id == "850079360340721665"
 
 
 def test_wildcard_org_permission_allows_specific_actions():

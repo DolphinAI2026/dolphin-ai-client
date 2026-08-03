@@ -169,6 +169,51 @@ def _control_plane_code_context(user: User, payload: dict) -> AuthContext | None
     )
 
 
+async def _resolve_control_plane_code_context(
+    db: AsyncSession,
+    user: User,
+    payload: dict,
+) -> AuthContext | None:
+    """Resolve a Code organization to its bound local Builder tenant.
+
+    Control Plane Code tickets intentionally do not carry the local ``tid``.
+    That is correct for the Code tab, but Builder tenant-scoped endpoints still
+    need a local tenant to select the right PlatformEnv.  During the current
+    federation transition the durable link is the organization name plus the
+    local tenant's explicit aPaaS binding.  Only an unambiguous active match is
+    accepted; otherwise we retain the Code-only context instead of guessing.
+    """
+    context = _control_plane_code_context(user, payload)
+    if not context or not context.control_plane_tenant_name:
+        return context
+
+    result = await db.execute(
+        select(Tenant).where(
+            Tenant.status == 1,
+            Tenant.tenant_name == context.control_plane_tenant_name,
+            Tenant.apaas_tenant_id_str.is_not(None),
+            Tenant.apaas_tenant_id_str != "",
+        )
+    )
+    matches = result.scalars().all()
+    if len(matches) != 1:
+        if matches:
+            logger.warning(
+                "control_plane tenant mapping is ambiguous user_id=%s cp_tid=%s name=%s matches=%s",
+                user.id,
+                context.control_plane_tenant_id,
+                context.control_plane_tenant_name,
+                [tenant.id for tenant in matches],
+            )
+        return context
+
+    tenant = matches[0]
+    context.tenant_id = tenant.id
+    context.apaas_tenant_id = str(tenant.apaas_tenant_id_str).strip() or None
+    context.tenant_access_scope = "tenant"
+    return context
+
+
 def platform_admin_has_unscoped_tenant_access(user: User) -> bool:
     """Return whether a platform admin may enter any active local tenant.
 
@@ -265,7 +310,7 @@ async def _get_auth_context_allow_platform_only(
             user = result.scalar_one_or_none()
             if not user or not user.is_active:
                 raise credentials_exception
-            control_plane_context = _control_plane_code_context(user, payload)
+            control_plane_context = await _resolve_control_plane_code_context(db, user, payload)
             if not control_plane_context:
                 raise credentials_exception
             return control_plane_context
@@ -464,7 +509,7 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
             raise ValueError("User not found")
         if not user.is_active:
             raise ValueError("User is disabled")
-        control_plane_context = _control_plane_code_context(user, payload)
+        control_plane_context = await _resolve_control_plane_code_context(db, user, payload)
         if control_plane_context:
             return control_plane_context
 
