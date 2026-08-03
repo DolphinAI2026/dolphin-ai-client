@@ -27,6 +27,7 @@ from app.models import User, Conversation, Message, Project, Application, Regist
 from app.deps import get_auth_context, AuthContext, auth_from_header_or_query
 from app.coding.scenes import SceneType, get_scene, get_all_scenes, get_scenes_by_category
 from app.coding.workspace import WorkspaceManager, ProjectType
+from app.code_runtime.local_runtime import local_workspace_scope_tenant_id
 from app.llm_client import LLMClient
 from app.apaas_client import APaaSClient
 from app.config import settings
@@ -610,9 +611,11 @@ async def open_local_workspace(
     if _is_sensitive_dir(p):
         raise HTTPException(status_code=400, detail="该目录是系统/家目录根，过于宽泛，请选具体项目文件夹")
     resolved_abs = str(p.resolve())
+    scope_tenant_id = local_workspace_scope_tenant_id(ctx)
     existing = (await db.execute(
         select(RegisteredWorkspace).where(
-            RegisteredWorkspace.tenant_id == ctx.tenant_id,
+            RegisteredWorkspace.tenant_id == scope_tenant_id,
+            RegisteredWorkspace.user_id == ctx.user.id,
             RegisteredWorkspace.abs_path == resolved_abs,
         )
     )).scalar_one_or_none()
@@ -628,7 +631,7 @@ async def open_local_workspace(
         ws_id = f"{ctx.user.id}_{uuid.uuid4().hex[:8]}"
         display_name = p.name
         db.add(RegisteredWorkspace(
-            ws_id=ws_id, abs_path=resolved_abs, user_id=ctx.user.id, tenant_id=ctx.tenant_id,
+            ws_id=ws_id, abs_path=resolved_abs, user_id=ctx.user.id, tenant_id=scope_tenant_id,
             workspace_type="external", apaas_app_id=apaas_app_id,
             display_name=display_name,
         ))
@@ -638,7 +641,8 @@ async def open_local_workspace(
             await db.rollback()
             existing = (await db.execute(
                 select(RegisteredWorkspace).where(
-                    RegisteredWorkspace.tenant_id == ctx.tenant_id,
+                    RegisteredWorkspace.tenant_id == scope_tenant_id,
+                    RegisteredWorkspace.user_id == ctx.user.id,
                     RegisteredWorkspace.abs_path == resolved_abs,
                 )
             )).scalar_one()
@@ -647,7 +651,7 @@ async def open_local_workspace(
             apaas_app_id = existing.apaas_app_id
     workspace_mgr.register_external(
         ws_id, resolved_abs,
-        user_id=ctx.user.id, tenant_id=ctx.tenant_id,
+        user_id=ctx.user.id, tenant_id=scope_tenant_id,
         apaas_app_id=apaas_app_id, display_name=display_name,
     )
     return {
@@ -1503,7 +1507,10 @@ async def list_workspaces(
 
     # external (打开本地文件夹) 工作区: 从 DB 注册表按租户合并进列表
     ext_rows = (await db.execute(
-        select(RegisteredWorkspace).where(RegisteredWorkspace.tenant_id == ctx.tenant_id)
+        select(RegisteredWorkspace).where(
+            RegisteredWorkspace.tenant_id == local_workspace_scope_tenant_id(ctx),
+            RegisteredWorkspace.user_id == ctx.user.id,
+        )
     )).scalars().all()
     for rw in ext_rows:
         workspaces.append({

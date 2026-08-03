@@ -93,4 +93,3 @@ def resolve_data_route(
 
 def is_local_authority(value: DataAuthority | str) -> bool:
     return DataAuthority(value) is DataAuthority.DESKTOP_LOCAL
-

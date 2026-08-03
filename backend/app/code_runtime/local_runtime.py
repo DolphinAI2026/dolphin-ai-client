@@ -1012,7 +1012,7 @@ async def _repo_metadata(
         await db.execute(
             select(WorkspaceGitRemote).where(
                 WorkspaceGitRemote.ws_id == workspace.ws_id,
-                WorkspaceGitRemote.tenant_id == int(ctx.tenant_id),
+                WorkspaceGitRemote.tenant_id == local_workspace_scope_tenant_id(ctx),
                 WorkspaceGitRemote.user_id == int(ctx.user.id),
             )
         )
