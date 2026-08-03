@@ -24,6 +24,21 @@ export interface BuilderModelOption {
   is_default: boolean
 }
 
+/**
+ * Normalize Builder/Control Plane adapters to the array shape used by pickers.
+ * Remote adapters may wrap the list in items, options, data or models.
+ */
+export function normalizeLlmOptions(payload: unknown): BuilderModelOption[] {
+  if (Array.isArray(payload)) return payload as BuilderModelOption[]
+  if (!payload || typeof payload !== 'object') return []
+
+  const body = payload as Record<string, unknown>
+  for (const key of ['items', 'options', 'data', 'models']) {
+    if (Array.isArray(body[key])) return body[key] as BuilderModelOption[]
+  }
+  return []
+}
+
 export interface ProviderPreset {
   provider: string
   label: string
@@ -49,8 +64,10 @@ export const llmConfigApi = {
   list: () => request.get<any, LlmConfig[]>('/llm-configs'),
 
   /** 获取指定用途可选模型列表 */
-  listOptions: (purpose = 'builder') =>
-    request.get<any, BuilderModelOption[]>('/llm-configs/options', { params: { purpose } }),
+  listOptions: async (purpose = 'builder') => {
+    const payload = await request.get<any, unknown>('/llm-configs/options', { params: { purpose } })
+    return normalizeLlmOptions(payload)
+  },
 
   /** 创建 LLM 配置 */
   create: (data: LlmConfigForm) => request.post<any, LlmConfig>('/llm-configs', data),
