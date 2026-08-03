@@ -1,10 +1,13 @@
-import httpx
 import asyncio
+import json
+
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.ai_chat.agent import (
     LLMConfigSnapshot,
     _build_initial_messages,
+    _compact_tool_result_for_context,
     _format_llm_error,
     _is_retryable_llm_error,
     _llm_chat_completions_url,
@@ -56,6 +59,28 @@ def test_ai_chat_formats_remote_protocol_error_as_gateway_disconnect():
 
     assert _is_retryable_llm_error(exc) is True
     assert _format_llm_error(exc) == "模型网关连接中途断开，未返回完整响应，请稍后重试。"
+
+
+def test_ai_chat_compacts_large_provider_tool_result_for_next_request():
+    payload = {
+        "ok": True,
+        "menu_id": "menu-1",
+        "message": "保存成功",
+        "platform_response": {
+            "code": "ok",
+            "message": "保存成功",
+            "data": {"nodes": [{"id": str(i), "definition": "x" * 2000} for i in range(30)]},
+        },
+    }
+
+    compacted = _compact_tool_result_for_context(json.dumps(payload, ensure_ascii=False))
+    result = json.loads(compacted)
+
+    assert len(compacted) <= 24_000
+    assert result["ok"] is True
+    assert result["menu_id"] == "menu-1"
+    assert result["platform_response"]["_omitted_large_fields"] is True
+    assert "data" not in result["platform_response"]
 
 
 def test_build_initial_messages_skips_llm_error_notices():

@@ -109,6 +109,7 @@ async def _append_knowledge_manifest(messages: list[dict], db) -> None:
 
 
 LLM_RETRY_ATTEMPTS = 2
+LLM_TOOL_RESULT_CONTEXT_MAX_CHARS = 24_000
 PERSISTED_TOOL_ARG_PREVIEW_CHARS = 240
 PERSISTED_TOOL_ARG_MAX_CHARS = 20_000
 _CONTENT_ARG_KEYS = {
@@ -124,6 +125,44 @@ _CONTENT_ARG_KEYS = {
     "new_string",
     "image_data_url",
 }
+
+
+def _compact_tool_result_for_context(result_text: str) -> str:
+    """Bound tool output sent back to the model without altering the audit record.
+
+    Some aPaaS write APIs echo the complete process definition in
+    ``platform_response.data``.  Keeping that response in the database is useful
+    for diagnostics, but replaying a megabyte-sized result into the next LLM
+    request makes the provider return a gateway 502.  Preserve the top-level
+    operation summary and replace only the oversized provider payload.
+    """
+    if len(result_text) <= LLM_TOOL_RESULT_CONTEXT_MAX_CHARS:
+        return result_text
+
+    try:
+        payload = json.loads(result_text)
+    except (TypeError, ValueError):
+        return result_text[:LLM_TOOL_RESULT_CONTEXT_MAX_CHARS] + (
+            f"\n... [工具结果已截断，原始 {len(result_text)} 字符]"
+        )
+
+    if isinstance(payload, dict):
+        provider_response = payload.get("platform_response")
+        if isinstance(provider_response, dict):
+            payload = dict(payload)
+            payload["platform_response"] = {
+                key: provider_response[key]
+                for key in ("code", "message", "status")
+                if key in provider_response
+            }
+            payload["platform_response"]["_omitted_large_fields"] = True
+        compacted = json.dumps(payload, ensure_ascii=False, default=str)
+        if len(compacted) <= LLM_TOOL_RESULT_CONTEXT_MAX_CHARS:
+            return compacted
+
+    return result_text[:LLM_TOOL_RESULT_CONTEXT_MAX_CHARS] + (
+        f"\n... [工具结果已截断，原始 {len(result_text)} 字符]"
+    )
 
 
 def _summarize_persisted_text(value: str) -> dict:
@@ -715,7 +754,9 @@ async def _build_initial_messages(
                     if not call_id:
                         continue
                     tc_db = tcs_by_call_id.get(call_id)
-                    result_content = (tc_db.result_text if tc_db else "") or ""
+                    result_content = _compact_tool_result_for_context(
+                        (tc_db.result_text if tc_db else "") or ""
+                    )
                     messages.append({
                         "role": "tool",
                         "tool_call_id": call_id,
@@ -1293,7 +1334,7 @@ async def _run_agent_inner(
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc_id,
-                "content": result_text,
+                "content": _compact_tool_result_for_context(result_text),
             })
 
         if asked_user:
