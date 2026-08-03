@@ -30,6 +30,7 @@ from app.code_runtime.local_runtime import (
     default_local_workspace_root,
     ensure_registered_local_workspace,
     local_workspace_path_text,
+    local_workspace_scope_tenant_id,
 )
 from app.code_runtime.execution_target import ExecutionTarget
 from app.models import Application, RegisteredWorkspace
@@ -767,7 +768,7 @@ async def list_code_applications(
             await db.execute(
                 select(RegisteredWorkspace)
                 .where(
-                    RegisteredWorkspace.tenant_id == int(ctx.tenant_id),
+                    RegisteredWorkspace.tenant_id == local_workspace_scope_tenant_id(ctx),
                     RegisteredWorkspace.user_id == int(ctx.user.id),
                     RegisteredWorkspace.apaas_app_id.like(f"{_LOCAL_APPLICATION_PREFIX}%"),
                 )

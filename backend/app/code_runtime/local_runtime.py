@@ -85,6 +85,15 @@ _MANAGER_INLINE_SECRET = re.compile(
 _MANAGER_URL_CREDENTIALS = re.compile(r"(?i)(https?://)[^/\s@]+@")
 
 
+def local_workspace_scope_tenant_id(ctx: Any) -> int:
+    """Use a device-local scope for desktop workspaces, not a remote tenant."""
+    return 0 if runtime.is_desktop() else int(ctx.tenant_id)
+
+
+def _is_local_session(session: Any) -> bool:
+    return _text(getattr(session, "external_application_id", None)).startswith("local-")
+
+
 def _error(status_code: int, code: str, message: str) -> HTTPException:
     return HTTPException(status_code=status_code, detail=f"{code}: {message}")
 
@@ -254,11 +263,12 @@ async def _workspace_for_id(
     ws_id: str,
     ctx: Any,
 ) -> RegisteredWorkspace:
+    scope_tenant_id = local_workspace_scope_tenant_id(ctx)
     owned = (
         await db.execute(
             select(RegisteredWorkspace).where(
                 RegisteredWorkspace.ws_id == ws_id,
-                RegisteredWorkspace.tenant_id == int(ctx.tenant_id),
+                RegisteredWorkspace.tenant_id == scope_tenant_id,
                 RegisteredWorkspace.user_id == int(ctx.user.id),
             )
         )
@@ -286,7 +296,8 @@ async def resolve_registered_workspace(
     session_tenant_id = getattr(session, "tenant_id", None)
     session_user_id = getattr(session, "user_id", None)
     if (
-        session_tenant_id is not None
+        not _is_local_session(session)
+        and session_tenant_id is not None
         and int(session_tenant_id) != int(ctx.tenant_id)
     ) or (
         session_user_id is not None
@@ -302,12 +313,13 @@ async def resolve_registered_workspace(
     if not workspace_id and application is None:
         external_application_id = _text(getattr(session, "external_application_id", None))
         if external_application_id:
+            scope_tenant_id = local_workspace_scope_tenant_id(ctx)
             owned = (
                 await db.execute(
                     select(RegisteredWorkspace)
                     .where(
                         RegisteredWorkspace.apaas_app_id == external_application_id,
-                        RegisteredWorkspace.tenant_id == int(ctx.tenant_id),
+                        RegisteredWorkspace.tenant_id == scope_tenant_id,
                         RegisteredWorkspace.user_id == int(ctx.user.id),
                     )
                     .limit(2)
@@ -377,10 +389,11 @@ async def ensure_registered_local_workspace(
         raise _error(409, _WORKSPACE_INVALID, "本地应用目录必须是绝对路径")
     resolved_abs = local_workspace_path_text(ws_dir.resolve(strict=False))
 
+    scope_tenant_id = local_workspace_scope_tenant_id(ctx)
     candidates = (
         await db.execute(
             select(RegisteredWorkspace).where(
-                RegisteredWorkspace.tenant_id == int(ctx.tenant_id),
+                RegisteredWorkspace.tenant_id == scope_tenant_id,
             )
         )
     ).scalars().all()
@@ -442,7 +455,7 @@ async def ensure_registered_local_workspace(
         ws_id=f"{int(ctx.user.id)}_{uuid.uuid4().hex[:8]}",
         abs_path=local_workspace_path_text(ws_dir.resolve()),
         user_id=int(ctx.user.id),
-        tenant_id=int(ctx.tenant_id),
+        tenant_id=scope_tenant_id,
         workspace_type="code-local-application",
         apaas_app_id=external_app_id,
         display_name=_text(display_name)[:200] or _safe_workspace_component(external_app_id),
@@ -472,10 +485,11 @@ async def rebind_registered_local_workspace(
     if not ws_dir.is_absolute():
         raise _error(409, _WORKSPACE_INVALID, "本地应用目录必须是绝对路径")
     resolved_abs = local_workspace_path_text(ws_dir.resolve(strict=False))
+    scope_tenant_id = local_workspace_scope_tenant_id(ctx)
     candidates = (
         await db.execute(
             select(RegisteredWorkspace).where(
-                RegisteredWorkspace.tenant_id == int(ctx.tenant_id),
+                RegisteredWorkspace.tenant_id == scope_tenant_id,
                 RegisteredWorkspace.id != workspace.id,
             )
         )
@@ -1584,7 +1598,7 @@ class LocalRuntimeClient:
                 codex_home = paths["codex_home"]
                 runtime_dir = paths["runtime_dir"]
                 context = build_runtime_context(
-                    tenant_id=int(ctx.tenant_id),
+                    tenant_id=local_workspace_scope_tenant_id(ctx),
                     application_id=application_id,
                     workspace_id=workspace.ws_id,
                     sandbox_instance_id=sandbox_instance_id,
