@@ -23,7 +23,6 @@ from app.auth import (
     create_control_plane_code_token,
     create_selection_token,
     get_password_hash,
-    verify_password,
 )
 from app.code_runtime.auth import (
     ControlPlaneAuthResult,
@@ -45,7 +44,12 @@ from app.deps import (
 )
 from app.config import settings
 from app import runtime
-from app.error_messages import SELECT_TOKEN_INVALID, SELECT_TOKEN_EXPIRED
+from app.error_messages import (
+    LOCAL_AUTH_RETIRED_CODE,
+    LOCAL_AUTH_RETIRED_MESSAGE,
+    SELECT_TOKEN_INVALID,
+    SELECT_TOKEN_EXPIRED,
+)
 from app.tenant_public_id import ensure_tenant_public_id
 from pydantic import BaseModel
 
@@ -978,14 +982,19 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
 
 def _auth_provider() -> str:
     provider = (getattr(settings, "auth_provider", "") or "").strip().lower()
-    provider = {
-        "self": "local",
-        "own": "local",
-        "native": "local",
-        "builtin": "local",
-        "coding": "control_plane",
-    }.get(provider, provider)
-    if provider not in ("", "local", "apaas", "control_plane"):
+    provider = {"coding": "control_plane"}.get(provider, provider)
+    if provider in {"", "self", "own", "native", "builtin", "local"}:
+        if provider in {"self", "own", "native", "builtin", "local"}:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail={
+                    "code": LOCAL_AUTH_RETIRED_CODE,
+                    "message": LOCAL_AUTH_RETIRED_MESSAGE,
+                },
+            )
+        # 空值也不能回退到历史本地认证，Control Plane 是统一默认入口。
+        return "control_plane"
+    if provider not in ("apaas", "control_plane"):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="AUTH_PROVIDER must be one of control_plane, apaas",
@@ -1131,25 +1140,14 @@ async def _issue_login_response_for_user(
 
 
 async def _local_login_response(user_data: UserLogin, db: AsyncSession) -> LoginResponse:
-    result = await db.execute(
-        select(User).where(User.username == user_data.username, User.account_source == "apaas")
+    # 保留内部符号仅为兼容旧导入；任何调用都必须失败关闭。
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail={
+            "code": LOCAL_AUTH_RETIRED_CODE,
+            "message": LOCAL_AUTH_RETIRED_MESSAGE,
+        },
     )
-    user = result.scalar_one_or_none()
-
-    if not user or not verify_password(user_data.password, user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="用户名或密码错误",
-        )
-
-    response = await _issue_login_response_for_user(
-        db,
-        user,
-        plain_password=user_data.password,
-        allow_apaas_chain=True,
-    )
-    await db.commit()
-    return response
 
 
 def _control_plane_roles_include_admin(roles: list[str]) -> bool:
@@ -1451,9 +1449,6 @@ async def login(
 ):
     provider = _auth_provider()
 
-    if provider == "local":
-        return await _local_login_response(user_data, db)
-
     if provider == "control_plane":
         return await _control_plane_login_response(user_data, db)
 
@@ -1467,7 +1462,10 @@ async def login(
             detail="aPaaS 登录失败",
         )
 
-    return await _local_login_response(user_data, db)
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="登录服务配置无效",
+    )
 
 
 @router.post("/select-tenant", response_model=Token)

@@ -1,7 +1,7 @@
-"""桌面产品登录路由。与 /api/auth/login 的 aPaaS 链路完全分开。
+"""已退役的桌面本地账号兼容路由。
 
-- authority 模式(公网, 未配 public_account_base_url): 校验本地桌面账号密码, 签本地 JWT。
-- federation 模式(桌面 sidecar, 配了 public_account_base_url): 转发公网认证 + 本地镜像 user/tenant + 签本地 JWT。
+桌面端现在统一使用 ``/api/auth/login`` 的 Control Plane/aPaaS 认证。
+保留路由只为返回稳定的退役错误，避免旧客户端误以为可以创建本地账号。
 """
 import logging
 import secrets
@@ -12,16 +12,27 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import create_access_token, get_password_hash, _DESKTOP_ISSUER
+from app.auth import get_password_hash
 from app.config import settings
 from app.database import get_db
 from app.deps import get_auth_context, AuthContext, resolve_default_tenant_id_for_user
 from app.models import User
 from app import desktop_accounts as da
 from app import runtime
+from app.error_messages import LOCAL_AUTH_RETIRED_CODE, LOCAL_AUTH_RETIRED_MESSAGE
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/desktop-auth", tags=["desktop-auth"])
+
+
+def _retired() -> None:
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "code": LOCAL_AUTH_RETIRED_CODE,
+            "message": LOCAL_AUTH_RETIRED_MESSAGE,
+        },
+    )
 
 
 class DesktopLoginIn(BaseModel):
@@ -55,6 +66,7 @@ async def _remote_authenticate(base_url: str, username: str, password: str):
 
 
 async def _federation_login(db: AsyncSession, data: DesktopLoginIn, base_url: str) -> DesktopLoginOut:
+    _retired()
     remote = await _remote_authenticate(base_url, data.username, data.password)
     if not remote:
         raise HTTPException(status_code=401, detail="账号或密码错误")
@@ -74,6 +86,7 @@ async def _federation_login(db: AsyncSession, data: DesktopLoginIn, base_url: st
 
 
 async def _authority_login(db: AsyncSession, data: DesktopLoginIn) -> DesktopLoginOut:
+    _retired()
     user = await da.verify_desktop_account(db, data.username, data.password)
     if not user:
         raise HTTPException(status_code=401, detail="账号或密码错误")
@@ -87,9 +100,7 @@ async def _authority_login(db: AsyncSession, data: DesktopLoginIn) -> DesktopLog
 
 @router.post("/login", response_model=DesktopLoginOut)
 async def desktop_login(data: DesktopLoginIn, db: AsyncSession = Depends(get_db)):
-    if runtime.is_federation():
-        return await _federation_login(db, data, settings.public_account_base_url)
-    return await _authority_login(db, data)
+    _retired()
 
 
 class CreateAccountIn(BaseModel):
@@ -109,6 +120,7 @@ async def admin_create_account(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """平台管理员开桌面账号。仅 is_platform_admin=True 的用户可调用。"""
+    _retired()
     if not ctx.user.is_platform_admin:
         raise HTTPException(status_code=403, detail="仅平台管理员可开桌面账号")
     if len(data.password) < 8:
@@ -139,6 +151,7 @@ async def admin_list_accounts(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """平台管理员列出所有桌面账号。仅 is_platform_admin=True 可调用。"""
+    _retired()
     if not ctx.user.is_platform_admin:
         raise HTTPException(status_code=403, detail="仅平台管理员可管理桌面账号")
     users = (await db.execute(
@@ -175,6 +188,7 @@ async def admin_patch_account(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """平台管理员改密 / 停用 / 启用桌面账号。仅 is_platform_admin=True 可调用。"""
+    _retired()
     if not ctx.user.is_platform_admin:
         raise HTTPException(status_code=403, detail="仅平台管理员可管理桌面账号")
     user = (await db.execute(

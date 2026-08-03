@@ -60,6 +60,7 @@ from app.code_runtime.sandbox_auth import (
 )
 from app.code_runtime.sandbox_metrics import sandbox_auth_metrics
 from app.code_runtime.execution_target import is_desktop_agent_runtime_target
+from app.data_source import DataDomain, DataExecution, DataAuthority, resolve_data_route
 from app.code_runtime.local_runtime import (
     LocalRuntimeClient,
     rebind_registered_local_workspace,
@@ -579,7 +580,11 @@ async def list_code_runtime_applications(
 ):
     started = time.monotonic()
     try:
-        if source == "local":
+        route = resolve_data_route(
+            DataDomain.CODE,
+            execution=DataExecution.LOCAL if source == "local" else DataExecution.REMOTE,
+        )
+        if route.authority is DataAuthority.DESKTOP_LOCAL:
             authorization, auth_provider = None, None
         else:
             authorization, auth_provider = await _control_plane_request_auth(request, ctx, db)
@@ -617,7 +622,15 @@ async def create_code_runtime_application(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    if body.local_application:
+    route = resolve_data_route(
+        DataDomain.CODE,
+        execution=(
+            DataExecution.LOCAL
+            if body.local_application or str(body.local_workspace_path or "").strip()
+            else DataExecution.REMOTE
+        ),
+    )
+    if route.authority is DataAuthority.DESKTOP_LOCAL:
         authorization, auth_provider = None, None
     else:
         authorization, auth_provider = await _control_plane_request_auth(request, ctx, db)
