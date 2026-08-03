@@ -22,6 +22,20 @@ describe('rail session normalization', () => {
     ])
   })
 
+  it('keeps the local application id for Builder application-group actions', () => {
+    const out = normalizeAiSessions([
+      { id: 17, title: '继续配置', app_id: 49, generation: { app_name: '客户管理' } } as any,
+    ])
+    expect(out[0]).toMatchObject({ id: 17, appId: 49, appName: '客户管理' })
+  })
+
+  it('derives the Builder application id from generation metadata for legacy sessions', () => {
+    const out = normalizeAiSessions([
+      { id: 18, title: '历史会话', generation: { app_id: 51, app_name: '采购管理' } } as any,
+    ])
+    expect(out[0]).toMatchObject({ appId: 51, appName: '采购管理' })
+  })
+
   it('groups Code sessions by the external d-ai-code application name', () => {
     const out = normalizeAiSessions([
       {

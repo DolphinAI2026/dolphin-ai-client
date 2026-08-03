@@ -158,7 +158,7 @@ function refreshCodeRail() {
 const RAIL_GROUPBY_KEY = 'apaas-rail-sess-groupby-v1'
 const RAIL_GROUPBY_CODE_KEY = 'apaas-rail-sess-groupby-code-v1'
 function defaultGroupByForMode(mode: AppMode): 'date' | 'app' {
-  return mode === 'code' ? 'app' : 'date'
+  return mode === 'builder' || mode === 'code' ? 'app' : 'date'
 }
 function groupByStorageKey(mode: AppMode): string {
   return mode === 'code' ? RAIL_GROUPBY_CODE_KEY : RAIL_GROUPBY_KEY
@@ -196,11 +196,12 @@ function toggleGroup(label: string) {
 }
 
 const creatingCodeAgentSession = ref(false)
-const sessionGroups = computed<{ label: string; items: RailSession[]; shellSessionId?: string }[]>(() => {
+const creatingBuilderSession = ref(false)
+const sessionGroups = computed<{ label: string; items: RailSession[]; shellSessionId?: string; appId?: number }[]>(() => {
   if (effectiveGroupBy.value === 'app') {
     const map = new Map<string, RailSession[]>()
     for (const s of railSessions.value) {
-      const key = s.appName || '未关联应用'
+      const key = s.appId ? `app:${s.appId}` : `name:${s.appName || '未关联应用'}`
       if (!map.has(key)) map.set(key, [])
       map.get(key)!.push(s)
     }
@@ -208,7 +209,16 @@ const sessionGroups = computed<{ label: string; items: RailSession[]; shellSessi
       const shellSessionId = currentMode.value === 'code'
         ? items.find(s => s.shellSessionId)?.shellSessionId
         : undefined
-      return { label, items, ...(shellSessionId ? { shellSessionId } : {}) }
+      const appId = currentMode.value === 'builder' ? items.find(s => s.appId)?.appId : undefined
+      const displayLabel = label.startsWith('app:')
+        ? (items.find(s => s.appName)?.appName || `应用 #${label.slice(4)}`)
+        : label.slice(5)
+      return {
+        label: displayLabel,
+        items,
+        ...(shellSessionId ? { shellSessionId } : {}),
+        ...(appId ? { appId } : {}),
+      }
     })
   }
   const now = new Date()
@@ -272,6 +282,23 @@ function upsertOptimisticCodeAgentSession(
         sessions: [optimistic, ...sessions],
       }
     }),
+  }
+}
+
+async function createBuilderSession(appId?: number | null) {
+  if (creatingBuilderSession.value || currentMode.value !== 'builder' || !appId) return
+  creatingBuilderSession.value = true
+  try {
+    const session = await aiChatApi.createSession({ app_id: appId, mode: 'chat' })
+    router.push({
+      path: `/ai-chat/${session.id}`,
+      query: { ...route.query, app_id: String(appId) },
+    })
+    void loadRailSessions()
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || error?.message || '新建会话失败')
+  } finally {
+    creatingBuilderSession.value = false
   }
 }
 
@@ -740,13 +767,13 @@ function renderIcon(name: string): string {
               <span class="rail-sess-cnt">{{ g.items.length }}</span>
             </button>
             <button
-              v-if="currentMode === 'code' && effectiveGroupBy === 'app' && g.shellSessionId"
+              v-if="effectiveGroupBy === 'app' && ((currentMode === 'code' && g.shellSessionId) || (currentMode === 'builder' && g.appId))"
               type="button"
               class="rail-sess-group-new"
               title="新建对话"
               aria-label="新建对话"
-              :disabled="creatingCodeAgentSession"
-              @click.stop="createCodeAgentSession(g.shellSessionId)"
+              :disabled="currentMode === 'code' ? creatingCodeAgentSession : creatingBuilderSession"
+              @click.stop="currentMode === 'code' ? createCodeAgentSession(g.shellSessionId) : createBuilderSession(g.appId)"
             >
               <span v-html="renderIcon('plus')" />
             </button>

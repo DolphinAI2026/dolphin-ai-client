@@ -55,6 +55,13 @@ describe('RailSidebar unified session source (SP2b)', () => {
     )
   })
 
+  it('exposes Builder new conversations on application groups', () => {
+    expect(railSidebarSource).toContain('createBuilderSession')
+    expect(railSidebarSource).toContain('aiChatApi.createSession({ app_id: appId, mode: \'chat\' })')
+    expect(railSidebarSource).toContain("currentMode === 'builder' && g.appId")
+    expect(railSidebarSource).toContain("query: { ...route.query, app_id: String(appId) }")
+  })
+
   it('keeps the application-scoped sessions returned by Code rail history', () => {
     expect(railSidebarSource).toContain('codeRuntimeApi.listRailHistory(codeApplicationSource.value)')
     expect(railSidebarSource).toContain('codeRailHistory.value = history')
@@ -78,7 +85,7 @@ describe('RailSidebar unified session source (SP2b)', () => {
   })
 
   it('defaults Code sessions to application grouping', () => {
-    expect(railSidebarSource).toContain("mode === 'code' ? 'app' : 'date'")
+    expect(railSidebarSource).toContain("mode === 'builder' || mode === 'code' ? 'app' : 'date'")
     expect(railSidebarSource).toContain('rail-sess-groupby-code')
   })
 

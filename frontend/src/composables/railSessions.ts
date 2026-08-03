@@ -18,6 +18,7 @@ export interface RailSession {
   title: string
   updatedAt?: string
   /** 用于「按应用」分组(coding 会话暂无,落「未关联应用」) */
+  appId?: number
   appName?: string
   source?: 'ai-chat' | 'code-agent' | 'code-shell'
   shellSessionId?: string
@@ -58,13 +59,18 @@ export function normalizeAiSessions(
     deduped.push(latestByExternalApp.get(key) || session)
   }
 
-  return deduped.map((s) => ({
-    id: s.id,
-    title: s.title || '未命名会话',
-    updatedAt: s.updated_at ?? undefined,
-    // Builder 用生成产出的应用名 / 本地 app_id 反查；Code 用 d-ai-code 外部应用名。
-    appName: s.generation?.app_name || s.external_app_name || (s.app_id ? appNameById?.get(s.app_id) : undefined) || undefined,
-  }))
+  return deduped.map((s) => {
+    const rawAppId = s.app_id ?? s.generation?.app_id
+    const appId = Number.isFinite(Number(rawAppId)) && Number(rawAppId) > 0 ? Number(rawAppId) : undefined
+    return {
+      id: s.id,
+      title: s.title || '未命名会话',
+      updatedAt: s.updated_at ?? undefined,
+      // Builder 用生成产出的应用名 / 本地 app_id 反查；Code 用 d-ai-code 外部应用名。
+      ...(appId ? { appId } : {}),
+      appName: s.generation?.app_name || s.external_app_name || (s.app_id ? appNameById?.get(s.app_id) : undefined) || undefined,
+    }
+  })
 }
 
 function codeExternalAppKey(session: AIChatSession): string {
