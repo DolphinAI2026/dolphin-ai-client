@@ -102,6 +102,35 @@ async def resolve_bound_apaas_tenant_id(db: AsyncSession, tenant_id: int | None)
     return text or None
 
 
+async def platform_admin_has_bound_tenant_access(
+    db: AsyncSession,
+    user: User,
+    tenant_id: int,
+) -> bool:
+    """Whether an external platform admin may enter a bound aPaaS tenant.
+
+    External aPaaS admins are not globally unscoped, but a local tenant with an
+    explicit PlatformEnv binding is a valid workbench target. Unrelated local
+    tenants still require a UserTenant membership.
+    """
+    if not user.is_platform_admin or platform_admin_has_unscoped_tenant_access(user):
+        return False
+    from app.models import PlatformEnv
+
+    result = await db.execute(
+        select(Tenant.id)
+        .join(PlatformEnv, PlatformEnv.tenant_id == Tenant.id)
+        .where(
+            Tenant.id == int(tenant_id),
+            Tenant.status == 1,
+            PlatformEnv.platform_tenant_id.is_not(None),
+            PlatformEnv.platform_tenant_id != "",
+        )
+        .limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+
 def _first_text(*values: object) -> str | None:
     for value in values:
         text = str(value or "").strip()
@@ -323,6 +352,20 @@ async def _get_auth_context_allow_platform_only(
             apaas_user_id=eff_apaas_uid,
             apaas_tenant_id=eff_apaas_tid,
             tenant_access_scope="unscoped",
+        )
+
+    # An external aPaaS platform admin may enter a local tenant that has an
+    # explicit platform binding, even without a UserTenant row.
+    if await platform_admin_has_bound_tenant_access(db, user, tenant_id):
+        return AuthContext(
+            user=user,
+            tenant_id=tenant_id,
+            tenant_role="platform_admin",
+            org_permissions={"*": True},
+            apaas_user_id=eff_apaas_uid,
+            apaas_tenant_id=eff_apaas_tid,
+            tenant_access_scope="tenant",
+            control_plane_tenant_id=str(payload.get("cp_tid") or user.coding_tenant_id or "").strip() or None,
         )
 
     # Get user-tenant relationship

@@ -40,6 +40,7 @@ from app.deps import (
     get_auth_context,
     get_platform_auth_context,
     platform_admin_has_unscoped_tenant_access,
+    platform_admin_has_bound_tenant_access,
     resolve_default_tenant_id_for_user,
 )
 from app.config import settings
@@ -1791,6 +1792,10 @@ async def switch_tenant(
         ).scalar_one_or_none()
         if not tenant:
             raise HTTPException(status_code=404, detail="租户不存在或未启用")
+    elif await platform_admin_has_bound_tenant_access(db, ctx.user, int(data.tenant_id)):
+        tenant = await db.get(Tenant, int(data.tenant_id))
+        if not tenant or tenant.status != 1:
+            raise HTTPException(status_code=404, detail="租户不存在或未启用")
     else:
         membership = (
             await db.execute(
@@ -1817,5 +1822,9 @@ async def switch_tenant(
     except Exception as exc:
         logger.warning("switch-tenant 后写 current_app slot 失败: %s", exc)
 
-    access_token = create_access_token(ctx.user, tenant_id=data.tenant_id)
+    access_token = create_access_token(
+        ctx.user,
+        tenant_id=data.tenant_id,
+        apaas_tenant_id=str(tenant.apaas_tenant_id_str or "").strip() or None,
+    )
     return Token(access_token=access_token)

@@ -7,6 +7,7 @@ from app.config import settings
 from app import runtime
 from app.code_runtime.auth import control_plane_access_token, fetch_control_plane_identity
 from app.database import get_db
+from app.crypto import decrypt_password
 from app.models import User
 from app.models.tenant import Tenant, UserTenant, Role
 from app.schemas import UserInfo, TenantOption
@@ -483,6 +484,8 @@ async def update_tenant(
     # 后端帮他 maintain 一条 PlatformEnv 记录：第一次绑定时创建，后续编辑就 update。
     base_url_in = (data.apaas_base_url or "").strip() if data.apaas_base_url is not None else None
     platform_tid_in = (data.apaas_platform_tenant_id or "").strip() if data.apaas_platform_tenant_id is not None else None
+    binding_env = None
+    binding_changed = False
     if base_url_in is not None or platform_tid_in is not None:
         from app.models import PlatformEnv
         # 拿现有 env（如果绑定了）或新建
@@ -503,11 +506,22 @@ async def update_tenant(
             db.add(env)
             await db.flush()
             t.apaas_env_id = env.id
+            binding_changed = True
+        binding_env = env
         # 已存在 env：更新 base_url + tid
         if base_url_in is not None:
-            env.base_url = base_url_in.rstrip("/") if base_url_in else ""
+            next_base_url = base_url_in.rstrip("/") if base_url_in else ""
+            binding_changed = binding_changed or env.base_url != next_base_url
+            env.base_url = next_base_url
         if platform_tid_in is not None:
+            binding_changed = binding_changed or env.platform_tenant_id != platform_tid_in
             env.platform_tenant_id = platform_tid_in
+        if binding_changed:
+            # A token is tenant-bound. Never carry the previous tenant's token
+            # across a rebinding, otherwise the next app query returns the old
+            # tenant's applications while the env row shows the new ID.
+            env.token = None
+            env.status = "disconnected"
 
     # 高级路径：直接传 apaas_env_id（手动指定已存在的 env），UI 默认不暴露
     if data.apaas_env_id is not None and base_url_in is None and platform_tid_in is None:
@@ -528,6 +542,27 @@ async def update_tenant(
             t.apaas_env_id = data.apaas_env_id
 
     await db.commit()
+
+    # Reuse stored credentials when a binding changed so the first /apps load
+    # can reconnect without requiring a second manual login.
+    if binding_changed and binding_env and binding_env.username and binding_env.password_enc:
+        try:
+            from app.apaas_client import APaaSClient
+
+            password = decrypt_password(binding_env.password_enc)
+            client = APaaSClient(
+                base_url=binding_env.base_url,
+                tenant_id=binding_env.platform_tenant_id,
+            )
+            login_result = await client.login(binding_env.username, password)
+            token = (login_result.get("token") or "").strip()
+            if token:
+                binding_env.token = token
+                binding_env.status = "connected"
+                await db.commit()
+        except Exception:
+            logger.info("tenant binding reconnect failed tenant_id=%s", t.id, exc_info=True)
+
     await db.refresh(t)
 
     from sqlalchemy import func as sql_func
@@ -950,8 +985,8 @@ async def list_my_tenants(
 ):
     """返回当前用户可切换的租户列表（用于顶栏 dropdown）。
 
-    aPaaS 登录用户只返回自己可登录的 active membership。平台管理员的全量租户同步
-    只供平台管理使用，不等于这些租户都能进入工作台。
+    普通 aPaaS 用户只返回自己的 active membership。aPaaS 平台管理员还可以切换到
+    已明确绑定 PlatformEnv 的本地租户；未绑定的本地租户仍不在工作台切换范围内。
     """
     if (
         ctx.user.account_source == "control_plane"
@@ -980,6 +1015,36 @@ async def list_my_tenants(
                 stmt.order_by(Tenant.tenant_name.asc())
             )
         ).scalars().all()
+    elif ctx.user.is_platform_admin and str(ctx.user.account_source or "").strip().lower() == "apaas":
+        # aPaaS platform admins can work in every local tenant that has an
+        # explicit platform binding. Membership is not required for these
+        # synchronized tenant records.
+        from app.models import PlatformEnv
+        membership_rows = (
+            await db.execute(
+                select(Tenant)
+                .join(UserTenant, UserTenant.tenant_id == Tenant.id)
+                .where(
+                    UserTenant.user_id == ctx.user.id,
+                    UserTenant.status == 1,
+                    Tenant.status == 1,
+                )
+            )
+        ).scalars().all()
+        bound_rows = (
+            await db.execute(
+                select(Tenant)
+                .join(PlatformEnv, PlatformEnv.tenant_id == Tenant.id)
+                .where(
+                    Tenant.status == 1,
+                    PlatformEnv.platform_tenant_id.is_not(None),
+                    PlatformEnv.platform_tenant_id != "",
+                )
+                .order_by(Tenant.tenant_name.asc())
+            )
+        ).scalars().unique().all()
+        rows_by_id = {row.id: row for row in [*membership_rows, *bound_rows]}
+        rows = sorted(rows_by_id.values(), key=lambda row: (row.tenant_name or "", row.id))
     else:
         rows = (
             await db.execute(

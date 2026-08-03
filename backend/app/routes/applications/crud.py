@@ -203,7 +203,9 @@ async def _list_remote_apps_for_current_builder_tenant(
     effective_tenant_id = await resolve_effective_tenant_id(db, ctx)
     env = await _resolve_platform_env_for_tenant(db, effective_tenant_id)
     if env:
-        token = (env.token or getattr(ctx.user, "apaas_token", "") or "").strip()
+        # Do not use the user's legacy token as a cross-tenant fallback. The
+        # selected PlatformEnv owns the aPaaS tenant context for this request.
+        token = (env.token or "").strip()
         if not token and not (env.username and env.password_enc):
             return [], env.base_url, env.platform_tenant_id
         client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id, token=token)
@@ -1329,14 +1331,10 @@ async def _resolve_import_apaas_context(
     effective_tenant_id = await resolve_effective_tenant_id(db, ctx)
     env = await _resolve_platform_env_for_tenant(db, effective_tenant_id, requested_env_id)
     if env:
-        token = ((env.token or getattr(ctx.user, "apaas_token", "")) or "").strip()
+        token = (env.token or "").strip()
         if token or (env.username and env.password_enc):
             return env, env.base_url, env.platform_tenant_id, token, f"platform_env:{env.id}"
-        logger.warning(
-            "import platform app: resolved env=%s for tenant=%s has no usable token or credentials, falling back to user credential",
-            env.id,
-            effective_tenant_id,
-        )
+        raise HTTPException(status_code=400, detail="当前平台环境 token 不可用，请在环境管理中重新登录")
 
     base_url, tenant_id, token, source = await _resolve_apaas_call_context(db, ctx)
     if not base_url or not tenant_id or not token:
@@ -1429,11 +1427,12 @@ async def _query_import_app_detail_with_fallbacks(
     credential = credential_result.scalar_one_or_none()
     if credential:
         credential_token = (credential.token or "").strip()
-        if credential_token:
+        credential_tenant_id = (credential.apaas_tenant_id or platform_tenant_id).strip()
+        if credential_token and credential_tenant_id == platform_tenant_id:
             candidates.append(
                 (
                     (credential.base_url or base_url).rstrip("/"),
-                    (credential.apaas_tenant_id or platform_tenant_id).strip(),
+                    credential_tenant_id,
                     credential_token,
                     f"user_credential:{credential.id}",
                 )
@@ -1443,7 +1442,7 @@ async def _query_import_app_detail_with_fallbacks(
                 password = decrypt_password(credential.password_enc)
                 login_client = APaaSClient(
                     base_url=(credential.base_url or base_url).rstrip("/"),
-                    tenant_id=(credential.apaas_tenant_id or platform_tenant_id).strip(),
+                    tenant_id=credential_tenant_id,
                 )
                 login_result = await login_client.login(credential.account, password)
                 refreshed = (login_result.get("token") or "").strip()
@@ -1455,7 +1454,7 @@ async def _query_import_app_detail_with_fallbacks(
                         0,
                         (
                             (credential.base_url or base_url).rstrip("/"),
-                            (credential.apaas_tenant_id or platform_tenant_id).strip(),
+                            credential_tenant_id,
                             refreshed,
                             f"user_credential:{credential.id}",
                         ),
@@ -1464,7 +1463,9 @@ async def _query_import_app_detail_with_fallbacks(
                 logger.info("import platform app: user credential re-login failed", exc_info=True)
 
     legacy_token = (getattr(ctx.user, "apaas_token", "") or "").strip()
-    if legacy_token and legacy_token != token:
+    # User.apaas_token is a legacy, mutable field and may belong to another
+    # aPaaS tenant. It is only safe when no tenant environment is selected.
+    if not env and legacy_token and legacy_token != token:
         candidates.append(
             (
                 (getattr(ctx.user, "apaas_base_url", "") or base_url).rstrip("/"),

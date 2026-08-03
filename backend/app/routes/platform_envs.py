@@ -387,7 +387,11 @@ async def list_remote_apps(
     if not env:
         raise HTTPException(status_code=404, detail="环境不存在")
 
-    token = env.token or getattr(ctx.user, "apaas_token", None)
+    # A user's legacy token may belong to another aPaaS tenant. Once an
+    # environment is selected, only its own token or its own login credentials
+    # are valid; falling back to the user's token can silently list the wrong
+    # tenant after an admin rebinds this environment.
+    token = (env.token or "").strip()
     if not token and env.username and env.password_enc:
         try:
             password = decrypt_password(env.password_enc)
