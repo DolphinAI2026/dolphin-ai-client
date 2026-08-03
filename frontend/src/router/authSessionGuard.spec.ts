@@ -139,6 +139,23 @@ describe('router auth session guard', () => {
     expect(next).toHaveBeenCalledWith('/apps')
   })
 
+  it('refreshes a live user before resolving the canonical tenant route', async () => {
+    commitAuthSession('live-token')
+    userStore.token = 'live-token'
+    userStore.user = { id: 1, tenant_public_id: 'source-tenant' }
+
+    const next = await runGuard({
+      path: '/apps',
+      fullPath: '/apps',
+      query: {},
+      meta: { requiresAuth: true, tenantContext: 'required' },
+    })
+
+    expect(userStore.fetchUser).toHaveBeenCalledTimes(1)
+    expect(tenantUrlMocks.resolveTenantUrl).toHaveBeenCalledTimes(1)
+    expect(next).toHaveBeenCalledWith()
+  })
+
   it('does not resolve tenant URLs while cross-tab auth alignment is pending', async () => {
     commitAuthSession('source-token')
     beginAuthSessionAlignment('candidate-token')
