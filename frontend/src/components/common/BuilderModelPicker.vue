@@ -26,7 +26,11 @@ const rootRef = ref<HTMLElement | null>(null)
 const selectedOption = computed(() =>
   props.options.find(option => option.id === props.modelValue) ?? null,
 )
-const selectedLabel = computed(() => selectedOption.value?.config_name || props.defaultLabel)
+const selectedLabel = computed(() =>
+  selectedOption.value?.is_default
+    ? props.defaultLabel
+    : selectedOption.value?.config_name || props.defaultLabel,
+)
 
 function toggle() {
   if (props.disabled) return
@@ -92,8 +96,8 @@ onUnmounted(() => document.removeEventListener('click', closeOnOutside))
         :aria-selected="modelValue === option.id"
         @click.stop="choose(option.id)"
       >
-        <span class="bmp-option-name">{{ option.config_name }}</span>
-        <span class="bmp-option-meta">{{ option.provider }} / {{ option.model }}</span>
+        <span class="bmp-option-name">{{ option.is_default ? defaultLabel : option.config_name }}</span>
+        <span class="bmp-option-meta">{{ option.is_default ? '当前默认配置' : `${option.provider} / ${option.model}` }}</span>
       </button>
     </div>
   </div>
