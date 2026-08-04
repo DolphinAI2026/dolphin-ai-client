@@ -45,9 +45,11 @@ describe('CodingPage 预览呈现', () => {
 
 // 2026-06-19 UX 打磨
 describe('CodingPage UX 打磨', () => {
-  it('模型触发按钮显真实 model(gpt-5.5), 不显陈旧 config_name(Dolphin-默认)', () => {
+  it('默认模型统一显示默认模型，不暴露具体 provider/model 名称', () => {
     expect(src).toMatch(/selectedCodingModelLabel\s*=\s*computed/)
-    expect(src).toMatch(/opt\?\.model\s*\|\|\s*opt\?\.config_name/)
+    expect(src).toContain("opt?.is_default ? '默认模型'")
+    expect(src).toContain("option.is_default ? '默认模型' : option.config_name")
+    expect(src).toContain("option.is_default ? '当前默认配置'")
   })
 
   it('文件选择守卫: 坏路径(含空格/代码括号)不打开 → 打开态不落文件红错', () => {

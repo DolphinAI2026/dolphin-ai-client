@@ -324,8 +324,8 @@
                       :aria-selected="selectedCodingModelValue === toCodingModelValue(option.id)"
                       @click.stop="chooseCodingModel(toCodingModelValue(option.id))"
                     >
-                      <span class="coding-model-option-name">{{ option.config_name }}</span>
-                      <span class="coding-model-option-meta">{{ option.provider }} / {{ option.model }}</span>
+                      <span class="coding-model-option-name">{{ option.is_default ? '默认模型' : option.config_name }}</span>
+                      <span class="coding-model-option-meta">{{ option.is_default ? '当前默认配置' : `${option.provider} / ${option.model}` }}</span>
                     </button>
                   </div>
                 </div>
@@ -582,10 +582,8 @@ const codingModelPickerDisabled = computed(() =>
 const selectedCodingModelLabel = computed(() => {
   if (codingModelLoading.value) return '加载中'
   if (codingModelOptions.value.length === 0) return '未配置模型'
-  // 触发按钮显真实模型(如 gpt-5.5), 而非陈旧/含网关名的 config_name(如「Dolphin-默认」);
-  // 完整配置名 + 厂商在下拉菜单里(option.config_name / provider / model)。
   const opt = selectedCodingModelOption.value
-  return opt?.model || opt?.config_name || '选择模型'
+  return opt?.is_default ? '默认模型' : opt?.config_name || '选择模型'
 })
 
 function toggleCodingModelMenu() {
