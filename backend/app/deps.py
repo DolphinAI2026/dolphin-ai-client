@@ -209,6 +209,34 @@ async def _resolve_control_plane_code_context(
             matches[0].control_plane_tenant_id_str = context.control_plane_tenant_id
             await db.commit()
 
+    if not matches:
+        # Control Plane users can already carry an explicit aPaaS account
+        # binding while the local projection predates the CP mapping column.
+        # Recover that projection only when the aPaaS tenant maps to exactly
+        # one active local tenant; never fall back to a user's arbitrary
+        # default tenant when the binding is missing or ambiguous.
+        bound_apaas_tid = str(user.apaas_tenant_id or "").strip()
+        if bound_apaas_tid:
+            bound_result = await db.execute(
+                select(Tenant).where(
+                    Tenant.status == 1,
+                    Tenant.apaas_tenant_id_str == bound_apaas_tid,
+                )
+            )
+            bound_matches = bound_result.scalars().all()
+            if len(bound_matches) == 1:
+                matches = bound_matches
+                matches[0].control_plane_tenant_id_str = context.control_plane_tenant_id
+                await db.commit()
+            elif len(bound_matches) > 1:
+                logger.warning(
+                    "control_plane aPaaS binding is ambiguous user_id=%s cp_tid=%s apaas_tid=%s matches=%s",
+                    user.id,
+                    context.control_plane_tenant_id,
+                    bound_apaas_tid,
+                    [tenant.id for tenant in bound_matches],
+                )
+
     if len(matches) != 1:
         if matches:
             logger.warning(

@@ -175,6 +175,44 @@ async def test_control_plane_code_resolves_bound_local_tenant(shared_db):
 
 
 @pytest.mark.asyncio
+async def test_control_plane_code_backfills_unique_apaas_bound_projection(shared_db):
+    """A legacy local tenant can be recovered from the user's explicit aPaaS binding."""
+    from app.deps import get_auth_context_from_token
+
+    async with shared_db() as db:
+        tenant = Tenant(
+            tenant_name="Legacy Builder Tenant",
+            tenant_code="legacy-builder-tenant",
+            apaas_tenant_id_str="apaas-xdg-tenant",
+        )
+        user = User(
+            username="xdg-user",
+            hashed_password="x",
+            account_source="control_plane",
+            is_platform_admin=True,
+            apaas_tenant_id="apaas-xdg-tenant",
+        )
+        db.add_all([tenant, user])
+        await db.commit()
+        user_id = user.id
+
+    token = create_control_plane_code_token(
+        user_id,
+        control_plane_tenant_id="cp-xdg-tenant",
+        control_plane_tenant_name="兄弟高测试组织",
+        control_plane_tenant_role="tenant_admin",
+    )
+    ctx = await get_auth_context_from_token(token)
+
+    assert ctx.tenant_id == tenant.id
+    assert ctx.apaas_tenant_id == "apaas-xdg-tenant"
+
+    async with shared_db() as db:
+        persisted = await db.get(Tenant, tenant.id)
+        assert persisted.control_plane_tenant_id_str == "cp-xdg-tenant"
+
+
+@pytest.mark.asyncio
 async def test_control_plane_code_prefers_stable_id_over_duplicate_name(shared_db):
     from app.deps import get_auth_context_from_token
 
