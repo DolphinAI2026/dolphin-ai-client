@@ -355,7 +355,6 @@ async def _control_plane_request_auth(
     uses_dolphin_token = (
         str(getattr(ctx.user, "account_source", "") or "").strip().lower()
         == "control_plane"
-        or settings.control_plane_binding_enabled
         or provider in {"control_plane", "coding"}
     )
     if not uses_dolphin_token:

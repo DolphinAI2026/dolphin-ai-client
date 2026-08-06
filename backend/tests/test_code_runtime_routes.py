@@ -2483,6 +2483,39 @@ async def test_control_plane_code_request_uses_stored_token_without_deployment_s
 
 
 @pytest.mark.asyncio
+async def test_apaas_code_request_does_not_use_control_plane_binding_token(
+    db_session,
+    monkeypatch,
+):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.config import settings
+
+    async def unexpected_control_plane_refresh(*_args, **_kwargs):
+        raise AssertionError("aPaaS-only requests must not require Full Workspace auth")
+
+    monkeypatch.setattr(settings, "auth_provider", "apaas")
+    monkeypatch.setattr(settings, "control_plane_binding_enabled", True)
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_locked_control_plane_user_authorization",
+        unexpected_control_plane_refresh,
+    )
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(id=11, account_source="apaas"),
+        control_plane_tenant_id=None,
+    )
+
+    authorization, provider = await code_runtime_routes._control_plane_request_auth(
+        SimpleNamespace(headers={"authorization": "Bearer apaas-builder-token"}),
+        ctx,
+        db_session,
+    )
+
+    assert authorization == "Bearer apaas-builder-token"
+    assert provider is None
+
+
+@pytest.mark.asyncio
 async def test_open_local_code_runtime_session_does_not_require_control_plane_auth(
     db_session,
     monkeypatch,

@@ -912,7 +912,10 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
             ),
         )
 
-    if settings.control_plane_binding_enabled:
+    # A pure aPaaS deployment owns its Builder identity and tenant context.
+    # The binding flag is only meaningful when Control Plane is the selected
+    # authentication authority; it must not pull Full Workspace into aPaaS login.
+    if settings.control_plane_binding_enabled and _auth_provider() == "control_plane":
         if not local_tenants:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
