@@ -211,6 +211,8 @@ async def test_apaas_platform_admin_login_syncs_all_tenants_but_returns_loginabl
     assert response is not None
     assert response.is_platform_admin is True
     assert response.has_tenant_context is True
+    assert response.apaas_access_token == "backend.token.sig"
+    assert response.apaas_tenant_id == "822902364821258241"
     assert [(t.tenant_name, t.tenant_code) for t in response.tenants] == [
         ("得帆", "df"),
     ]

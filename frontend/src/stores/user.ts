@@ -189,6 +189,20 @@ export const useUserStore = defineStore('user', () => {
     commitLocalToken(newToken)
   }
 
+  const syncApaasWebConsoleSession = (
+    apaasAccessToken?: string,
+    apaasTenantId?: string | null,
+  ) => {
+    const token = apaasAccessToken?.trim()
+    if (!token) return
+    localStorage.setItem('access_token', token)
+    if (apaasTenantId?.trim()) {
+      localStorage.setItem('tenant_id', apaasTenantId.trim())
+    } else {
+      localStorage.removeItem('tenant_id')
+    }
+  }
+
   const commitTenantSwitch = (
     newToken: string,
     nextUser: User,
@@ -263,6 +277,9 @@ export const useUserStore = defineStore('user', () => {
     advanceTenantNavigationEpoch()
     clearAuthSession()
     localStorage.removeItem('token')
+    localStorage.removeItem('access_token')
+    localStorage.removeItem('refresh_token')
+    localStorage.removeItem('tenant_id')
     clearControlPlaneCodeSession()
   }
 
@@ -351,6 +368,7 @@ export const useUserStore = defineStore('user', () => {
 
     // 单租户或已选择租户 — 直接登录
     setToken(res.access_token!)
+    syncApaasWebConsoleSession(res.apaas_access_token, res.apaas_tenant_id)
     await fetchUser()
     return {
       requiresSelection: false,

@@ -57,6 +57,8 @@ export interface TenantOption {
 
 export interface LoginResponse {
   access_token?: string
+  apaas_access_token?: string
+  apaas_tenant_id?: string | null
   token_type: string
   requires_tenant_selection: boolean
   selection_token?: string

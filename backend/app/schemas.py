@@ -46,6 +46,11 @@ class TenantOption(BaseModel):
 class LoginResponse(BaseModel):
     """登录响应（支持多租户）"""
     access_token: Optional[str] = None
+    # aPaaS-only standalone also hosts the Control Plane console. Keep the
+    # Builder JWT separate from the upstream aPaaS token consumed by that
+    # console's identity resolver.
+    apaas_access_token: Optional[str] = None
+    apaas_tenant_id: Optional[str] = None
     token_type: str = "bearer"
     requires_tenant_selection: bool = False
     selection_token: Optional[str] = None

@@ -961,6 +961,8 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
         await db.commit()
         return LoginResponse(
             access_token=access_token,
+            apaas_access_token=backend_token,
+            apaas_tenant_id=selected.apaas_tenant_id_str or user.apaas_tenant_id,
             tenants=tenant_options,
             entry_path="/",
             is_platform_admin=is_platform_admin,
