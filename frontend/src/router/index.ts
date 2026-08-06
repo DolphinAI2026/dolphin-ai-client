@@ -19,7 +19,7 @@ import {
   resolveDesktopWorkspaceRedirect,
 } from './desktopGuard'
 import { normalizeTenantPublicId, resolveTenantUrl } from './tenantUrlGuard'
-import { safeLoginRedirectPath } from './loginRedirect'
+import { resolveExternalLoginRedirect, safeLoginRedirectPath } from './loginRedirect'
 
 const desktopRoutes: RouteRecordRaw[] = __DESKTOP__ ? [
     {
@@ -436,6 +436,12 @@ export function installRouterGuards(targetRouter: Router): void {
   }
 
   if (to.path === '/login' && hasCommittedSession) {
+    const externalRedirect = resolveExternalLoginRedirect(to.query.redirect)
+    if (externalRedirect) {
+      window.location.replace(externalRedirect)
+      next(false)
+      return
+    }
     next(safeLoginRedirectPath(to.query.redirect) || '/')
   } else {
     next()

@@ -148,7 +148,7 @@ import { authApi } from '@/api/auth'
 import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
 import ruijingWhaleMarkUrl from '@/assets/brand/ruijing-whale-mark.svg'
-import { safeLoginRedirectPath } from '@/router/loginRedirect'
+import { resolveExternalLoginRedirect, safeLoginRedirectPath } from '@/router/loginRedirect'
 import {
   DESKTOP_LOGIN_SERVICES,
   enterDesktopLoginSetup,
@@ -276,6 +276,11 @@ const handleLogin = async () => {
         })
       } else {
         ElMessage.success('登录成功')
+        const externalRedirect = resolveExternalLoginRedirect(route.query.redirect)
+        if (externalRedirect) {
+          window.location.replace(externalRedirect)
+          return
+        }
         router.replace(
           safeLoginRedirectPath(route.query.redirect) || result.entryPath || '/',
         )
