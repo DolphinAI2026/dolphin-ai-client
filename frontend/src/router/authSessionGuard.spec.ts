@@ -139,6 +139,20 @@ describe('router auth session guard', () => {
     expect(next).toHaveBeenCalledWith('/apps')
   })
 
+  it('keeps the standalone login page when a legacy Builder session has no aPaaS token', async () => {
+    commitAuthSession('committed-token')
+    userStore.user = { id: 1 }
+
+    const next = await runGuard({
+      path: '/login',
+      fullPath: '/login?redirect=%2Fweb-console%2F',
+      query: { redirect: '/web-console/' },
+      meta: {},
+    })
+
+    expect(next).toHaveBeenCalledWith()
+  })
+
   it('refreshes a live user before resolving the canonical tenant route', async () => {
     commitAuthSession('live-token')
     userStore.token = 'live-token'

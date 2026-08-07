@@ -438,6 +438,10 @@ export function installRouterGuards(targetRouter: Router): void {
   if (to.path === '/login' && hasCommittedSession) {
     const externalRedirect = resolveExternalLoginRedirect(to.query.redirect)
     if (externalRedirect) {
+      if (!localStorage.getItem('access_token')?.trim()) {
+        next()
+        return
+      }
       window.location.replace(externalRedirect)
       next(false)
       return
