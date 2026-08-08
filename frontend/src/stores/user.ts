@@ -263,6 +263,8 @@ export const useUserStore = defineStore('user', () => {
     advanceTenantNavigationEpoch()
     clearAuthSession()
     localStorage.removeItem('token')
+    localStorage.removeItem('access_token')
+    localStorage.removeItem('tenant_id')
     clearControlPlaneCodeSession()
   }
 
@@ -351,6 +353,17 @@ export const useUserStore = defineStore('user', () => {
 
     // 单租户或已选择租户 — 直接登录
     setToken(res.access_token!)
+    if (res.web_console_access_token) {
+      localStorage.setItem('access_token', res.web_console_access_token)
+      if (res.web_console_tenant_id) {
+        localStorage.setItem('tenant_id', res.web_console_tenant_id)
+      } else {
+        localStorage.removeItem('tenant_id')
+      }
+    } else {
+      localStorage.removeItem('access_token')
+      localStorage.removeItem('tenant_id')
+    }
     await fetchUser()
     return {
       requiresSelection: false,

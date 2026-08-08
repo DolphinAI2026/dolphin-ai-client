@@ -64,6 +64,8 @@ export interface LoginResponse {
   entry_path?: string
   is_platform_admin?: boolean
   has_tenant_context?: boolean
+  web_console_access_token?: string
+  web_console_tenant_id?: string
 }
 
 export interface Token {

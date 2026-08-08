@@ -53,6 +53,8 @@ class LoginResponse(BaseModel):
     entry_path: Optional[str] = None
     is_platform_admin: bool = False
     has_tenant_context: bool = False
+    web_console_access_token: Optional[str] = None
+    web_console_tenant_id: Optional[str] = None
 
 
 class TenantSelectRequest(BaseModel):

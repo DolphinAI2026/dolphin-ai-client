@@ -357,6 +357,11 @@ async def _control_plane_request_auth(
         == "control_plane"
         or provider in {"control_plane", "coding"}
     )
+    if provider == "apaas" or str(getattr(ctx.user, "account_source", "") or "").strip().lower() == "apaas":
+        token = str(getattr(ctx.user, "apaas_token", "") or "").strip()
+        if not token:
+            raise HTTPException(status_code=403, detail="当前 aPaaS 会话已失效，请重新登录")
+        return f"Bearer {token}", None
     if not uses_dolphin_token:
         return request.headers.get("authorization"), None
     ctx.control_plane_tenant_id = await _resolve_control_plane_tenant_id(db, ctx)
