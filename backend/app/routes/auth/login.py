@@ -47,6 +47,7 @@ from app.config import settings
 from app import runtime
 from app.error_messages import SELECT_TOKEN_INVALID, SELECT_TOKEN_EXPIRED
 from app.tenant_public_id import ensure_tenant_public_id
+from app.builder_ai_management import exchange_web_console_session
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -959,12 +960,20 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
             local_tenants,
         )
         await db.commit()
+        web_console = await exchange_web_console_session(
+            user_id=str(user.apaas_user_id or user.id),
+            username=user.username,
+            apaas_access_token=str(user.apaas_token or backend_token or platform_token or ""),
+            apaas_tenant_id=str(selected.apaas_tenant_id_str or user.apaas_tenant_id or ""),
+        )
         return LoginResponse(
             access_token=access_token,
             tenants=tenant_options,
             entry_path="/",
             is_platform_admin=is_platform_admin,
             has_tenant_context=True,
+            web_console_access_token=(web_console or {}).get("access_token"),
+            web_console_tenant_id=(web_console or {}).get("tenant_id"),
         )
 
     if is_platform_admin:

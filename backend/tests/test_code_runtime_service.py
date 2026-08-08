@@ -712,6 +712,31 @@ def test_control_plane_headers_prefer_active_builder_tenant_mapping(monkeypatch)
     assert headers["X-Tenant-Id"] == "0"
 
 
+def test_control_plane_headers_use_apaas_tenant_when_no_control_plane_mapping(monkeypatch):
+    from app.config import settings
+    from app.code_runtime import service
+
+    monkeypatch.delenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", raising=False)
+    monkeypatch.setattr(settings, "dolphin_code_control_plane_token", "", raising=False)
+
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(coding_tenant_id=None),
+        control_plane_tenant_id=None,
+        apaas_tenant_id="apaas-tenant-1",
+        tenant_id=3,
+    )
+    headers = service._control_plane_headers(
+        "Bearer apaas-access-token",
+        delegated_context=ctx,
+        auth_provider="apaas",
+    )
+
+    assert headers == {
+        "Authorization": "Bearer apaas-access-token",
+        "X-Tenant-Id": "apaas-tenant-1",
+    }
+
+
 @pytest.mark.asyncio
 async def test_verify_control_plane_application_access_uses_current_user_and_tenant(monkeypatch):
     from app.code_runtime import service

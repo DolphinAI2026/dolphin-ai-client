@@ -2501,7 +2501,8 @@ async def test_apaas_code_request_does_not_use_control_plane_binding_token(
         unexpected_control_plane_refresh,
     )
     ctx = SimpleNamespace(
-        user=SimpleNamespace(id=11, account_source="apaas"),
+        user=SimpleNamespace(id=11, account_source="apaas", apaas_token="apaas-access-token"),
+        apaas_tenant_id="apaas-tenant-1",
         control_plane_tenant_id=None,
     )
 
@@ -2511,8 +2512,49 @@ async def test_apaas_code_request_does_not_use_control_plane_binding_token(
         db_session,
     )
 
-    assert authorization == "Bearer apaas-builder-token"
+    assert authorization == "Bearer apaas-access-token"
     assert provider is None
+
+
+@pytest.mark.asyncio
+async def test_apaas_code_request_uses_apaas_token_and_tenant_header_without_cp_mapping(
+    db_session,
+    monkeypatch,
+):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.config import settings
+    from app.code_runtime import service
+
+    monkeypatch.setattr(settings, "auth_provider", "apaas")
+    monkeypatch.setattr(settings, "control_plane_binding_enabled", False)
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(
+            id=11,
+            account_source="apaas",
+            apaas_token="apaas-access-token",
+            coding_tenant_id=None,
+        ),
+        apaas_tenant_id="apaas-tenant-1",
+        control_plane_tenant_id=None,
+        tenant_id=17,
+    )
+
+    authorization, provider = await code_runtime_routes._control_plane_request_auth(
+        SimpleNamespace(headers={}),
+        ctx,
+        db_session,
+    )
+
+    headers = service._control_plane_headers(
+        authorization,
+        delegated_context=ctx,
+        auth_provider=provider,
+    )
+
+    assert authorization == "Bearer apaas-access-token"
+    assert provider is None
+    assert headers["Authorization"] == "Bearer apaas-access-token"
+    assert headers["X-Tenant-Id"] == "apaas-tenant-1"
 
 
 @pytest.mark.asyncio

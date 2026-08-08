@@ -140,6 +140,10 @@ class Settings(BaseSettings):
     dolphin_code_control_plane_url: str = ""
     dolphin_code_control_plane_token: str = ""
     dolphin_code_control_plane_delegation_secret: str = ""
+    # 纯 aPaaS 部署使用的 standalone Builder AI 管理服务。
+    builder_ai_management_url: str = ""
+    builder_ai_internal_current_token_id: str = ""
+    builder_ai_internal_current_token: str = ""
     # 本地调试可只覆盖 workspace/open，应用和模型列表仍走真实 Control Plane。
     dolphin_code_workspace_open_url: str = ""
     dolphin_code_workspace_open_token: str = ""
