@@ -29,6 +29,22 @@ export function safeLoginRedirectPath(raw: unknown): string {
   }
 }
 
+export function resolveExternalLoginRedirect(
+  raw: unknown,
+  baseUrl = import.meta.env.BASE_URL || '/',
+): string {
+  const redirect = safeLoginRedirectPath(raw)
+  if (!redirect) return ''
+
+  const parsed = new URL(redirect, REDIRECT_ORIGIN)
+  if (parsed.pathname !== '/web-console' && parsed.pathname !== '/web-console/') {
+    return ''
+  }
+
+  const normalizedBase = `/${baseUrl}`.replace(/\/+/g, '/').replace(/\/$/, '')
+  return `${normalizedBase}/web-console/${parsed.search}${parsed.hash}`
+}
+
 export function tenantIdFromRedirect(raw: unknown): string | null {
   const redirect = safeLoginRedirectPath(raw)
   if (!redirect) return null
