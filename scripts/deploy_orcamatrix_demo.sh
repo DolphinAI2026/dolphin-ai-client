@@ -406,6 +406,13 @@ spec:
     - host: om-demo.dfy.definesys.cn
       http:
         paths:
+          - path: /.well-known/dolphin-desktop-bootstrap
+            pathType: Exact
+            backend:
+              service:
+                name: ai-builder
+                port:
+                  name: http
           - path: /ai-builder
             pathType: Prefix
             backend:
