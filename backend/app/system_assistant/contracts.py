@@ -11,7 +11,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal, TypeAlias, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, field_validator
 
 
 class AssistantProfile(str, Enum):
@@ -57,7 +57,6 @@ class AssistantProfileRequest(BaseModel):
     def _normalize_profile(cls, value: str | AssistantProfile | None) -> AssistantProfileValue:
         return normalize_assistant_profile(value)
 
-
 class AssistantProfileResponse(BaseModel):
     """The profile field returned in a session representation."""
 
@@ -67,28 +66,3 @@ class AssistantProfileResponse(BaseModel):
     @classmethod
     def _normalize_profile(cls, value: str | AssistantProfile | None) -> AssistantProfileValue:
         return normalize_assistant_profile(value)
-
-
-class AssistantAttachmentRef(BaseModel):
-    """Attachment reference retained in a user message's existing metadata."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    attachment_ids: list[int] = Field(default_factory=list)
-
-    @field_validator("attachment_ids")
-    @classmethod
-    def _validate_attachment_ids(cls, value: list[int]) -> list[int]:
-        if any(attachment_id <= 0 for attachment_id in value):
-            raise ValueError("attachment_ids must contain positive IDs")
-        return list(dict.fromkeys(value))
-
-
-class AssistantSessionRecovery(BaseModel):
-    """Minimal P0 recovery snapshot for the existing run-bus attach flow."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    running: bool = False
-    last_seq: int = Field(default=0, ge=0)
-    run_id: str | None = None

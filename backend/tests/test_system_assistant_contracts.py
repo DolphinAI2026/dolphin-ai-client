@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import inspect as sqlalchemy_inspect, select, text
+from sqlalchemy.ext.asyncio import create_async_engine
 from pydantic import ValidationError
 
-from app.models.ai_chat import AIChatAttachment, AIChatSession
+from app.database import migrate_ai_chat_session_profile
+from app.models.ai_chat import AIChatSession
 from app.system_assistant.contracts import (
-    AssistantAttachmentRef,
     AssistantProfile,
     AssistantProfileRequest,
-    AssistantSessionRecovery,
     DEFAULT_ASSISTANT_PROFILE,
     normalize_assistant_profile,
 )
@@ -46,22 +47,39 @@ async def test_legacy_session_defaults_to_entry_agent_without_changing_mode(db_s
     assert session.assistant_profile == DEFAULT_ASSISTANT_PROFILE
 
 
-def test_existing_attachment_reference_and_recovery_shapes_remain_stable():
-    ref = AssistantAttachmentRef(attachment_ids=[3, 3, 8])
-    assert ref.attachment_ids == [3, 8]
+@pytest.mark.asyncio
+async def test_sqlite_old_sessions_are_migrated_in_place():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.execute(text(
+            "CREATE TABLE ai_chat_sessions ("
+            "id INTEGER PRIMARY KEY, mode VARCHAR(20) NOT NULL"
+            ")"
+        ))
+        await conn.execute(text(
+            "INSERT INTO ai_chat_sessions (id, mode) VALUES "
+            "(1, 'chat'), (2, 'cowork'), (3, 'code')"
+        ))
+        await migrate_ai_chat_session_profile(conn)
+        columns = await conn.run_sync(
+            lambda sync_conn: sqlalchemy_inspect(sync_conn).get_columns("ai_chat_sessions")
+        )
+        rows = (await conn.execute(
+            select(text("id"), text("mode"), text("assistant_profile"))
+            .select_from(text("ai_chat_sessions"))
+            .order_by(text("id"))
+        )).all()
+        default_row = (await conn.execute(text(
+            "INSERT INTO ai_chat_sessions (id, mode) VALUES (4, 'chat') "
+            "RETURNING assistant_profile"
+        ))).scalar_one()
+    await engine.dispose()
 
-    recovery = AssistantSessionRecovery(running=True, last_seq=12, run_id="run-1")
-    assert recovery.model_dump() == {"running": True, "last_seq": 12, "run_id": "run-1"}
-
-    attachment = AIChatAttachment(
-        session_id=7,
-        filename="requirements.md",
-        kind="md",
-        mime="text/markdown",
-        size_bytes=42,
-        content_text="# Requirements",
-    )
-    assert attachment.filename == "requirements.md"
-    assert attachment.kind == "md"
-    assert attachment.content_text == "# Requirements"
-    assert attachment.image_data_url is None
+    profile_column = next(column for column in columns if column["name"] == "assistant_profile")
+    assert profile_column["nullable"] is False
+    assert [tuple(row) for row in rows] == [
+        (1, "chat", "entry_agent"),
+        (2, "cowork", "entry_agent"),
+        (3, "code", "entry_agent"),
+    ]
+    assert default_row == "entry_agent"
