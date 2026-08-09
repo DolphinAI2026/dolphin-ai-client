@@ -9,7 +9,7 @@
 - 应用目录、项目概览、需求/SPEC、配置预览、部署、租户日志和能力中心。
 - Dolphin Code runtime 嵌入、会话绑定、左侧 rail 历史、runtime 反向代理和 token/cookie 隔离。
 - FastAPI 后端统一承载认证、租户、应用、Agent、MCP、知识库、技能库、Git、工作区和运行态代理。
-- Tauri 桌面端使用本地 sidecar、桌面账号 federation、自动更新和本机工作区能力。
+- Tauri 桌面端使用本地 sidecar、单 URL Discovery、远程认证和本地 AI 补充能力；不启用本地账号登录。
 - 自开发页面、表单组件、前端插件模板和客户交付部署包。
 
 ## 快速开始
@@ -143,8 +143,8 @@ python3 scripts/agentic_session.py --repo .. reconcile
 | Builder 后端 API | `backend/` | FastAPI 主服务。负责认证、租户、用户、应用、对话/SSE、需求解析、配置生成、aPaaS 调用、应用成员、Git 连接、知识库、技能库、LLM 配置、MCP 工具、运行态代理和桌面适配。 | `cd backend && python run.py` |
 | Code Runtime Bridge | `backend/app/code_runtime/`、`backend/app/routes/code_runtime.py` | Dolphin Code 集成层。负责 Code 应用列表/创建、Code 会话创建、runtime workspace 打开、embed token、proxy cookie、runtime session rail 历史、agent session 激活/删除，以及 `/api/code-runtime/{sessionId}` 反向代理。 | 后端 `/api/code/*`、`/api/code-runtime/*` |
 | 平台管理 SPA | `admin-spa/` | 平台管理员控制台。管理系统状态、MCP 服务和测试器、平台租户/用户、平台环境、LLM 配置、助手配置、沙箱监控、调用日志和设计预览。主前端 `/platform-admin` 会嵌入它。 | `cd admin-spa && npm run dev` |
-| Tauri 桌面端 | `src-tauri/`、`backend/desktop_sidecar.py` | Dolphin Code 桌面壳。打包 `frontend/dist-desktop`，启动本地 Python sidecar，使用本地 SQLite、稳定本地端口、每安装实例密钥、桌面账号 federation、桌面自动更新和本机 workspace 能力。 | `bash scripts/build-desktop.sh` |
-| 桌面账号服务 | `backend/services/account_service/` | 独立公网账号权威。只挂桌面登录/开号路由和桌面更新包托管，提供自包含 `/admin-ui`，供桌面 sidecar 通过 `PUBLIC_ACCOUNT_BASE_URL` federation 登录。 | `cd backend && python -m services.account_service` |
+| Tauri 桌面端 | `src-tauri/`、`backend/desktop_sidecar.py` | Dolphin Code 桌面壳。首次只输入一个远程服务 URL，由 Discovery 决定 Control Plane/aPaaS 认证和 Builder/Code 入口；远程负责用户、租户、应用、会话，桌面 SQLite 仅保存本地模型、MCP、Skill、知识库及诊断数据。支持 Windows、Linux、macOS。 | Linux/macOS: `bash scripts/build-desktop.sh`；Windows: `scripts/build-desktop-windows.ps1` |
+| 桌面账号服务 | `backend/services/account_service/` | 旧版公网账号兼容服务，仅供历史 Web 部署或更新托管使用。桌面 sidecar 已禁用 `/api/desktop-auth/login`，不会再建立本地桌面身份。 | `cd backend && python -m services.account_service` |
 | 低代码自开发资产示例 | `custom-pages/` | 得帆云自开发资产示例。`frontend-plugin-ai-builder-entry` 是前端插件入口示例，`form-component-supplier-network` 是表单组件示例。 | `npm run debug` 或 `df-apaas-cli build` |
 | 代码生成模板 | `backend/templates/cli-generated/` | 后端生成自开发资产时使用的模板库，覆盖菜单页、列表视图、页面布局、前端插件、Web/移动双端表单组件等模板类型。 | 后端生成流程内部使用 |
 | Vibe/Coding 沙箱镜像 | `docker/vibe-sandbox/` | 代码工作区运行/调试用的隔离容器基础镜像，配合后端通过 Docker socket 或 K8s 运行 dev server、构建和验证命令。 | `docker build -t vibe-sandbox:latest docker/vibe-sandbox/` |
@@ -239,7 +239,7 @@ Control Plane 服务端还必须配置
 1. 低代码应用：进入 `/ai-builder/` 或 `/ai-builder/apps`，创建/打开 Builder 应用，通过对话生成需求、配置和部署变更。
 2. 全代码应用：进入 `/ai-builder/code`，在 Code 应用列表或 `/code/new` 创建 `ai-code` 应用，打开 Dolphin Code runtime 继续开发。
 3. 平台配置：进入平台环境、LLM 配置、能力中心或管理端，维护租户环境、模型、MCP、知识和技能。
-4. 桌面交付：使用 `frontend` 的 `build:desktop` 和 `scripts/build-desktop.sh` 打包 Tauri 桌面端，桌面 sidecar 本地承载后端。
+4. 桌面交付：Linux 使用 `bash scripts/build-desktop.sh` 产出 AppImage/deb；macOS 使用同一脚本产出 app/dmg，Apple Silicon 构建 Intel 包时使用 `bash scripts/build-desktop-x86.sh`；Windows 在原生 Windows PowerShell 执行 `scripts/build-desktop-windows.ps1 -Bundle portable`（或 `nsis`/`msi`）。每次脚本都会清理 PyInstaller sidecar 构建，避免复用旧二进制。
 5. 客户部署：按 `deploy/customer/`、`deploy/docker/`、`deploy/k8s/` 或 `deploy/rancher-single-node/` 的 README 交付。
 
 ## 相关文档

@@ -3,12 +3,7 @@ param(
   [string]$Target = "x86_64-pc-windows-msvc",
   [ValidateSet("portable", "nsis", "msi", "all")]
   [string]$Bundle = "portable",
-  [switch]$SkipInstall,
-  [string]$AgentRuntimeRepo = "",
-  [string]$AgenticCodingRoot = "",
-  [string]$CodexVendorRoot = "",
-  [string]$BuilderDist = "",
-  [string]$SuperpowersSource = ""
+  [switch]$SkipInstall
 )
 
 $ErrorActionPreference = "Stop"
@@ -109,22 +104,7 @@ try {
 
   Write-Host "==> [build-desktop-windows.ps1] ROOT=$Root TARGET=$Target BUNDLE=$Bundle"
 
-  Invoke-Step "1/6 Materialize Windows local runtime appliance" {
-    $Prepare = Join-Path $Root "scripts\prepare-local-runtime-appliance-windows.ps1"
-    $PrepareArguments = @{}
-    foreach ($Entry in @{
-      AgentRuntimeRepo = $AgentRuntimeRepo
-      AgenticCodingRoot = $AgenticCodingRoot
-      CodexVendorRoot = $CodexVendorRoot
-      BuilderDist = $BuilderDist
-      SuperpowersSource = $SuperpowersSource
-    }.GetEnumerator()) {
-      if ($Entry.Value) { $PrepareArguments[$Entry.Key] = $Entry.Value }
-    }
-    & $Prepare @PrepareArguments
-  }
-
-  Invoke-Step "2/6 Install frontend dependencies" {
+  Invoke-Step "1/5 Install frontend dependencies" {
     Push-Location $Frontend
     try {
       if (-not $SkipInstall -and -not (Test-Path "node_modules")) {
@@ -136,7 +116,7 @@ try {
     }
   }
 
-  Invoke-Step "3/6 Build frontend desktop bundle" {
+  Invoke-Step "2/5 Build frontend desktop bundle" {
     Push-Location $Frontend
     $PreviousViteDesktop = [Environment]::GetEnvironmentVariable("VITE_DESKTOP", "Process")
     $PreviousViteBaseUrl = [Environment]::GetEnvironmentVariable("VITE_BASE_URL", "Process")
@@ -152,7 +132,7 @@ try {
     }
   }
 
-  Invoke-Step "4/6 Build PyInstaller Windows sidecar" {
+  Invoke-Step "3/5 Build PyInstaller Windows sidecar" {
     Push-Location $Backend
     try {
       $VenvPython = Join-Path $Backend ".venv\Scripts\python.exe"
@@ -177,14 +157,14 @@ try {
         & $VenvPython -m PyInstaller --version | Out-Null
         Assert-NativeSuccess "PyInstaller availability check" $LASTEXITCODE
       }
-      & $VenvPython -m PyInstaller ruijing-sidecar.spec --noconfirm
+      & $VenvPython -m PyInstaller ruijing-sidecar.spec --clean --noconfirm
       Assert-NativeSuccess "PyInstaller sidecar build" $LASTEXITCODE
     } finally {
       Pop-Location
     }
   }
 
-  Invoke-Step "5/6 Place sidecar binary" {
+  Invoke-Step "4/5 Place sidecar binary" {
     $BinDir = Join-Path $Tauri "binaries"
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
     $Sidecar = Join-Path $Backend "dist\ruijing-sidecar.exe"
@@ -196,7 +176,7 @@ try {
     Get-Item $Dest | Format-List FullName,Length,LastWriteTime
   }
 
-  Invoke-Step "6/6 Build Tauri Windows package" {
+  Invoke-Step "5/5 Build Tauri Windows package" {
     Push-Location $Root
     try {
       Initialize-MsvcEnvironment
@@ -211,23 +191,7 @@ try {
       }
       Assert-NativeSuccess "Tauri Windows build" $LASTEXITCODE
 
-      # Keep this relative layout identical to packaged_agent_runtime_root() in desktop_backend.rs.
-      $PackagedApplianceRelativePath = "resources/agent-runtime"
       $ReleaseRoot = Join-Path $Tauri "target\$Target\release"
-      $PackagedApplianceRoot = Join-Path $ReleaseRoot $PackagedApplianceRelativePath
-      foreach ($RelativePath in @(
-        "bin\agent-runtime.exe",
-        "codex\bin\codex.exe",
-        "agentic-coding\.venv\Scripts\python.exe",
-        "agentic-coding-pack\manifest.yaml",
-        "web\builder\dist\index.html"
-      )) {
-        $ResourcePath = Join-Path $PackagedApplianceRoot $RelativePath
-        if (-not (Test-Path -LiteralPath $ResourcePath -PathType Leaf)) {
-          throw "Tauri packaged appliance is missing $PackagedApplianceRelativePath\$RelativePath"
-        }
-      }
-
       if ($Bundle -eq "portable") {
         $DownloadDir = Join-Path $Root "dist-desktop\windows"
         $PortableStagingRoot = Join-Path $env:TEMP "ruijing-$PackageVersion-portable"
@@ -242,16 +206,10 @@ try {
 
         Copy-Item (Join-Path $ReleaseRoot "app.exe") (Join-Path $PortableAppRoot "Dolphin Code.exe") -Force
         Copy-Item (Join-Path $ReleaseRoot "ruijing-sidecar.exe") $PortableAppRoot -Force
-        Copy-Item (Join-Path $ReleaseRoot "resources") $PortableAppRoot -Recurse -Force
 
         foreach ($RelativePath in @(
           "Dolphin Code.exe",
-          "ruijing-sidecar.exe",
-          "resources\agent-runtime\bin\agent-runtime.exe",
-          "resources\agent-runtime\codex\bin\codex.exe",
-          "resources\agent-runtime\agentic-coding\.venv\Scripts\python.exe",
-          "resources\agent-runtime\agentic-coding-pack\manifest.yaml",
-          "resources\agent-runtime\web\builder\dist\index.html"
+          "ruijing-sidecar.exe"
         )) {
           $PortablePath = Join-Path $PortableAppRoot $RelativePath
           if (-not (Test-Path -LiteralPath $PortablePath -PathType Leaf)) {

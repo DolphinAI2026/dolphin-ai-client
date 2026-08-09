@@ -15,6 +15,7 @@
     </div>
     <div class="hub-content">
       <SkillLibraryPage v-if="active === 'skills'" />
+      <PlatformEnvs v-else-if="active === 'models'" only="llm" />
       <KnowledgeBasePage v-else-if="active === 'knowledge'" />
       <McpToolsPage v-else-if="active === 'mcp'" />
       <PlatformEnvs v-else-if="active === 'gateway'" only="llm" />

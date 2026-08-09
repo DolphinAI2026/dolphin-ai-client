@@ -19,6 +19,7 @@ export default defineConfig({
   base: process.env.VITE_BASE_URL || '/',
   define: {
     __DESKTOP__: JSON.stringify(process.env.VITE_DESKTOP === '1'),
+    __DESKTOP_WEB_PREVIEW__: JSON.stringify(process.env.VITE_DESKTOP_WEB_PREVIEW === '1'),
     __APP_VERSION__: JSON.stringify(__APP_VERSION__),
   },
   plugins: [
