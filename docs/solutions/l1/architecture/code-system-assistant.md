@@ -1,8 +1,8 @@
 # Code 系统助手 P0 技术方案
 
-**文档 ID**：`ARCH-20260809-002-code-system-assistant-p0`  
-**版本**：`1.0`  
-**状态**：P0 实现中  
+**文档 ID**：`ARCH-20260809-002-code-system-assistant-p0`
+**版本**：`1.0`
+**状态**：P0 实现中
 **适用工程**：`apaas-builder-ai`
 
 ## P0 增量边界与事实源
