@@ -10,4 +10,5 @@ commands.allow = [
   "desktop_update_login",
   "desktop_update_workspace_entry_scope",
   "desktop_open_path",
+  "desktop_discover_service",
 ]

@@ -33,6 +33,7 @@ from app.routes import (
     current_app,
     db_connections,
     desktop_auth,
+    desktop_bootstrap,
     generation_steps,
     git_connection,
     harness,
@@ -152,6 +153,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api")
 app.include_router(auth_settings_admin_router, prefix="/api/admin/auth")
 app.include_router(desktop_auth.router, prefix="/api")
+app.include_router(desktop_bootstrap.router)
 app.include_router(conversations.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(ai_chat.router, prefix="/api")

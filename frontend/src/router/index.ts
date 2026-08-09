@@ -12,7 +12,7 @@ import request, {
   getAuthSessionState,
   isAuthSessionAlignmentPending,
 } from '@/utils/request'
-import { getCachedDesktopState, getDesktopState } from '@/utils/desktop'
+import { getCachedDesktopState, getDesktopState, resolveDesktopProductScope } from '@/utils/desktop'
 import {
   loadDesktopBootstrapDecision,
   resolveDesktopRedirect,
@@ -337,7 +337,7 @@ export function installRouterGuards(targetRouter: Router): void {
       }
     }
 
-    const workspaceEntryScope = getCachedDesktopState()?.config?.workspace_entry_scope
+    const workspaceEntryScope = resolveDesktopProductScope(getCachedDesktopState()?.config)
     if (workspaceEntryScope) {
       const workspaceRedirect = resolveDesktopWorkspaceRedirect(workspaceEntryScope, to.path)
       if (workspaceRedirect) {

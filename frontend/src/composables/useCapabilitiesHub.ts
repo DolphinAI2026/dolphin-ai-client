@@ -1,4 +1,4 @@
-export type HubTabKey = 'skills' | 'knowledge' | 'mcp' | 'gateway'
+export type HubTabKey = 'models' | 'skills' | 'knowledge' | 'mcp' | 'gateway'
 
 export interface HubTab {
   key: HubTabKey
@@ -11,9 +11,10 @@ export interface HubTab {
 // 四个 tab 全部就地渲染主 app 原生组件(技能库/知识库/McpTools/PlatformEnvs(only=llm)),
 // 不再内嵌 admin-spa —— 避免"应用套应用"的嵌套, 统一一致。
 export const HUB_TABS: HubTab[] = [
+  { key: 'models', label: '模型', access: 'all', desktopHidden: false },
   { key: 'skills', label: '技能库', access: 'all', desktopHidden: false },
-  { key: 'knowledge', label: '知识库', access: 'platformAdmin', desktopHidden: true },
-  { key: 'mcp', label: 'MCP', access: 'platformAdmin', desktopHidden: true },
+  { key: 'knowledge', label: '知识库', access: 'all', desktopHidden: false },
+  { key: 'mcp', label: 'MCP', access: 'all', desktopHidden: false },
   { key: 'gateway', label: 'AI 网关', access: 'tenantAdmin', desktopHidden: true },
 ]
 

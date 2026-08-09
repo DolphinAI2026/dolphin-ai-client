@@ -2,150 +2,40 @@
   <BuilderFrame :breadcrumbs="[{ label: '桌面设置' }]">
     <main class="desktop-settings-page">
       <div class="desktop-settings-content">
-        <header class="desktop-settings-header">
-          <h1>桌面设置</h1>
-          <p>管理登录服务、工作台入口并查看本地运行目录。</p>
-        </header>
-
-        <div v-if="loading" class="desktop-settings-loading" aria-live="polite">
-          <el-icon class="is-loading"><Loading /></el-icon>
-          <span>读取桌面配置</span>
-        </div>
-
-        <el-alert
-          v-else-if="loadError"
-          type="error"
-          :closable="false"
-          show-icon
-          :title="loadError"
-        />
-
+        <header class="desktop-settings-header"><h1>桌面设置</h1><p>远程平台负责认证、租户、应用和会话；本地只补充 AI 资源。</p></header>
+        <div v-if="loading" class="desktop-settings-loading"><el-icon class="is-loading"><Loading /></el-icon>读取桌面配置</div>
+        <el-alert v-else-if="loadError" type="error" :closable="false" show-icon :title="loadError" />
         <div v-else class="desktop-settings-form">
           <section class="desktop-settings-section">
-            <div class="desktop-settings-section-copy">
-              <h2>登录服务</h2>
-              <p>保存后将退出当前会话，并由桌面启动流程重启本地服务。</p>
-            </div>
-
-            <div class="desktop-service-options" role="radiogroup" aria-label="登录模式">
-              <button
-                v-for="service in loginServices"
-                :key="service.mode"
-                type="button"
-                class="desktop-service-option"
-                :class="{ selected: service.mode === mode }"
-                :disabled="saving"
-                role="radio"
-                :aria-checked="service.mode === mode"
-                @click="selectService(service)"
-              >
-                {{ service.label }}
-              </button>
-            </div>
-
-            <el-form label-position="top" class="desktop-field-form">
-              <el-form-item label="服务地址" :error="urlTouched ? urlError : ''">
-                <el-input
-                  v-model="baseUrl"
-                  :disabled="saving"
-                  autocomplete="url"
-                  placeholder="https://example.com"
-                  @input="rememberServiceUrl"
-                  @blur="urlTouched = true"
-                />
+            <div class="desktop-settings-section-copy"><h2>远程连接</h2><p>输入地址后重新发现，认证方式和产品入口由远程服务决定。</p></div>
+            <el-form label-position="top" class="desktop-field-form" @submit.prevent>
+              <el-form-item label="远程服务地址" :error="urlTouched ? urlError : ''">
+                <el-input v-model="serviceUrl" :disabled="saving || discovering" placeholder="输入完整 Control Plane 或仅 aPaaS Builder 地址" @blur="urlTouched = true" />
+                <DesktopServiceExamples />
               </el-form-item>
             </el-form>
+            <div v-if="discovery" class="discovery-summary">
+              <strong>{{ discovery.platform.name }}</strong>
+              <span>{{ discovery.platform.type === 'apaas_builder' ? 'aPaaS Builder' : 'Control Plane' }}</span>
+              <span>{{ discovery.auth.provider === 'apaas' ? 'aPaaS 认证' : '平台认证' }}</span>
+              <span>Builder {{ discovery.products.builder.enabled ? '已启用' : '未启用' }}</span>
+              <span>Code {{ discovery.products.code.enabled ? '已启用' : '未启用' }}</span>
+            </div>
+            <p v-if="operationError" class="desktop-settings-error">{{ operationError }}</p>
+            <div class="desktop-section-actions"><el-button :loading="discovering" :disabled="saving || Boolean(urlError)" @click="rediscover">重新发现</el-button><el-button type="primary" :loading="saving" :disabled="!discovery || Boolean(urlError)" @click="saveConnection">保存并重新连接</el-button></div>
           </section>
 
           <section class="desktop-settings-section">
-            <div class="desktop-settings-section-copy">
-              <h2>工作台入口</h2>
-              <p>选择桌面工作台中显示的产品入口，不影响当前登录服务。</p>
-            </div>
-
-            <el-form label-position="top" class="desktop-field-form">
-              <el-form-item label="显示入口">
-                <el-radio-group
-                  v-model="workspaceScope"
-                  :disabled="workspaceSaving"
-                  class="desktop-workspace-options"
-                  aria-label="工作台入口"
-                >
-                  <el-radio-button
-                    v-for="option in DESKTOP_WORKSPACE_ENTRY_OPTIONS"
-                    :key="option.value"
-                    :value="option.value"
-                  >
-                    {{ option.label }}
-                  </el-radio-button>
-                </el-radio-group>
-              </el-form-item>
-            </el-form>
-
-            <p v-if="workspaceOperationError" class="desktop-settings-error" aria-live="polite">
-              {{ workspaceOperationError }}
-            </p>
-
-            <div class="desktop-section-actions">
-              <el-button
-                type="primary"
-                :loading="workspaceSaving"
-                :disabled="workspaceSaving || workspaceScope === null"
-                @click="saveWorkspaceEntryScope"
-              >
-                保存入口设置
-              </el-button>
-            </div>
+            <div class="desktop-settings-section-copy"><h2>本地 AI</h2><p>本地模型、MCP、Skill、知识库保存在桌面 SQLite，只能由本机工程使用。</p></div>
+            <div class="local-ai-row"><el-switch v-model="localAiEnabled" :disabled="saving" /><span>启用本地 AI 资源</span><el-tag type="success">默认开启</el-tag></div>
+            <div class="local-ai-kinds"><el-tag v-for="kind in localAiKinds" :key="kind">{{ kind }}</el-tag></div>
           </section>
 
           <section class="desktop-settings-section">
-            <div class="desktop-settings-section-copy">
-              <h2>本地存储</h2>
-              <p>本地根目录由首次初始化确定，此处不提供编辑或迁移操作。</p>
-            </div>
-
-            <el-form label-position="top" class="desktop-field-form">
-              <el-form-item label="本地根目录">
-                <el-input :model-value="rootDir" readonly />
-              </el-form-item>
-            </el-form>
-
-            <div class="desktop-path-actions">
-              <el-button
-                :icon="FolderOpened"
-                native-type="button"
-                :loading="openingPath === 'root'"
-                :disabled="saving || Boolean(openingPath)"
-                @click="openPath('root')"
-              >
-                打开根目录
-              </el-button>
-              <el-button
-                :icon="Document"
-                native-type="button"
-                :loading="openingPath === 'logs'"
-                :disabled="saving || Boolean(openingPath)"
-                @click="openPath('logs')"
-              >
-                打开日志目录
-              </el-button>
-            </div>
+            <div class="desktop-settings-section-copy"><h2>存储与诊断</h2><p>目录由桌面端固定管理，不要求 Git 或用户工作区。</p></div>
+            <el-input :model-value="rootDir" readonly />
+            <div class="desktop-path-actions"><el-button :icon="FolderOpened" :loading="openingPath === 'root'" @click="openPath('root')">打开数据目录</el-button><el-button :icon="Document" :loading="openingPath === 'logs'" @click="openPath('logs')">打开日志目录</el-button></div>
           </section>
-
-          <p v-if="operationError" class="desktop-settings-error" aria-live="polite">
-            {{ operationError }}
-          </p>
-
-          <footer class="desktop-settings-actions">
-            <el-button
-              type="primary"
-              :loading="saving"
-              :disabled="saving || Boolean(urlError)"
-              @click="saveLoginSettings"
-            >
-              保存并重新登录
-            </el-button>
-          </footer>
         </div>
       </div>
     </main>
@@ -154,323 +44,82 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
 import { Document, FolderOpened, Loading } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
 import BuilderFrame from '@/components/BuilderFrame.vue'
-import { resolveDesktopWorkspaceRedirect } from '@/router/desktopGuard'
-import { useUserStore } from '@/stores/user'
+import DesktopServiceExamples from '@/components/desktop/DesktopServiceExamples.vue'
 import {
-  DESKTOP_LOGIN_SERVICES,
-  DESKTOP_WORKSPACE_ENTRY_OPTIONS,
+  buildDesktopSetupInput,
+  discoverDesktopService,
+  desktopErrorMessage,
   getDesktopState,
   openDesktopPath,
-  updateDesktopLogin,
-  updateDesktopWorkspaceEntryScope,
-  type DesktopLoginMode,
-  type DesktopLoginServiceOption,
+  saveDesktopSetup,
+  type DesktopDiscoveryDocument,
   type DesktopPathKind,
-  type DesktopWorkspaceEntryScope,
+  type DesktopStateSnapshot,
 } from '@/utils/desktop'
 
-const route = useRoute()
-const router = useRouter()
-const user = useUserStore()
-const loginServices = DESKTOP_LOGIN_SERVICES.filter(service => (
-  service.enabled && (service.mode === 'control_plane' || service.mode === 'apaas')
-))
-const mode = ref<DesktopLoginMode>('control_plane')
-const baseUrl = ref('')
+const snapshot = ref<DesktopStateSnapshot | null>(null)
+const serviceUrl = ref('')
+const discovery = ref<DesktopDiscoveryDocument | null>(null)
 const rootDir = ref('')
-const workspaceScope = ref<DesktopWorkspaceEntryScope | null>(null)
+const localAiEnabled = ref(true)
 const loading = ref(true)
 const saving = ref(false)
-const workspaceSaving = ref(false)
+const discovering = ref(false)
 const openingPath = ref<DesktopPathKind | null>(null)
 const loadError = ref('')
 const operationError = ref('')
-const workspaceOperationError = ref('')
 const urlTouched = ref(false)
-const serviceUrls: Record<DesktopLoginMode, string> = {
-  control_plane: DESKTOP_LOGIN_SERVICES.find(service => service.mode === 'control_plane')?.defaultUrl || '',
-  apaas: DESKTOP_LOGIN_SERVICES.find(service => service.mode === 'apaas')?.defaultUrl || '',
-}
-
-const urlError = computed(() => validateServiceUrl(baseUrl.value))
+const localAiKinds = ['模型', 'MCP', 'Skill', '知识库']
+const urlError = computed(() => validateServiceUrl(serviceUrl.value))
 
 function validateServiceUrl(value: string): string {
-  try {
-    const url = new URL(value.trim())
-    if (!['http:', 'https:'].includes(url.protocol)
-      || !url.hostname
-      || url.username
-      || url.password
-      || url.hash) {
-      return '请输入无凭据、无 fragment 的 HTTP(S) 绝对 URL'
-    }
-    return ''
-  } catch {
-    return '请输入有效的 HTTP(S) 绝对 URL'
-  }
-}
-
-function selectService(service: DesktopLoginServiceOption) {
-  if (service.mode !== 'control_plane' && service.mode !== 'apaas') return
-  serviceUrls[mode.value] = baseUrl.value
-  mode.value = service.mode
-  baseUrl.value = serviceUrls[service.mode]
-  urlTouched.value = false
-  operationError.value = ''
-}
-
-function rememberServiceUrl(value: string) {
-  serviceUrls[mode.value] = value
-  operationError.value = ''
+  try { const url = new URL(value.trim()); return ['http:', 'https:'].includes(url.protocol) && url.hostname && !url.username && !url.password && !url.hash ? '' : '请输入有效的 HTTP(S) 地址' } catch { return '请输入有效的 HTTP(S) 地址' }
 }
 
 async function loadSettings() {
   loading.value = true
-  loadError.value = ''
   try {
-    const snapshot = await getDesktopState()
-    if (!snapshot.config) {
-      loadError.value = '桌面配置尚未完成，请先完成首次初始化'
-      return
-    }
-    mode.value = snapshot.config.login.mode
-    baseUrl.value = snapshot.config.login.base_url
-    serviceUrls[mode.value] = baseUrl.value
-    rootDir.value = snapshot.config.root_dir || snapshot.default_root_dir
-    workspaceScope.value = snapshot.config.workspace_entry_scope
-  } catch {
-    loadError.value = '无法读取桌面配置，请稍后重试'
-  } finally {
-    loading.value = false
-  }
+    const value = await getDesktopState()
+    snapshot.value = value
+    const config = value.config
+    if (!config) { loadError.value = '桌面配置尚未完成，请先完成首次初始化'; return }
+    rootDir.value = config.root_dir || value.default_root_dir
+    serviceUrl.value = config.discovery_url || config.login.base_url
+    discovery.value = config.discovery || null
+    localAiEnabled.value = config.local_ai_enabled !== false
+  } catch { loadError.value = '无法读取桌面配置，请稍后重试' }
+  finally { loading.value = false }
 }
 
-async function saveWorkspaceEntryScope() {
-  if (!workspaceScope.value || workspaceSaving.value) return
-
-  workspaceSaving.value = true
-  workspaceOperationError.value = ''
-  try {
-    const snapshot = await updateDesktopWorkspaceEntryScope(workspaceScope.value)
-    const savedScope = snapshot.config?.workspace_entry_scope
-    if (!savedScope) throw new Error('Desktop workspace entry scope is unavailable')
-
-    workspaceScope.value = savedScope
-    window.dispatchEvent(new CustomEvent<DesktopWorkspaceEntryScope>(
-      'desktop-workspace-entry-scope-changed',
-      { detail: savedScope },
-    ))
-
-    const redirect = resolveDesktopWorkspaceRedirect(savedScope, route.path)
-    if (redirect) await router.replace(redirect)
-    ElMessage.success('工作台入口已保存')
-  } catch {
-    workspaceOperationError.value = '无法保存工作台入口，请稍后重试'
-  } finally {
-    workspaceSaving.value = false
-  }
-}
-
-async function openPath(kind: DesktopPathKind) {
-  openingPath.value = kind
-  operationError.value = ''
-  try {
-    await openDesktopPath(kind)
-  } catch {
-    operationError.value = kind === 'root' ? '无法打开本地根目录' : '无法打开日志目录'
-  } finally {
-    openingPath.value = null
-  }
-}
-
-async function saveLoginSettings() {
+async function rediscover() {
   urlTouched.value = true
-  if (urlError.value || saving.value) return
+  if (urlError.value) return
+  discovering.value = true
+  operationError.value = ''
+  try { discovery.value = await discoverDesktopService(serviceUrl.value.trim()) } catch (error) { operationError.value = desktopErrorMessage(error, '无法连接远程服务') }
+  finally { discovering.value = false }
+}
 
+async function saveConnection() {
+  if (!discovery.value || urlError.value) return
   saving.value = true
   operationError.value = ''
   try {
-    user.logout()
-    await updateDesktopLogin({
-      mode: mode.value,
-      base_url: baseUrl.value.trim(),
-    })
-  } catch {
-    operationError.value = '无法保存登录服务，请重新登录后再试'
-    saving.value = false
-  }
+    const mode = discovery.value.auth.provider === 'apaas' ? 'apaas' : 'control_plane'
+    snapshot.value = await saveDesktopSetup(buildDesktopSetupInput(rootDir.value || snapshot.value?.default_root_dir || '', mode, discovery.value.auth.login_url, 'both', serviceUrl.value.trim(), discovery.value, localAiEnabled.value))
+  } catch (error) { operationError.value = desktopErrorMessage(error, '保存连接失败') }
+  finally { saving.value = false }
 }
 
-onMounted(() => {
-  void loadSettings()
-})
+async function openPath(kind: DesktopPathKind) { openingPath.value = kind; try { await openDesktopPath(kind) } catch { operationError.value = '无法打开目录' } finally { openingPath.value = null } }
+onMounted(() => { void loadSettings() })
 </script>
 
 <style scoped>
-.desktop-settings-page {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 32px 28px 48px;
-  color: var(--text);
-  background: var(--bg);
-}
-
-.desktop-settings-content {
-  width: min(760px, 100%);
-  margin: 0 auto;
-}
-
-.desktop-settings-header h1,
-.desktop-settings-header p,
-.desktop-settings-section-copy h2,
-.desktop-settings-section-copy p,
-.desktop-settings-error {
-  margin: 0;
-}
-
-.desktop-settings-header h1 {
-  font-size: 22px;
-  line-height: 30px;
-  font-weight: 650;
-  letter-spacing: 0;
-}
-
-.desktop-settings-header p,
-.desktop-settings-section-copy p {
-  margin-top: 4px;
-  color: var(--text-3);
-  font-size: 12px;
-  line-height: 18px;
-}
-
-.desktop-settings-loading {
-  min-height: 160px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  color: var(--text-3);
-  font-size: 13px;
-}
-
-.desktop-settings-form {
-  margin-top: 28px;
-  border-top: 1px solid var(--line);
-}
-
-.desktop-settings-section {
-  padding: 24px 0;
-  border-bottom: 1px solid var(--line);
-}
-
-.desktop-settings-section-copy h2 {
-  font-size: 15px;
-  line-height: 22px;
-  font-weight: 650;
-  letter-spacing: 0;
-}
-
-.desktop-service-options {
-  width: min(360px, 100%);
-  margin-top: 16px;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px;
-  padding: 4px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface-2);
-}
-
-.desktop-service-option {
-  min-height: 34px;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-2);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.desktop-service-option:hover:not(:disabled) {
-  color: var(--brand);
-}
-
-.desktop-service-option.selected {
-  color: var(--brand);
-  background: var(--surface);
-  box-shadow: var(--sh-1);
-}
-
-.desktop-service-option:focus-visible {
-  outline: 2px solid var(--line-focus, var(--brand-ring));
-  outline-offset: 1px;
-}
-
-.desktop-service-option:disabled {
-  cursor: wait;
-  opacity: 0.6;
-}
-
-.desktop-field-form {
-  width: min(560px, 100%);
-  margin-top: 16px;
-}
-
-.desktop-field-form :deep(.el-form-item) {
-  margin-bottom: 0;
-}
-
-.desktop-path-actions {
-  margin-top: 14px;
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.desktop-workspace-options {
-  display: flex;
-  flex-wrap: wrap;
-}
-
-.desktop-section-actions {
-  margin-top: 16px;
-  display: flex;
-  justify-content: flex-end;
-}
-
-.desktop-settings-error {
-  margin-top: 16px;
-  color: var(--danger, #ef4444);
-  font-size: 12px;
-  line-height: 18px;
-}
-
-.desktop-settings-actions {
-  padding-top: 20px;
-  display: flex;
-  justify-content: flex-end;
-}
-
-@media (max-width: 640px) {
-  .desktop-settings-page {
-    padding: 24px 18px 36px;
-  }
-
-  .desktop-settings-actions :deep(.el-button) {
-    width: 100%;
-  }
-
-  .desktop-section-actions :deep(.el-button) {
-    width: 100%;
-  }
-}
+.desktop-settings-page { flex: 1; min-height: 0; overflow-y: auto; padding: 32px 28px 48px; color: var(--text); background: var(--bg); }
+.desktop-settings-content { width: min(760px, 100%); margin: 0 auto; }.desktop-settings-header h1 { margin: 0; font-size: 22px; line-height: 30px; }.desktop-settings-header p { margin: 4px 0 0; color: var(--text-3); font-size: 12px; }
+.desktop-settings-form { margin-top: 28px; border-top: 1px solid var(--line); }.desktop-settings-section { padding: 24px 0; border-bottom: 1px solid var(--line); }.desktop-settings-section-copy h2 { margin: 0; font-size: 15px; }.desktop-settings-section-copy p { margin: 4px 0 16px; color: var(--text-3); font-size: 12px; }
+.desktop-field-form { width: min(560px, 100%); }.discovery-summary { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 14px; color: var(--text-2); font-size: 12px; }.discovery-summary span { padding: 3px 7px; border: 1px solid var(--line); border-radius: 5px; }.desktop-section-actions,.desktop-path-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }.local-ai-row { display: flex; gap: 10px; align-items: center; font-size: 13px; }.local-ai-kinds { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }.desktop-settings-error { margin: 12px 0 0; color: var(--danger); font-size: 12px; }.desktop-settings-loading { min-height: 160px; display: grid; place-items: center; color: var(--text-3); }
 </style>

@@ -144,6 +144,13 @@ class Settings(BaseSettings):
     builder_ai_management_url: str = ""
     builder_ai_internal_current_token_id: str = ""
     builder_ai_internal_current_token: str = ""
+    # Desktop discovery: all desktop clients bootstrap from one URL.
+    desktop_deployment_id: str = "ai-builder"
+    desktop_platform_name: str = "Dolphin AI"
+    desktop_public_base_url: str = ""
+    desktop_builder_base_url: str = ""
+    desktop_code_base_url: str = ""
+    desktop_bridge_protocol_version: int = 1
     # 本地调试可只覆盖 workspace/open，应用和模型列表仍走真实 Control Plane。
     dolphin_code_workspace_open_url: str = ""
     dolphin_code_workspace_open_token: str = ""

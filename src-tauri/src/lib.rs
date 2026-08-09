@@ -1,5 +1,6 @@
 pub mod desktop_backend;
 pub mod desktop_config;
+pub mod desktop_discovery;
 pub mod local_runtime;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -18,6 +19,7 @@ pub fn run() {
             desktop_backend::desktop_update_login,
             desktop_backend::desktop_update_workspace_entry_scope,
             desktop_backend::desktop_open_path,
+            desktop_backend::desktop_discover_service,
         ])
         .setup(desktop_backend::setup)
         .build(tauri::generate_context!())

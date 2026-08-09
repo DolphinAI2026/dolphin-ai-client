@@ -300,7 +300,7 @@ describe('resolveDesktopRedirect', () => {
   it('更改服务按钮和 handler 消费同一 gate', () => {
     const buttonStart = loginSource.lastIndexOf(
       '<button',
-      loginSource.indexOf('class="login-service-change"'),
+      loginSource.indexOf('class="login-service-settings"'),
     )
     const buttonEnd = loginSource.indexOf('</button>', buttonStart)
     const buttonSource = loginSource.slice(buttonStart, buttonEnd)
@@ -312,9 +312,11 @@ describe('resolveDesktopRedirect', () => {
       'const desktopServiceChangeAllowed = computed(() => canChangeDesktopService(',
     )
     expect(buttonSource).toContain(':disabled="!desktopServiceChangeAllowed"')
+    expect(buttonSource).toContain('aria-label="更改登录服务"')
     expect(handlerSource).toContain(
       'if (!isDesktop || !desktopServiceChangeAllowed.value) return',
     )
+    expect(handlerSource).toContain("await router.replace('/desktop-setup')")
   })
 
   it('桌面登录服务只启用 AI中台和 aPaaS平台', () => {

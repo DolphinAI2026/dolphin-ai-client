@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   checkAndPromptUpdate,
   getDesktopState,
+  resolveDesktopProductScope,
   type DesktopWorkspaceEntryScope,
 } from '@/utils/desktop'
 import { useUserStore } from '@/stores/user'
@@ -23,7 +24,6 @@ import { aiChatApi, type AIChatSession } from '@/api/aiChat'
 import {
   CODE_APPLICATION_SOURCE_CHANGED_EVENT,
   codeRuntimeApi,
-  loadStoredCodeApplicationSource,
   type CodeApplicationSource,
 } from '@/api/codeRuntime'
 import { authApi } from '@/api/auth'
@@ -54,7 +54,7 @@ const theme = useThemeStore()
 const modeStore = useModeStore()
 const codeApplications = useCodeApplicationsStore()
 const codeApplicationSource = ref<CodeApplicationSource>(
-  __DESKTOP__ ? loadStoredCodeApplicationSource('local') : 'remote',
+  'remote',
 )
 
 const desktopWorkspaceEntryScope = ref<DesktopWorkspaceEntryScope>('both')
@@ -457,7 +457,7 @@ async function loadDesktopWorkspaceEntryScope() {
   if (!__DESKTOP__) return
   try {
     const snapshot = await getDesktopState()
-    applyDesktopWorkspaceEntryScope(snapshot.config?.workspace_entry_scope)
+    applyDesktopWorkspaceEntryScope(resolveDesktopProductScope(snapshot.config))
   } catch { /* desktop bootstrap owns state errors */ }
 }
 
@@ -470,6 +470,7 @@ function onDesktopWorkspaceEntryScopeChanged(event: Event) {
 function onCodeApplicationSourceChanged(event: Event) {
   const source = (event as CustomEvent<CodeApplicationSource | undefined>).detail
   if (source !== 'local' && source !== 'remote') return
+  if (__DESKTOP__ && source === 'local') return
   codeApplicationSource.value = source
   refreshCodeRail()
 }

@@ -1,0 +1,37 @@
+capability_requirements:
+- binding_required: false
+  capability_ref: desktop.remote-discovery
+  consumer_surface: desktop-shell
+- binding_required: false
+  capability_ref: desktop.local-ai-registry
+  consumer_surface: desktop-sidecar
+- binding_required: false
+  capability_ref: desktop.cross-platform-packaging
+  consumer_surface: desktop-build
+catalog_audit:
+  catalog_snapshot_digest: null
+  observed_at: '2026-08-09T00:00:00Z'
+  status: catalog_unavailable
+custom_implementation:
+  reason: 现有 apaas-builder-ai 桌面工程已经形成稳定的 Vue、FastAPI、Tauri 和 PyInstaller 技术基线，本次是对现有客户端边界与启动链路的系统变更，不适合套用新应用模板。
+  stack_summary: Vue 3 + TypeScript + Pinia + Element Plus；FastAPI + SQLAlchemy +
+    SQLite sidecar；Tauri 2 + Rust；PyInstaller；Windows NSIS/portable、Linux AppImage/deb、macOS
+    app/dmg。
+  technical_design_refs:
+  - path: docs/solutions/l1/arch/ARCH-20260809-001-desktop-local-ai-cross-platform.md
+    reason: 冻结单 URL、远程事实源、本地 AI 四类资源和三平台目标。
+    section: 架构目标与边界
+    sha256: sha256:7be5c661bb47e6ea4802e4b9ead643c29cfe9966f132f750051dea8ad3dc73e0
+  - path: docs/solutions/l1/arch/ARCH-20260809-001-desktop-local-ai-cross-platform.md
+    reason: 冻结 sidecar 独立启动和 Local Runtime 按需策略。
+    section: Runtime 生命周期
+    sha256: sha256:7be5c661bb47e6ea4802e4b9ead643c29cfe9966f132f750051dea8ad3dc73e0
+  - path: docs/solutions/l1/arch/ARCH-20260809-001-desktop-local-ai-cross-platform.md
+    reason: 冻结首阶段修改范围、兼容和验证边界。
+    section: 实施阶段与文件 Ownership
+    sha256: sha256:7be5c661bb47e6ea4802e4b9ead643c29cfe9966f132f750051dea8ad3dc73e0
+kind: application_architecture_mapping
+mapping_digest: sha256:a1014c0336c7a82463b46d54b9044d080b25913a4bd6b47d9cbd36008cadd23c
+schema_version: 2
+selection_mode: custom_implementation
+templates: []
