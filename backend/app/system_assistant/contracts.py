@@ -9,9 +9,9 @@ contracts belong to a later phase and should not be added here.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Literal, TypeAlias, cast
+from typing import Any, Literal, TypeAlias, cast
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class AssistantProfile(str, Enum):
@@ -24,6 +24,40 @@ class AssistantProfile(str, Enum):
 AssistantProfileValue: TypeAlias = Literal["entry_agent", "system_assistant"]
 DEFAULT_ASSISTANT_PROFILE = AssistantProfile.ENTRY_AGENT.value
 SUPPORTED_ASSISTANT_PROFILES = frozenset(profile.value for profile in AssistantProfile)
+
+BaselineStatus: TypeAlias = Literal[
+    "ready", "partial", "missing", "stale", "unavailable", "not_needed"
+]
+SourceStatus: TypeAlias = Literal["ready", "partial", "unavailable"]
+
+
+class BaselineNode(BaseModel):
+    """A category in the read-only P0 baseline snapshot."""
+
+    id: str
+    label: str
+    status: BaselineStatus
+    source_status: SourceStatus
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RecommendedAction(BaseModel):
+    """At most one route draft is recommended in P0."""
+
+    id: str
+    status: BaselineStatus
+    title: str
+    reason: str
+
+
+class BootstrapResponse(BaseModel):
+    """Stable response shape for ``GET /system-assistant/bootstrap``."""
+
+    baseline_snapshot: dict[str, Any]
+    recommended_action: RecommendedAction
+    available_actions: list[str]
+    source_status: dict[str, SourceStatus]
 
 
 def normalize_assistant_profile(value: str | AssistantProfile | None) -> AssistantProfileValue:
