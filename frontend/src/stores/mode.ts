@@ -45,6 +45,7 @@ export const MODE_META: Record<AppMode, ModeMeta> = {
     key: 'code', label: 'Code', sub: '全代码开发', colorVar: '--fullcode', home: '/code/apps',
     nav: [
       { key: 'c-apps', label: '我的应用', icon: 'apps', path: '/code/apps' },
+      { key: 'c-system-assistant', label: '系统助手', icon: 'sparkles', path: '/code/system-assistant' },
     ],
   },
 }

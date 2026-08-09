@@ -120,9 +120,21 @@ def _system_assistant_tool_names() -> tuple[str, ...]:
         )
     }
     allow -= _paused_tool_names()
-    local = list(BASE_LOCAL_TOOLS)
-    local.extend(name for name in ("use_skill", "read_knowledge", "search_knowledge") if name not in local)
-    return tuple(local + sorted(allow - set(local)))
+    session_tools = [
+        "read_attachment",
+        "run_python",
+        "write_artifact",
+        "read_artifact",
+        "edit_artifact",
+        "create_artifact_from_attachment",
+        "ask_clarifying_question",
+        "search_tools",
+        "save_binary_artifact",
+        "use_skill",
+        "read_knowledge",
+        "search_knowledge",
+    ]
+    return tuple(session_tools + sorted(allow - set(session_tools)))
 
 
 _PROFILE_BUILDERS = {

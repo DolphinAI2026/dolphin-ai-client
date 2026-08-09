@@ -104,6 +104,11 @@ export const routes: RouteRecordRaw[] = [
           component: () => import('@/views/Apps.vue'),
         },
         {
+          path: 'system-assistant',
+          name: 'CodeSystemAssistant',
+          component: () => import('@/views/SystemAssistantPage.vue'),
+        },
+        {
           path: 'new',
           name: 'CodeNewApplication',
           component: () => import('@/views/CodeConversationPage.vue'),

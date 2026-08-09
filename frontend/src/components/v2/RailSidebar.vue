@@ -68,6 +68,7 @@ const currentMode = computed<AppMode>(() => {
     ? visibleModeOrder.value[0]
     : routeMode
 })
+const isSystemAssistantRoute = computed(() => route.path === '/code/system-assistant')
 
 // 会话历史 —— 收进左栏单一导航(参考 Claude Code), 页面内层 sidebar 隐掉。
 // 统一使用 aiChatApi 会话; Code 模式只展示 mode=code 的应用会话。
@@ -81,13 +82,21 @@ let railSessionsSeq = 0
 const appNameById = ref<Map<number, string>>(new Map())
 
 // 归一会话列表(单一来源)。
-const railSessions = computed<RailSession[]>(() => currentMode.value === 'code'
-  ? normalizeCodeRailHistory(codeRailHistory.value)
-  : normalizeAiSessions(aiSessions.value, appNameById.value))
+const railSessions = computed<RailSession[]>(() => {
+  if (isSystemAssistantRoute.value) return normalizeAiSessions(aiSessions.value)
+  return currentMode.value === 'code'
+    ? normalizeCodeRailHistory(codeRailHistory.value)
+    : normalizeAiSessions(aiSessions.value, appNameById.value)
+})
 
 async function loadRailApps() {
   const seq = ++railAppsSeq
   const mode = currentMode.value
+  if (isSystemAssistantRoute.value) {
+    appCount.value = undefined
+    appNameById.value = new Map()
+    return
+  }
   try {
     if (mode === 'code') {
       const page = await codeApplications.load(
@@ -128,6 +137,13 @@ async function loadRailSessions() {
   const seq = ++railSessionsSeq
   const mode = currentMode.value
   try {
+    if (isSystemAssistantRoute.value) {
+      const data = await aiChatApi.listSessions({ mode: 'code', assistant_profile: 'system_assistant' })
+      if (seq !== railSessionsSeq || !isSystemAssistantRoute.value) return
+      codeRailHistory.value = null
+      aiSessions.value = data?.sessions || []
+      return
+    }
     if (mode === 'code') {
       const history = await codeRuntimeApi.listRailHistory(codeApplicationSource.value)
       if (seq !== railSessionsSeq || mode !== currentMode.value) return
@@ -173,7 +189,9 @@ function loadGroupByForMode(mode: AppMode): 'date' | 'app' {
 const groupBy = ref<'date' | 'app'>(loadGroupByForMode(currentMode.value))
 const groupByMode = ref<AppMode>(currentMode.value)
 const effectiveGroupBy = computed<'date' | 'app'>(() =>
-  groupByMode.value === currentMode.value ? groupBy.value : loadGroupByForMode(currentMode.value)
+  isSystemAssistantRoute.value
+    ? 'date'
+    : (groupByMode.value === currentMode.value ? groupBy.value : loadGroupByForMode(currentMode.value))
 )
 function setGroupBy(g: 'date' | 'app') {
   groupByMode.value = currentMode.value
@@ -185,6 +203,10 @@ function setGroupBy(g: 'date' | 'app') {
 watch(currentMode, () => {
   groupByMode.value = currentMode.value
   groupBy.value = loadGroupByForMode(currentMode.value)
+  void loadRailApps()
+  void loadRailSessions()
+})
+watch(isSystemAssistantRoute, () => {
   void loadRailApps()
   void loadRailSessions()
 })
@@ -239,6 +261,10 @@ const sessionGroups = computed<{ label: string; items: RailSession[]; shellSessi
 })
 
 async function openSession(session: RailSession) {
+  if (isSystemAssistantRoute.value) {
+    router.push({ path: '/code/system-assistant', query: { ...route.query, session: String(session.id) } })
+    return
+  }
   if (currentMode.value === 'code' && session.source === 'code-agent' && session.shellSessionId && session.runtimeSessionId) {
     try {
       await codeRuntimeApi.activateAgentSession(session.shellSessionId, session.runtimeSessionId)
@@ -246,7 +272,10 @@ async function openSession(session: RailSession) {
   }
   router.push(railSessionTarget(currentMode.value, session, route.query))
 }
-function sessionActive(s: RailSession) { return isRailSessionActive(currentMode.value, s, route) }
+function sessionActive(s: RailSession) {
+  if (isSystemAssistantRoute.value) return String(route.query.session || '') === String(s.id)
+  return isRailSessionActive(currentMode.value, s, route)
+}
 
 function upsertOptimisticCodeAgentSession(
   shellSessionId: string,
@@ -344,6 +373,12 @@ async function deleteRailSession(s: RailSession) {
   } catch { /* ignore */ }
   await loadRailSessions()
   if (sessionActive(s)) {
+    if (isSystemAssistantRoute.value) {
+      const query = { ...route.query }
+      delete query.session
+      router.push({ path: '/code/system-assistant', query })
+      return
+    }
     router.push({
       path: railSessionFallback(currentMode.value),
       query: nextAgentQuery(route.query),
@@ -754,10 +789,10 @@ function renderIcon(name: string): string {
       <!-- 会话历史(单一左栏, 参考 Claude Code): 日期/应用 分组 + 可折叠 + 删除。 -->
       <div v-if="showRecent" class="rail-sessions">
         <div class="rail-sess-toolbar">
-          <span class="rail-sess-cap">会话</span>
+          <span class="rail-sess-cap">{{ isSystemAssistantRoute ? '系统助手会话' : '会话' }}</span>
           <div class="rail-sess-groupby">
             <button type="button" :class="{ on: effectiveGroupBy === 'date' }" @click="setGroupBy('date')">日期</button>
-            <button type="button" :class="{ on: effectiveGroupBy === 'app' }" @click="setGroupBy('app')">应用</button>
+            <button v-if="!isSystemAssistantRoute" type="button" :class="{ on: effectiveGroupBy === 'app' }" @click="setGroupBy('app')">应用</button>
           </div>
         </div>
         <div v-for="g in sessionGroups" :key="g.label" class="rail-sess-group">

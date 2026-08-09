@@ -36,6 +36,10 @@
             <el-icon><Plus /></el-icon>
             <span>{{ newAppLabel }}</span>
           </button>
+          <button v-if="isCodeMode" class="btn btn-secondary apps-toolbar-action" type="button" @click="openSystemAssistant">
+            <AppIcon name="sparkles" :size="14" />
+            <span>系统助手</span>
+          </button>
           <button v-if="isCodeMode" class="btn btn-primary apps-toolbar-action" type="button" @click="startNewCodeApp">
             <el-icon><Plus /></el-icon>
             <span>{{ codeApplicationSource === 'local' ? '新建本地应用' : '新建远程应用' }}</span>
@@ -530,6 +534,10 @@ function startNewApp() {
 
 function startNewCodeApp() {
   router.push('/code/new')
+}
+
+function openSystemAssistant() {
+  router.push('/code/system-assistant')
 }
 
 async function handleLocalApplicationCreated(application: CodeApplication) {

@@ -95,14 +95,20 @@ def _source_failure(source: str, error: Exception) -> dict[str, Any]:
 
 
 async def collect_baseline_facts(db: AsyncSession, ctx: Any) -> dict[str, Any]:
-    """Read only the currently visible local facts for ``ctx.tenant_id``."""
+    """Read only facts visible to the current user and tenant context."""
 
     tenant_id = int(getattr(ctx, "tenant_id", 0) or 0)
+    user_id = int(getattr(getattr(ctx, "user", None), "id", 0) or 0)
+    role = str(getattr(ctx, "tenant_role", "member") or "member")
+    can_manage_environment = role in {"platform_admin", "tenant_admin"}
     facts: dict[str, Any] = {}
 
     try:
         rows = (await db.execute(
-            select(RegisteredWorkspace).where(RegisteredWorkspace.tenant_id == tenant_id)
+            select(RegisteredWorkspace).where(
+                RegisteredWorkspace.tenant_id == tenant_id,
+                RegisteredWorkspace.user_id == user_id,
+            )
         )).scalars().all()
         facts["workspace"] = {
             "status": "ready" if rows else "missing",
@@ -114,17 +120,28 @@ async def collect_baseline_facts(db: AsyncSession, ctx: Any) -> dict[str, Any]:
     except Exception as error:
         facts["workspace"] = _source_failure("workspace", error)
 
-    try:
-        rows = (await db.execute(
-            select(PlatformEnv).where(PlatformEnv.tenant_id == tenant_id)
-        )).scalars().all()
+    if not can_manage_environment:
         facts["environment"] = {
-            "status": "ready" if any(row.status == "connected" for row in rows) else ("missing" if not rows else "partial"),
-            "source_status": "ready",
-            "items": [{"id": row.alias or str(row.id), "status": row.status, "default": row.is_default} for row in rows],
+            "status": "unavailable",
+            "source_status": "unavailable",
+            "items": [],
+            "metadata": {
+                "reason": "tenant_admin_required",
+                "action": "request_environment_access",
+            },
         }
-    except Exception as error:
-        facts["environment"] = _source_failure("environment", error)
+    else:
+        try:
+            rows = (await db.execute(
+                select(PlatformEnv).where(PlatformEnv.tenant_id == tenant_id)
+            )).scalars().all()
+            facts["environment"] = {
+                "status": "ready" if any(row.status == "connected" for row in rows) else ("missing" if not rows else "partial"),
+                "source_status": "ready",
+                "items": [{"id": row.alias or str(row.id), "status": row.status, "default": row.is_default} for row in rows],
+            }
+        except Exception as error:
+            facts["environment"] = _source_failure("environment", error)
 
     try:
         rows = (await db.execute(
@@ -133,29 +150,59 @@ async def collect_baseline_facts(db: AsyncSession, ctx: Any) -> dict[str, Any]:
             )
         )).scalars().all()
         facts["knowledge"] = {
-            "status": "ready" if rows else "missing",
-            "source_status": "ready",
-            "items": [{"id": row.slug, "title": row.title, "category": row.category} for row in rows],
+            "status": "partial" if rows else "unavailable",
+            "source_status": "partial" if rows else "unavailable",
+            "items": [
+                {
+                    "id": row.slug,
+                    "title": row.title,
+                    "category": row.category,
+                    "source": "builder_local_cache",
+                }
+                for row in rows
+            ],
+            "metadata": {
+                "local_source": "builder_local_cache",
+                "authoritative_source": "full_workspace",
+                "authoritative_source_status": "unavailable",
+            },
         }
     except Exception as error:
         facts["knowledge"] = _source_failure("knowledge", error)
 
     try:
-        skills = SkillRegistry().scan()
+        skills = [skill for skill in SkillRegistry().scan() if skill.source == "platform"]
         facts["skill"] = {
-            "status": "ready" if skills else "missing",
-            "source_status": "ready",
-            "items": [{"id": skill.name, "source": skill.source, "description": skill.description} for skill in skills],
+            "status": "partial" if skills else "unavailable",
+            "source_status": "partial" if skills else "unavailable",
+            "items": [
+                {
+                    "id": skill.name,
+                    "source": "local_platform_preset",
+                    "description": skill.description,
+                }
+                for skill in skills
+            ],
+            "metadata": {
+                "local_source": "local_platform_preset",
+                "unverified_user_skills_omitted": True,
+                "authoritative_source": "full_workspace",
+                "authoritative_source_status": "unavailable",
+            },
         }
     except Exception as error:
         facts["skill"] = _source_failure("skill", error)
 
     permissions = getattr(ctx, "org_permissions", {}) or {}
-    role = str(getattr(ctx, "tenant_role", "member") or "member")
+    granted_permissions = (
+        sorted(code for code, allowed in permissions.items() if allowed)
+        if isinstance(permissions, dict)
+        else []
+    )
     facts["governance"] = {
         "status": "ready",
         "source_status": "ready",
-        "items": [{"id": role, "permissions": sorted(permissions) if isinstance(permissions, dict) else []}],
+        "items": [{"id": role, "permissions": granted_permissions}],
     }
     # No local API currently exposes shared Full Workspace assets, remote
     # capabilities, or a template catalog. Keep those facts explicit.
@@ -177,17 +224,3 @@ async def collect_baseline_facts(db: AsyncSession, ctx: Any) -> dict[str, Any]:
 async def build_bootstrap(db: AsyncSession, ctx: Any) -> dict[str, Any]:
     facts = await collect_baseline_facts(db, ctx)
     return build_baseline_snapshot(facts, tenant_id=int(getattr(ctx, "tenant_id", 0) or 0))
-
-
-def unavailable_bootstrap(*, tenant_id: int) -> dict[str, Any]:
-    facts = {node_id: {"status": "unavailable", "source_status": "unavailable"} for node_id in _NODE_ORDER}
-    result = build_baseline_snapshot(facts, tenant_id=tenant_id)
-    result["source_status"] = {"baseline": "unavailable", **result["source_status"]}
-    result["recommended_action"] = {
-        "id": "inspect_baseline_source",
-        "status": "partial",
-        "title": "检查基线来源",
-        "reason": "基线来源暂不可用，未将不可用来源当成缺失。",
-    }
-    result["available_actions"] = ["inspect_baseline_source"]
-    return result

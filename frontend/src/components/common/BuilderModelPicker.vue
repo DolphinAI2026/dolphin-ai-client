@@ -8,11 +8,13 @@ const props = withDefaults(defineProps<{
   disabled?: boolean
   title?: string
   defaultLabel?: string
+  showDefaultConfigName?: boolean
 }>(), {
   options: () => [],
   disabled: false,
   title: '切换模型',
   defaultLabel: '默认模型',
+  showDefaultConfigName: false,
 })
 
 const emit = defineEmits<{
@@ -27,10 +29,15 @@ const selectedOption = computed(() =>
   props.options.find(option => option.id === props.modelValue) ?? null,
 )
 const selectedLabel = computed(() =>
-  selectedOption.value?.is_default
+  selectedOption.value?.is_default && !props.showDefaultConfigName
     ? props.defaultLabel
     : selectedOption.value?.config_name || props.defaultLabel,
 )
+
+function optionLabel(option: BuilderModelOption): string {
+  if (option.is_default && !props.showDefaultConfigName) return props.defaultLabel
+  return option.config_name || option.model || props.defaultLabel
+}
 
 function toggle() {
   if (props.disabled) return
@@ -96,7 +103,7 @@ onUnmounted(() => document.removeEventListener('click', closeOnOutside))
         :aria-selected="modelValue === option.id"
         @click.stop="choose(option.id)"
       >
-        <span class="bmp-option-name">{{ option.is_default ? defaultLabel : option.config_name }}</span>
+        <span class="bmp-option-name">{{ optionLabel(option) }}</span>
         <span class="bmp-option-meta">{{ option.is_default ? '当前默认配置' : `${option.provider} / ${option.model}` }}</span>
       </button>
     </div>

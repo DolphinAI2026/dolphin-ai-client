@@ -45,6 +45,7 @@ from app.models import (
 from app.ai_chat.tools import TOOL_SCHEMAS, execute_tool, get_all_tool_schemas, split_core_deferred, build_deferred_manifest
 from app.observability import recorder
 from app.routes.llm_configs import build_llm_chat_completions_url
+from app.system_assistant.contracts import assistant_model_purpose
 from app import llm_transport
 
 logger = logging.getLogger(__name__)
@@ -492,10 +493,11 @@ async def _resolve_llm_config(
     """
     from app.routes.llm_configs import resolve_llm_config_for_purpose
 
+    purpose = assistant_model_purpose(getattr(session, "assistant_profile", None))
     cfg: Optional[LLMConfig] = await resolve_llm_config_for_purpose(
         db,
         getattr(session, "tenant_id", None) or 0,
-        "builder",
+        purpose,
         session.selected_llm_config_id,
     )
     if not cfg:
@@ -939,15 +941,21 @@ async def _run_agent_inner(
     # 每个 session 的第一轮拉一次合并 schemas（base 4 + MCP bridge 注入的 N 个）
     # 这是 lazy 设计 — backend 启动时 MCP 可能还没 ready，所以放在 turn loop 外的第一次调用
     all_schemas = await get_all_tool_schemas()
-    # profile 工具白名单(如 dev-apaas):base 本地工具恒保留(search_tools/ask_clarifying_question 等),
-    # MCP 工具按白名单收窄 — 砍掉 deploy/生成/配置增删改,防 Code agent 跑偏。默认 None 不过滤(Builder 全量)。
+    # profile 工具白名单。旧 entry_agent/dev-apaas 继续恒保留 AIChat base tools；
+    # system_assistant 则严格按白名单过滤，避免会话临时目录工具绕过 ws_id 工作区边界。
     if tool_names_override is not None:
         from app.ai_chat.tools import _BASE_LOCAL_NAMES
         _allow = set(tool_names_override)
+        _strict_base_allow = (
+            getattr(session, "assistant_profile", None) == "system_assistant"
+        )
         all_schemas = [
             s for s in all_schemas
-            if s.get("function", {}).get("name") in _BASE_LOCAL_NAMES
-            or s.get("function", {}).get("name") in _allow
+            if s.get("function", {}).get("name") in _allow
+            or (
+                not _strict_base_allow
+                and s.get("function", {}).get("name") in _BASE_LOCAL_NAMES
+            )
         ]
     # 延迟工具:核心集恒在；长尾只在 system prompt 列清单，按需 search_tools 激活。
     core_schemas, deferred_by_name = split_core_deferred(all_schemas)

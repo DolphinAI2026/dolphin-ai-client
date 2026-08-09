@@ -27,7 +27,7 @@ from typing import Annotated, List, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from sqlalchemy import select, desc
+from sqlalchemy import or_, select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
@@ -48,6 +48,7 @@ from app.coding.workspace_access import workspace_mgr  # 代码会话标题派�
 from app.system_assistant.contracts import (
     AssistantProfileRequest,
     DEFAULT_ASSISTANT_PROFILE,
+    assistant_model_purpose,
     normalize_assistant_profile,
 )
 
@@ -58,8 +59,15 @@ router = APIRouter(prefix="/ai-chat", tags=["ai-chat"])
 _DEFAULT_SESSION_TITLES = {"", "新会话"}
 
 
-def _control_plane_code_tenant_id(ctx: AuthContext, mode: str | None) -> str | None:
-    if str(mode or "").strip().lower() != "code":
+def _control_plane_code_tenant_id(
+    ctx: AuthContext,
+    mode: str | None,
+    assistant_profile: str | None = None,
+) -> str | None:
+    if (
+        str(mode or "").strip().lower() != "code"
+        and assistant_profile != "system_assistant"
+    ):
         return None
     if str(getattr(ctx.user, "account_source", "") or "").strip().lower() != "control_plane":
         return None
@@ -459,6 +467,11 @@ async def _load_session_or_404(
     s = res.scalar_one_or_none()
     if not s:
         raise HTTPException(status_code=404, detail="会话不存在或无权限")
+    if (getattr(s, "assistant_profile", None) or DEFAULT_ASSISTANT_PROFILE) == "system_assistant":
+        current_cp_tenant = str(getattr(ctx, "control_plane_tenant_id", "") or "").strip() or None
+        stored_cp_tenant = str(getattr(s, "control_plane_tenant_id", "") or "").strip() or None
+        if current_cp_tenant != stored_cp_tenant:
+            raise HTTPException(status_code=404, detail="会话不存在或无权限")
     return s
 
 
@@ -490,6 +503,13 @@ async def list_sessions(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         query = query.where(AIChatSession.assistant_profile == profile_filter)
+    current_cp_tenant = str(getattr(ctx, "control_plane_tenant_id", "") or "").strip() or None
+    query = query.where(
+        or_(
+            AIChatSession.assistant_profile != "system_assistant",
+            AIChatSession.control_plane_tenant_id == current_cp_tenant,
+        )
+    )
     query = query.order_by(desc(AIChatSession.updated_at)).limit(limit)
     res = await db.execute(query)
     sessions = res.scalars().all()
@@ -506,9 +526,12 @@ async def create_session(
     selected_llm_config_id: Optional[int] = None
     if body.selected_llm_config_id is not None and body.selected_llm_config_id > 0:
         from app.routes.llm_configs import get_active_llm_config_by_id_for_purpose
-        cfg = await get_active_llm_config_by_id_for_purpose(db, ctx.tenant_id, body.selected_llm_config_id, "builder")
+        purpose = assistant_model_purpose(body.assistant_profile)
+        cfg = await get_active_llm_config_by_id_for_purpose(
+            db, ctx.tenant_id, body.selected_llm_config_id, purpose
+        )
         if not cfg:
-            raise HTTPException(status_code=400, detail="所选模型不可用或不支持 AI Builder")
+            raise HTTPException(status_code=400, detail="所选模型不可用或不支持当前助手")
         selected_llm_config_id = cfg.id
     title = body.title or "新会话"
     app_id = body.app_id
@@ -537,7 +560,11 @@ async def create_session(
             pass
     s = AIChatSession(
         tenant_id=ctx.tenant_id,
-        control_plane_tenant_id=_control_plane_code_tenant_id(ctx, body.mode),
+        control_plane_tenant_id=_control_plane_code_tenant_id(
+            ctx,
+            body.mode,
+            body.assistant_profile,
+        ),
         user_id=ctx.user.id,
         title=title,
         selected_llm_config_id=selected_llm_config_id,
@@ -660,9 +687,12 @@ async def update_session(
     if body.selected_llm_config_id is not None:
         if body.selected_llm_config_id > 0:
             from app.routes.llm_configs import get_active_llm_config_by_id_for_purpose
-            cfg = await get_active_llm_config_by_id_for_purpose(db, ctx.tenant_id, body.selected_llm_config_id, "builder")
+            purpose = assistant_model_purpose(getattr(s, "assistant_profile", None))
+            cfg = await get_active_llm_config_by_id_for_purpose(
+                db, ctx.tenant_id, body.selected_llm_config_id, purpose
+            )
             if not cfg:
-                raise HTTPException(status_code=400, detail="所选模型不可用或不支持 AI Builder")
+                raise HTTPException(status_code=400, detail="所选模型不可用或不支持当前助手")
             s.selected_llm_config_id = cfg.id
         else:
             s.selected_llm_config_id = None
@@ -871,6 +901,27 @@ async def abort_session(
     h = ai_chat_run_registry.get(session_id)
     if h and not h.task.done():
         h.task.cancel()
+        now = datetime.utcnow()
+        rows = (await db.execute(
+            select(AIChatToolCall).where(
+                AIChatToolCall.session_id == session_id,
+                AIChatToolCall.status == "running",
+            )
+        )).scalars().all()
+        for tool_call in rows:
+            tool_call.status = "aborted"
+            tool_call.result_text = json.dumps(
+                {"ok": False, "error_code": "ABORTED", "message": "用户已停止本轮执行"},
+                ensure_ascii=False,
+            )
+            tool_call.error_message = "用户已停止本轮执行"
+            tool_call.ended_at = now
+            if tool_call.started_at:
+                tool_call.duration_ms = max(
+                    0,
+                    int((now - tool_call.started_at).total_seconds() * 1000),
+                )
+        await db.commit()
         return {"ok": True, "stopped": True}
     return {"ok": True, "stopped": False}
 

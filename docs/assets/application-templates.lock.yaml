@@ -13,25 +13,43 @@ catalog_audit:
   observed_at: '2026-08-09T00:00:00Z'
   status: catalog_unavailable
 custom_implementation:
-  reason: 现有 apaas-builder-ai 桌面工程已经形成稳定的 Vue、FastAPI、Tauri 和 PyInstaller 技术基线，本次是对现有客户端边界与启动链路的系统变更，不适合套用新应用模板。
-  stack_summary: Vue 3 + TypeScript + Pinia + Element Plus；FastAPI + SQLAlchemy +
-    SQLite sidecar；Tauri 2 + Rust；PyInstaller；Windows NSIS/portable、Linux AppImage/deb、macOS
-    app/dmg。
+  reason: 现有 apaas-builder-ai 已形成稳定的 Vue、FastAPI、Tauri 和 PyInstaller 宿主基线；桌面改造与 Code 系统助手都是现有客户端的原位增量，不创建新应用，也不选择或物化固定技术栈模板。
+  stack_summary: 宿主应用使用 Vue 3 + TypeScript + Pinia + Element Plus、FastAPI + SQLAlchemy、Tauri 2 + Rust 和 PyInstaller。系统助手诊断或修改的目标工程技术栈必须从真实仓库、工作区或模板清单识别，宿主技术栈不是目标工程前提。
   technical_design_refs:
   - path: docs/solutions/l1/arch/ARCH-20260809-001-desktop-local-ai-cross-platform.md
     reason: 冻结单 URL、远程事实源、本地 AI 四类资源和三平台目标。
     section: 架构目标与边界
-    sha256: sha256:7be5c661bb47e6ea4802e4b9ead643c29cfe9966f132f750051dea8ad3dc73e0
+    sha256: sha256:fe4c5523286aa165e4a51c035cc32bddbb4a3ccba49cf8dcd2f60a26329ff3a9
   - path: docs/solutions/l1/arch/ARCH-20260809-001-desktop-local-ai-cross-platform.md
     reason: 冻结 sidecar 独立启动和 Local Runtime 按需策略。
     section: Runtime 生命周期
-    sha256: sha256:7be5c661bb47e6ea4802e4b9ead643c29cfe9966f132f750051dea8ad3dc73e0
+    sha256: sha256:fe4c5523286aa165e4a51c035cc32bddbb4a3ccba49cf8dcd2f60a26329ff3a9
   - path: docs/solutions/l1/arch/ARCH-20260809-001-desktop-local-ai-cross-platform.md
     reason: 冻结首阶段修改范围、兼容和验证边界。
     section: 实施阶段与文件 Ownership
-    sha256: sha256:7be5c661bb47e6ea4802e4b9ead643c29cfe9966f132f750051dea8ad3dc73e0
+    sha256: sha256:fe4c5523286aa165e4a51c035cc32bddbb4a3ccba49cf8dcd2f60a26329ff3a9
+  - path: docs/solutions/l1/architecture/code-system-assistant.md
+    reason: 冻结系统助手作为现有 Code 宿主增量、且不绑定目标工程技术栈的边界。
+    section: P0 增量边界与事实源
+    sha256: sha256:586432d9be599d7e7228f3a36dd98be1bd8b988dc36ec945ca70a8c8b5731ad4
+  - path: docs/solutions/l1/architecture/code-system-assistant.md
+    reason: 冻结会话事实源、组织隔离和运行恢复方式。
+    section: AIChat 会话、组织与运行恢复合同
+    sha256: sha256:586432d9be599d7e7228f3a36dd98be1bd8b988dc36ec945ca70a8c8b5731ad4
+  - path: docs/solutions/l1/architecture/code-system-assistant.md
+    reason: 冻结工作区工具授权边界，避免提示词代替权限控制。
+    section: 工具与工作区安全边界
+    sha256: sha256:586432d9be599d7e7228f3a36dd98be1bd8b988dc36ec945ca70a8c8b5731ad4
+  - path: docs/solutions/l1/architecture/code-system-assistant.md
+    reason: 冻结基线来源、权限和不可用语义。
+    section: 只读基线来源与失败语义
+    sha256: sha256:586432d9be599d7e7228f3a36dd98be1bd8b988dc36ec945ca70a8c8b5731ad4
+  - path: docs/solutions/l1/architecture/code-system-assistant.md
+    reason: 冻结 Code Web 与桌面入口复用、P1/P2 延迟范围和验证边界。
+    section: Code Web 与桌面入口复用
+    sha256: sha256:586432d9be599d7e7228f3a36dd98be1bd8b988dc36ec945ca70a8c8b5731ad4
 kind: application_architecture_mapping
-mapping_digest: sha256:a1014c0336c7a82463b46d54b9044d080b25913a4bd6b47d9cbd36008cadd23c
+mapping_digest: sha256:6bf68bb8119faaaa6dc840380a0458bbc9a8bae47d514f920f86f3dd38e4f06f
 schema_version: 2
 selection_mode: custom_implementation
 templates: []

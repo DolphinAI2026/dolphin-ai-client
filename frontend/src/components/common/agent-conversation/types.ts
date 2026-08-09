@@ -36,7 +36,7 @@ export interface AgentToolPayload {
    *  ToolCard header 在 duration 之前会显示这段摘要 chip，让用户一眼看出工具到底做成了什么；
    *  父组件不填则 ToolCard 退化为只显 duration（兼容老调用方）。 */
   resultSummary?: string
-  status: 'running' | 'success' | 'error' | 'pending'
+  status: 'running' | 'success' | 'error' | 'aborted' | 'pending'
   duration_ms?: number
   /** 自定义渲染槽 key — 父组件可针对特定工具用 #tool-renderer slot 替换默认卡片 */
   rendererKey?: string

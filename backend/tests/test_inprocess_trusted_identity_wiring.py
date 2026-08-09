@@ -63,3 +63,11 @@ async def test_admin_inprocess_marks_identity_trusted(monkeypatch):
         assert probe.seen == (DRAGONBOAT_TID, UID)
     finally:
         clear_current_app(UID)
+
+
+async def test_bridge_inprocess_keeps_control_plane_zero_tenant(monkeypatch):
+    probe = _install_probe(monkeypatch)
+
+    await _call_inprocess_tool(PROBE, {"tenant_id": 0, "user_id": UID})
+
+    assert probe.seen == (0, UID)

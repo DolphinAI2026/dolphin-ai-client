@@ -72,3 +72,48 @@ async def test_builder_reports_friendly_error_when_model_key_cannot_decrypt(db_s
 
     with pytest.raises(RuntimeError, match="模型配置.*API Key.*重新保存"):
         await _resolve_llm_config(db_session, session)
+
+
+@pytest.mark.asyncio
+async def test_system_assistant_resolves_coding_model(db_session):
+    tenant = Tenant(tenant_name="SA", tenant_code="sa-coding-model")
+    db_session.add(tenant)
+    await db_session.flush()
+    db_session.add_all([
+        LLMConfig(
+            tenant_id=tenant.id,
+            config_name="Builder",
+            provider="dolphin",
+            base_url="https://builder.example/v1",
+            api_key_enc=encrypt_password("builder-key"),
+            model="builder-model",
+            purpose="builder",
+            is_default=True,
+            status="active",
+        ),
+        LLMConfig(
+            tenant_id=tenant.id,
+            config_name="Coding",
+            provider="dolphin",
+            base_url="https://coding.example/v1",
+            api_key_enc=encrypt_password("coding-key"),
+            model="coding-model",
+            purpose="coding",
+            is_default=True,
+            status="active",
+        ),
+    ])
+    await db_session.flush()
+    session = AIChatSession(
+        tenant_id=tenant.id,
+        user_id=1,
+        title="系统助手",
+        assistant_profile="system_assistant",
+    )
+    db_session.add(session)
+    await db_session.flush()
+
+    snapshot = await _resolve_llm_config(db_session, session)
+
+    assert snapshot.model == "coding-model"
+    assert snapshot.base_url == "https://coding.example/v1"

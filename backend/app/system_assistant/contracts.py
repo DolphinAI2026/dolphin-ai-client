@@ -9,6 +9,7 @@ contracts belong to a later phase and should not be added here.
 from __future__ import annotations
 
 from enum import Enum
+from datetime import datetime
 from typing import Any, Literal, TypeAlias, cast
 
 from pydantic import BaseModel, Field, field_validator
@@ -22,6 +23,7 @@ class AssistantProfile(str, Enum):
 
 
 AssistantProfileValue: TypeAlias = Literal["entry_agent", "system_assistant"]
+AssistantModelPurpose: TypeAlias = Literal["builder", "coding"]
 DEFAULT_ASSISTANT_PROFILE = AssistantProfile.ENTRY_AGENT.value
 SUPPORTED_ASSISTANT_PROFILES = frozenset(profile.value for profile in AssistantProfile)
 
@@ -51,10 +53,30 @@ class RecommendedAction(BaseModel):
     reason: str
 
 
+class BaselineSnapshotMetadata(BaseModel):
+    """P0 source coverage diagnostics without inventing a runtime plan."""
+
+    plan_created: Literal[False] = False
+    dynamic_plan_source: Literal["not_available_in_p0"] = "not_available_in_p0"
+    unavailable_sources: list[str] = Field(default_factory=list)
+    partial_sources: list[str] = Field(default_factory=list)
+
+
+class BaselineSnapshot(BaseModel):
+    """Typed read-only baseline returned to the Code client."""
+
+    version: Literal["p0"] = "p0"
+    readonly: Literal[True] = True
+    tenant_id: int
+    generated_at: datetime
+    nodes: list[BaselineNode]
+    metadata: BaselineSnapshotMetadata
+
+
 class BootstrapResponse(BaseModel):
     """Stable response shape for ``GET /system-assistant/bootstrap``."""
 
-    baseline_snapshot: dict[str, Any]
+    baseline_snapshot: BaselineSnapshot
     recommended_action: RecommendedAction
     available_actions: list[str]
     source_status: dict[str, SourceStatus]
@@ -79,6 +101,15 @@ def normalize_assistant_profile(value: str | AssistantProfile | None) -> Assista
             f"(已知: {sorted(SUPPORTED_ASSISTANT_PROFILES)})"
         )
     return cast(AssistantProfileValue, normalized)
+
+
+def assistant_model_purpose(
+    value: str | AssistantProfile | None,
+) -> AssistantModelPurpose:
+    """Use Coding models only for the Code system-assistant profile."""
+
+    profile = normalize_assistant_profile(value)
+    return "coding" if profile == AssistantProfile.SYSTEM_ASSISTANT.value else "builder"
 
 
 class AssistantProfileRequest(BaseModel):

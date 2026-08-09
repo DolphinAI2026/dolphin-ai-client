@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
-import { readFileSync } from 'fs'
+import { readFileSync, realpathSync } from 'fs'
 import http from 'http'
 
 // 应用版本号取自 src-tauri/tauri.conf.json(发版脚本会 bump 它), 编译期注入。
@@ -13,6 +13,12 @@ const __APP_VERSION__ = (() => {
   }
 })()
 const backendProxyTarget = process.env.VITE_BACKEND_PROXY_TARGET || 'http://localhost:8000'
+const devServerAllowedPaths = [resolve(__dirname, '..')]
+try {
+  devServerAllowedPaths.push(realpathSync(resolve(__dirname, 'node_modules')))
+} catch {
+  // Dependencies may not be installed yet; the project root remains allowed.
+}
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -61,6 +67,9 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    fs: {
+      allow: devServerAllowedPaths,
+    },
     proxy: {
       '/api': {
         target: backendProxyTarget,

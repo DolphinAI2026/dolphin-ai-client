@@ -28,6 +28,11 @@ def test_system_assistant_profile_exposes_workspace_runtime_and_diagnostics_only
     assert "doctor_apaas_backend_workspace" in tools
     assert "lint_apaas_backend_workspace" in tools
     assert {"use_skill", "read_knowledge", "search_knowledge"}.issubset(tools)
+    assert "read_attachment" in tools
+    assert "write_artifact" in tools
+
+    for forbidden_local in ("write_file", "edit_file", "run_command", "start_serve"):
+        assert forbidden_local not in tools
 
     for forbidden in (
         "generate_app_from_doc",

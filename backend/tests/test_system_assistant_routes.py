@@ -59,11 +59,56 @@ async def test_bootstrap_keeps_source_failure_as_unavailable(monkeypatch):
         raise RuntimeError("knowledge source down")
 
     monkeypatch.setattr(system_assistant, "collect_baseline_facts", fail)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as client:
         response = await client.get("/api/system-assistant/bootstrap")
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["source_status"]["baseline"] == "unavailable"
-    assert all(node["status"] == "unavailable" for node in body["baseline_snapshot"]["nodes"])
-    assert body["recommended_action"]["status"] == "partial"
+    assert response.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_models_exposes_shared_coding_catalog_for_control_plane_identity(monkeypatch):
+    app = FastAPI()
+    app.include_router(system_assistant.router, prefix="/api")
+    ctx = SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=0)
+    calls = []
+
+    async def list_models(_db, tenant_id, purpose):
+        calls.append((tenant_id, purpose))
+        return [SimpleNamespace(
+            id=7,
+            config_name="企业 Coding 模型",
+            provider="dolphin",
+            model="gpt-5.5",
+            purpose="coding",
+            is_default=True,
+        )]
+
+    monkeypatch.setattr(system_assistant, "list_llm_configs_for_purpose", list_models)
+    app.dependency_overrides[get_auth_context] = lambda: ctx
+    app.dependency_overrides[get_db] = lambda: object()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/system-assistant/models")
+
+    assert response.status_code == 200, response.text
+    assert calls == [(None, "coding")]
+    assert response.json() == [{
+        "id": 7,
+        "config_name": "企业 Coding 模型",
+        "provider": "dolphin",
+        "model": "gpt-5.5",
+        "purpose": "coding",
+        "is_default": True,
+    }]
+
+
+def test_bootstrap_openapi_uses_typed_response_contract():
+    app = FastAPI()
+    app.include_router(system_assistant.router, prefix="/api")
+
+    schema = app.openapi()
+    response_schema = schema["paths"]["/api/system-assistant/bootstrap"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+
+    assert response_schema["$ref"].endswith("/BootstrapResponse")

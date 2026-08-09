@@ -16,6 +16,9 @@ def choose_recommended_action(nodes: dict[str, dict[str, Any]]) -> dict[str, str
 
     workspace = nodes.get("workspace", {})
     environment = nodes.get("environment", {})
+    governance_items = nodes.get("governance", {}).get("items") or []
+    role = str(governance_items[0].get("id", "member")) if governance_items else "member"
+    can_manage_environment = role in {"platform_admin", "tenant_admin"}
     validation_status = workspace.get("metadata", {}).get(
         "validation_status", workspace.get("validation_status", "not_needed")
     )
@@ -26,10 +29,18 @@ def choose_recommended_action(nodes: dict[str, dict[str, Any]]) -> dict[str, str
     if validation_status == "stale" or workspace.get("status") == "stale":
         return _action("validate_workspace", "stale", "验证当前工程", "工作区已有事实，但验证结果已过期。")
     if environment.get("status") == "missing":
-        return _action("configure_environment", "missing", "配置开发环境", "工作区可见，但没有可用的 PlatformEnv。")
+        if can_manage_environment:
+            return _action("configure_environment", "missing", "配置开发环境", "工作区可见，但没有可用的 PlatformEnv。")
+        return _action("request_environment_access", "partial", "联系管理员配置环境", "当前账号不能维护租户环境。")
     if environment.get("status") == "unavailable":
+        if environment.get("metadata", {}).get("reason") == "tenant_admin_required":
+            return _action("request_environment_access", "partial", "联系管理员配置环境", "当前账号不能查看或维护租户环境。")
         return _action("inspect_environment_source", "partial", "检查环境来源", "PlatformEnv 来源暂不可用，未将其当作空数据。")
-    if any(node.get("status") in {"missing", "stale"} for node in nodes.values()):
+    if any(
+        node.get("status") in {"missing", "stale", "partial", "unavailable"}
+        or node.get("source_status") in {"partial", "unavailable"}
+        for node in nodes.values()
+    ):
         return _action("inspect_baseline", "partial", "检查基线缺口", "基线仍有需要人工确认的缺口。")
     return _action("no_action", "not_needed", "无需操作", "当前可见基线已经满足 P0 诊断条件。")
 
