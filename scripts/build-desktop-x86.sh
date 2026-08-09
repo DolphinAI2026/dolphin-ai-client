@@ -19,7 +19,7 @@ cd "$ROOT/frontend" && npm run build:desktop
 echo ""
 echo "==> 2/4 PyInstaller x86_64 sidecar (Rosetta)"
 cd "$ROOT/backend"
-arch -x86_64 "$PYX86VENV" -m PyInstaller ruijing-sidecar.spec --noconfirm \
+arch -x86_64 "$PYX86VENV" -m PyInstaller ruijing-sidecar.spec --clean --noconfirm \
     --distpath dist-x86 --workpath build-x86
 
 echo ""
@@ -31,7 +31,7 @@ file "$ROOT/src-tauri/binaries/ruijing-sidecar-${TARGET}"
 
 echo ""
 echo "==> 4/4 Tauri build --target $TARGET"
-cd "$ROOT" && npx tauri build --target "$TARGET" || {
+cd "$ROOT" && npx tauri build --target "$TARGET" --bundles app,dmg || {
     echo ""
     echo "    WARNING: tauri build 失败 (DMG 可能需完整 Xcode); 回退 --bundles app"
     cd "$ROOT" && npx tauri build --target "$TARGET" --bundles app

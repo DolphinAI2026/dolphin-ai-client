@@ -10,7 +10,7 @@ function errText(e: any): string {
 }
 
 export async function checkAndPromptUpdate(opts: { silentIfNone: boolean }): Promise<void> {
-  if (!__DESKTOP__) return
+  if (!__DESKTOP__ || __DESKTOP_WEB_PREVIEW__) return
 
   // check() 失败自动重试一次(扛瞬时网络抖动);仍失败则报真实错误。
   let update: any = null

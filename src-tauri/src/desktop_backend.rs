@@ -2,8 +2,8 @@ use crate::desktop_config::{
     default_root_dir, normalize_login_url, DesktopConfig, DesktopConfigError, DesktopConfigStore,
     DesktopLoginConfig, DesktopLoginMode, DesktopPaths, DesktopSetupInput, WorkspaceEntryScope,
 };
+use crate::desktop_discovery::{discover, DesktopDiscoveryError};
 use crate::local_runtime::api::LocalRuntimeApiServer;
-use crate::local_runtime::process_driver::agent_runtime_executable;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::BTreeMap;
@@ -90,10 +90,6 @@ impl DesktopBackendError {
             message: sanitize_log_line(&message.into()),
         }
     }
-}
-
-fn map_runtime_error(message: impl Into<String>) -> DesktopBackendError {
-    DesktopBackendError::runtime(message)
 }
 
 fn map_sidecar_error(message: impl Into<String>) -> DesktopBackendError {
@@ -409,14 +405,28 @@ impl SidecarLaunch {
     fn from_config(
         config: &DesktopConfig,
         port: u16,
-        manager_url: &str,
-        manager_token: &str,
     ) -> Self {
         let paths = DesktopPaths::from_root(config.root_dir.clone());
         let mode = match config.login.mode {
             DesktopLoginMode::ControlPlane => "control_plane",
             DesktopLoginMode::Apaas => "apaas",
         };
+        let code_base_url = if config.login.mode == DesktopLoginMode::ControlPlane {
+            config
+                .discovery
+                .as_ref()
+                .and_then(|discovery| discovery.products.code.base_url.clone())
+                .filter(|url| !url.trim().is_empty())
+                .unwrap_or_else(|| config.login.base_url.clone())
+        } else {
+            String::new()
+        };
+        let login_base_url = config
+            .discovery
+            .as_ref()
+            .and_then(|discovery| discovery.auth.api_base_url.clone())
+            .filter(|url| !url.trim().is_empty())
+            .unwrap_or_else(|| config.login.base_url.clone());
         Self {
             args: vec![
                 "--port".into(),
@@ -430,20 +440,11 @@ impl SidecarLaunch {
                 "--login-mode".into(),
                 mode.into(),
                 "--login-base-url".into(),
-                config.login.base_url.clone(),
+                login_base_url,
             ],
-            env: [
-                (
-                    "DOLPHIN_LOCAL_RUNTIME_MANAGER_URL".into(),
-                    manager_url.into(),
-                ),
-                (
-                    "DOLPHIN_LOCAL_RUNTIME_MANAGER_TOKEN".into(),
-                    manager_token.into(),
-                ),
-            ]
-            .into_iter()
-            .collect(),
+            env: [("DOLPHIN_CODE_CONTROL_PLANE_URL".into(), code_base_url)]
+                .into_iter()
+                .collect(),
         }
     }
 
@@ -686,7 +687,6 @@ pub struct DesktopBackend {
     inner: Mutex<DesktopBackendInner>,
     config_store: DesktopConfigStore,
     default_root_dir: PathBuf,
-    agent_runtime_root: PathBuf,
     supervisor: LifecycleSupervisor,
 }
 
@@ -694,7 +694,6 @@ impl DesktopBackend {
     fn new(
         config_store: DesktopConfigStore,
         default_root_dir: PathBuf,
-        agent_runtime_root: PathBuf,
         packaged_url: tauri::Url,
         supervisor: LifecycleSupervisor,
     ) -> Self {
@@ -720,7 +719,6 @@ impl DesktopBackend {
             }),
             config_store,
             default_root_dir,
-            agent_runtime_root,
             supervisor,
         }
     }
@@ -807,7 +805,7 @@ impl DesktopBackend {
         let generation = inner.lease.request_generation();
         inner.transition_to(
             DesktopPhase::StartingRuntime,
-            "重试启动本地 Runtime Manager",
+            "重试准备桌面服务",
         );
         inner.error = None;
         self.submit_locked(&mut inner, LifecycleIntent::Retry { generation })?;
@@ -881,6 +879,9 @@ impl DesktopBackend {
             root_dir: config.root_dir.to_string_lossy().into_owned(),
             login,
             workspace_entry_scope: config.workspace_entry_scope,
+            discovery_url: Some(config.discovery_url.clone()),
+            discovery: config.discovery.clone(),
+            local_ai_enabled: config.local_ai_enabled,
         })?;
         let config = saved.config;
         inner.config = Some(config.clone());
@@ -978,34 +979,10 @@ fn workspace_scope_update_input(
         root_dir: config.root_dir.to_string_lossy().into_owned(),
         login: config.login.clone(),
         workspace_entry_scope: scope,
+        discovery_url: Some(config.discovery_url.clone()),
+        discovery: config.discovery.clone(),
+        local_ai_enabled: config.local_ai_enabled,
     }
-}
-
-const PACKAGED_AGENT_RUNTIME_RELATIVE_DIR: &str = "resources/agent-runtime";
-
-fn packaged_agent_runtime_root(handle: &AppHandle) -> PathBuf {
-    if let Some(path) = std::env::var_os("DOLPHIN_AGENT_RUNTIME_PATH") {
-        let path: PathBuf = path.into();
-        return path
-            .parent()
-            .and_then(Path::parent)
-            .map(Path::to_path_buf)
-            .unwrap_or(path);
-    }
-    let resource_dir = handle
-        .path()
-        .resource_dir()
-        .expect("resource directory is available");
-    let bundled_root = resource_dir.join(PACKAGED_AGENT_RUNTIME_RELATIVE_DIR);
-    if bundled_root.exists() {
-        return bundled_root;
-    }
-
-    let legacy_root = resource_dir.join("agent-runtime");
-    if legacy_root.exists() {
-        return legacy_root;
-    }
-    bundled_root
 }
 
 fn pick_free_port() -> u16 {
@@ -1194,8 +1171,6 @@ fn spawn_sidecar(
     app: &AppHandle,
     generation: u64,
     config: &DesktopConfig,
-    manager_url: String,
-    manager_token: String,
 ) {
     if !operation_is_current(app, generation, DesktopPhase::StartingSidecar) {
         return;
@@ -1208,9 +1183,7 @@ fn spawn_sidecar(
     };
     let port = stable_port(&paths.data_dir);
     let state = app.state::<DesktopBackend>();
-    let agent_runtime_path = agent_runtime_executable(&state.agent_runtime_root);
-    let launch =
-        SidecarLaunch::from_config(config, port, manager_url.as_str(), manager_token.as_str());
+    let launch = SidecarLaunch::from_config(config, port);
     let diagnostic_sink = state.lock().diagnostics.clone();
     diagnostic_sink.enqueue(DiagnosticRecord::new(
         log_context.logs_dir.clone(),
@@ -1237,10 +1210,6 @@ fn spawn_sidecar(
         .env(
             "DOLPHIN_DESKTOP_DATA_DIR",
             paths.data_dir.to_string_lossy().as_ref(),
-        )
-        .env(
-            "DOLPHIN_AGENT_RUNTIME_PATH",
-            agent_runtime_path.to_string_lossy().as_ref(),
         )
         .env("CODING_USE_RUNAGENT", "1");
 
@@ -1338,37 +1307,14 @@ fn run_full_start(app: &AppHandle, generation: u64, config: &DesktopConfig) {
         return;
     }
     let state = app.state::<DesktopBackend>();
-    let paths = DesktopPaths::from_root(config.root_dir.clone());
-    let mut manager =
-        match LocalRuntimeApiServer::start(&paths.runtime_dir, state.agent_runtime_root.clone()) {
-            Ok(manager) => manager,
-            Err(error) => {
-                set_launch_failed(
-                    app,
-                    generation,
-                    map_runtime_error(format!("无法启动本地 Runtime Manager: {}", error.message)),
-                );
-                return;
-            }
-        };
-    if !operation_is_current(app, generation, DesktopPhase::StartingRuntime) {
-        manager.shutdown();
-        return;
-    }
-
-    let manager_url = manager.base_url.clone();
-    let manager_token = manager.token.clone();
     {
         let mut inner = state.lock();
         if !inner.lease.is_active_current(generation) {
-            drop(inner);
-            manager.shutdown();
             return;
         }
-        inner.runtime = Some(manager);
-        inner.transition_to(DesktopPhase::StartingSidecar, "启动桌面 sidecar");
+        inner.transition_to(DesktopPhase::StartingSidecar, "准备桌面服务");
     }
-    spawn_sidecar(app, generation, config, manager_url, manager_token);
+    spawn_sidecar(app, generation, config);
 }
 
 fn stop_resources(sidecar: Option<CommandChild>, runtime: Option<LocalRuntimeApiServer>) {
@@ -1410,7 +1356,7 @@ fn run_initialize(app: &AppHandle, generation: u64) {
                 }
                 inner.setup_scope = DesktopSetupScope::Full;
                 inner.config = Some(config.clone());
-                inner.transition_to(DesktopPhase::StartingRuntime, "启动本地 Runtime Manager");
+                inner.transition_to(DesktopPhase::StartingRuntime, "准备桌面服务");
                 inner.error = None;
             }
             run_full_start(app, generation, &config);
@@ -1447,7 +1393,7 @@ fn run_save_setup(app: &AppHandle, generation: u64, input: DesktopSetupInput) {
             return;
         }
         inner.config = Some(config.clone());
-        inner.transition_to(DesktopPhase::StartingRuntime, "启动本地 Runtime Manager");
+        inner.transition_to(DesktopPhase::StartingRuntime, "准备桌面服务");
         inner.error = None;
     }
     run_full_start(app, generation, &config);
@@ -1532,25 +1478,11 @@ fn run_retry(app: &AppHandle, generation: u64) {
     if !state.generation_is_desired(generation) {
         return;
     }
-    let manager_credentials = {
+    {
         let mut inner = state.lock();
-        if let Some(runtime) = inner.runtime.as_ref() {
-            let credentials = (runtime.base_url.clone(), runtime.token.clone());
-            inner.transition_to(DesktopPhase::StartingSidecar, "重试启动桌面 sidecar");
-            Some(credentials)
-        } else {
-            inner.transition_to(
-                DesktopPhase::StartingRuntime,
-                "重试启动本地 Runtime Manager",
-            );
-            None
-        }
-    };
-    if let Some((manager_url, manager_token)) = manager_credentials {
-        spawn_sidecar(app, generation, &config, manager_url, manager_token);
-    } else {
-        run_full_start(app, generation, &config);
+        inner.transition_to(DesktopPhase::StartingSidecar, "重试准备桌面服务");
     }
+    spawn_sidecar(app, generation, &config);
 }
 
 fn run_update_login(app: &AppHandle, generation: u64, login: DesktopLoginConfig) {
@@ -1590,29 +1522,15 @@ fn run_update_login(app: &AppHandle, generation: u64, login: DesktopLoginConfig)
             return;
         }
     };
-    let manager_credentials = {
+    {
         let mut inner = state.lock();
         if !inner.lease.is_active_current(generation) {
             return;
         }
         inner.error = None;
-        if let Some(runtime) = inner.runtime.as_ref() {
-            let credentials = (runtime.base_url.clone(), runtime.token.clone());
-            inner.transition_to(DesktopPhase::StartingSidecar, "重新启动桌面 sidecar");
-            Some(credentials)
-        } else {
-            inner.transition_to(
-                DesktopPhase::StartingRuntime,
-                "重新启动本地 Runtime Manager",
-            );
-            None
-        }
-    };
-    if let Some((manager_url, manager_token)) = manager_credentials {
-        spawn_sidecar(app, generation, &config, manager_url, manager_token);
-    } else {
-        run_full_start(app, generation, &config);
+        inner.transition_to(DesktopPhase::StartingSidecar, "重新启动桌面服务");
     }
+    spawn_sidecar(app, generation, &config);
 }
 
 fn run_sidecar_terminated(app: &AppHandle, generation: u64, error: DesktopBackendError) {
@@ -1769,7 +1687,6 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(DesktopBackend::new(
         DesktopConfigStore::new(system_data_dir),
         default_root_dir(&home_dir),
-        packaged_agent_runtime_root(&handle),
         packaged_url,
         supervisor,
     ));
@@ -1790,6 +1707,19 @@ pub fn desktop_save_setup(
     input: DesktopSetupInput,
 ) -> Result<DesktopStateSnapshot, DesktopBackendError> {
     state.queue_save_setup(input)
+}
+
+#[tauri::command]
+pub async fn desktop_discover_service(
+    url: String,
+) -> Result<crate::desktop_config::DesktopDiscoveryDocument, DesktopBackendError> {
+    tauri::async_runtime::spawn_blocking(move || discover(&url))
+        .await
+        .map_err(|error| DesktopBackendError::service(format!("Discovery 任务执行失败: {error}")))?
+        .map_err(|error: DesktopDiscoveryError| DesktopBackendError {
+            code: error.code,
+            message: error.message,
+        })
 }
 
 fn desktop_test_service_blocking(login: DesktopLoginConfig) -> Result<(), DesktopBackendError> {
@@ -1982,6 +1912,9 @@ mod tests {
                 base_url: "https://om-demo.dfy.definesys.cn".to_string(),
             },
             workspace_entry_scope: WorkspaceEntryScope::Both,
+            discovery_url: "https://om-demo.dfy.definesys.cn".to_string(),
+            discovery: None,
+            local_ai_enabled: true,
         }
     }
 
@@ -1989,7 +1922,6 @@ mod tests {
         let backend = DesktopBackend::new(
             DesktopConfigStore::new(std::env::temp_dir().join("dolphin-desktop-tests")),
             PathBuf::from("/tmp/DolphinCode"),
-            PathBuf::from("/tmp/agent-runtime"),
             tauri::Url::parse("tauri://localhost/index.html").unwrap(),
             supervisor,
         );
@@ -2005,6 +1937,9 @@ mod tests {
                 base_url: "https://om-demo.dfy.definesys.cn".to_string(),
             },
             workspace_entry_scope: WorkspaceEntryScope::Both,
+            discovery_url: None,
+            discovery: None,
+            local_ai_enabled: true,
         }
     }
 
@@ -2041,7 +1976,6 @@ mod tests {
         let backend = DesktopBackend::new(
             config_store.clone(),
             saved.config.root_dir.clone(),
-            PathBuf::from("/tmp/agent-runtime"),
             tauri::Url::parse("tauri://localhost/index.html").unwrap(),
             supervisor,
         );
@@ -2077,7 +2011,7 @@ mod tests {
     #[test]
     fn control_plane_sidecar_contract_uses_applications_and_runtime_dirs() {
         let config = fixture_config(DesktopLoginMode::ControlPlane);
-        let launch = SidecarLaunch::from_config(&config, 8799, "http://127.0.0.1:9001", "token");
+        let launch = SidecarLaunch::from_config(&config, 8799);
         let applications = config.root_dir.join("applications");
         let runtime = config.root_dir.join(".appdata/runtime");
         assert_eq!(

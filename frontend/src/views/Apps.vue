@@ -6,19 +6,6 @@
           <h1 class="page-title">{{ pageTitle }}</h1>
           <p class="page-subtitle">{{ pageSubtitle }}</p>
         </div>
-        <div v-if="isCodeMode && isDesktop" class="apps-source-switch" role="tablist" aria-label="应用来源">
-          <button
-            v-for="source in codeApplicationSources"
-            :key="source.value"
-            type="button"
-            role="tab"
-            :class="{ active: codeApplicationSource === source.value }"
-            :aria-selected="codeApplicationSource === source.value"
-            @click="codeApplicationSource = source.value"
-          >
-            {{ source.label }}
-          </button>
-        </div>
       </section>
 
       <section class="apps-toolbar" aria-label="应用筛选和视图切换">
@@ -291,12 +278,6 @@
       </section>
     </main>
 
-    <LocalCodeApplicationDialog
-      v-if="isCodeMode && isDesktop"
-      v-model="localApplicationDialogOpen"
-      @created="handleLocalApplicationCreated"
-    />
-
     <!-- 导入应用弹窗 -->
     <ImportAppDialog v-if="!isCodeMode" v-model="importDialogOpen" @imported="refreshApps" />
 
@@ -421,8 +402,6 @@ import { isDesktop, openExternal } from '@/utils/desktop'
 import { applicationApi, type ApplicationDeliveryAssetItem, type ApplicationDeliveryAssetsResponse } from '@/api/application'
 import {
   codeRuntimeApi,
-  loadStoredCodeApplicationSource,
-  storeCodeApplicationSource,
   type CodeApplication,
   type CodeApplicationSource,
 } from '@/api/codeRuntime'
@@ -437,7 +416,6 @@ import EmptyState from '@/components/states/EmptyState.vue'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
 import BaseBadge from '@/components/BaseBadge.vue'
 import BaseTag from '@/components/BaseTag.vue'
-import LocalCodeApplicationDialog from '@/components/code/LocalCodeApplicationDialog.vue'
 import type { MergedApplication } from '@/types'
 
 type AppTab = 'all' | 'active' | 'deployed' | 'draft'
@@ -460,7 +438,6 @@ const viewMode = ref<ViewMode>('list')
 const searchQ = ref('')
 const importDialogOpen = ref(false)
 const publishingIds = ref<Set<number>>(new Set())
-const localApplicationDialogOpen = ref(false)
 const codeListError = ref('')
 const handledCodeCreateIntent = ref('')
 let refreshAppsSeq = 0
@@ -471,7 +448,7 @@ const codeApplicationSources: Array<{ label: string; value: CodeApplicationSourc
   { label: '远程应用', value: 'remote' },
 ]
 const codeApplicationSource = ref<CodeApplicationSource>(
-  isDesktop ? loadStoredCodeApplicationSource('local') : 'remote',
+  'remote',
 )
 const pageTitle = computed(() => isCodeMode.value ? 'Code 应用' : '我的应用')
 const pageSubtitle = computed(() =>
@@ -552,10 +529,6 @@ function startNewApp() {
 }
 
 function startNewCodeApp() {
-  if (codeApplicationSource.value === 'local' && isDesktop) {
-    localApplicationDialogOpen.value = true
-    return
-  }
   router.push('/code/new')
 }
 
@@ -578,7 +551,6 @@ async function handleCodeCreateIntent() {
   const token = String(raw || '1')
   if (handledCodeCreateIntent.value === token) return
   handledCodeCreateIntent.value = token
-  if (token === 'local' && isDesktop) codeApplicationSource.value = 'local'
   startNewCodeApp()
   clearCodeCreateQuery()
 }
@@ -1071,7 +1043,10 @@ watch(isCodeMode, () => {
 })
 watch(codeApplicationSource, source => {
   if (!isCodeMode.value) return
-  if (isDesktop) storeCodeApplicationSource(source)
+  if (isDesktop && source !== 'remote') {
+    codeApplicationSource.value = 'remote'
+    return
+  }
   apps.value = []
   activeTab.value = 'all'
   currentPage.value = 1

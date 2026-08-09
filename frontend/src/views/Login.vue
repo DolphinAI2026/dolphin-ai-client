@@ -22,23 +22,34 @@
 
       <section class="login-auth-panel" aria-label="登录Dolphin Code">
         <div class="login-card">
-          <div class="login-header">
-            <img class="login-logo" :src="ruijingWhaleMarkUrl" alt="" aria-hidden="true" />
-            <div class="login-header-copy">
-              <h1>Dolphin Code</h1>
-              <p>登录以打开桌面工作台</p>
-              <div v-if="desktopService" class="login-service-row">
-                <span>{{ desktopService.label }} · {{ desktopService.host }}</span>
-                <button
-                  type="button"
-                  class="login-service-change"
-                  :disabled="!desktopServiceChangeAllowed"
-                  @click="changeDesktopService"
-                >
-                  更改登录服务
-                </button>
+          <div class="login-card-top">
+            <div class="login-header">
+              <img class="login-logo" :src="ruijingWhaleMarkUrl" alt="" aria-hidden="true" />
+              <div class="login-header-copy">
+                <h1>Dolphin Code</h1>
+                <p>登录以打开桌面工作台</p>
               </div>
             </div>
+            <el-tooltip v-if="desktopService" content="更改登录服务" placement="top">
+              <button
+                type="button"
+                class="login-service-settings"
+                :disabled="!desktopServiceChangeAllowed"
+                aria-label="更改登录服务"
+                :aria-busy="changingDesktopService"
+                @click="changeDesktopService"
+              >
+                <el-icon><Setting /></el-icon>
+              </button>
+            </el-tooltip>
+          </div>
+
+          <div v-if="desktopService" class="login-service-row" aria-label="当前登录服务">
+            <span class="service-status-dot" aria-hidden="true" />
+            <span class="service-name">{{ desktopService.label }}</span>
+            <span class="service-meta">{{ desktopService.provider === 'apaas' ? 'aPaaS 认证' : 'Control Plane 认证' }}</span>
+            <span class="service-host">{{ desktopService.host }}</span>
+            <span v-for="product in desktopService.products" :key="product" class="service-product">{{ product }}</span>
           </div>
 
           <el-form
@@ -143,17 +154,18 @@ export function tryStartLogin(
 import { computed, onMounted, ref, reactive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-import { Lock, Moon, Sunny, User } from '@element-plus/icons-vue'
+import { Lock, Moon, Setting, Sunny, User } from '@element-plus/icons-vue'
 import { authApi } from '@/api/auth'
 import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
 import ruijingWhaleMarkUrl from '@/assets/brand/ruijing-whale-mark.svg'
 import { resolveExternalLoginRedirect, safeLoginRedirectPath } from '@/router/loginRedirect'
 import {
-  DESKTOP_LOGIN_SERVICES,
   enterDesktopLoginSetup,
   getDesktopState,
   isDesktop,
+  type DesktopDiscoveryDocument,
+  type DesktopLoginMode,
 } from '@/utils/desktop'
 
 const router = useRouter()
@@ -166,7 +178,14 @@ const loginLoading = ref(false)
 const captchaRequired = ref(false)
 const captchaId = ref('')
 const captchaImage = ref('')
-const desktopService = ref<{ label: string; host: string } | null>(null)
+type DesktopServiceSummary = {
+  label: string
+  host: string
+  provider: DesktopLoginMode
+  products: string[]
+}
+
+const desktopService = ref<DesktopServiceSummary | null>(null)
 const changingDesktopService = ref(false)
 const desktopServiceChangeAllowed = computed(() => canChangeDesktopService(
   loginLoading.value,
@@ -213,14 +232,22 @@ async function loadDesktopService() {
   if (!isDesktop) return
   try {
     const snapshot = await getDesktopState()
-    if (!snapshot.config) return
-    const service = DESKTOP_LOGIN_SERVICES.find(
-      item => item.mode === snapshot.config?.login.mode,
-    )
-    if (!service) return
+    const config = snapshot.config
+    if (!config) return
+    const discovery: DesktopDiscoveryDocument | null = config.discovery || null
+    const provider = discovery?.auth.provider || config.login.mode
+    const loginUrl = discovery?.auth.login_url || config.login.base_url
+    const products = discovery
+      ? [
+          discovery.products.builder.enabled ? 'Builder' : '',
+          discovery.products.code.enabled ? 'Code' : '',
+        ].filter(Boolean)
+      : []
     desktopService.value = {
-      label: service.label,
-      host: new URL(snapshot.config.login.base_url).host,
+      label: discovery?.platform.name || (provider === 'apaas' ? 'aPaaS平台' : 'AI中台'),
+      host: new URL(loginUrl).host,
+      provider,
+      products,
     }
   } catch {
     desktopService.value = null
@@ -232,7 +259,11 @@ async function changeDesktopService() {
   changingDesktopService.value = true
   try {
     userStore.logout()
-    await enterDesktopLoginSetup()
+    if (__DESKTOP_WEB_PREVIEW__) {
+      await router.replace('/desktop-setup')
+    } else {
+      await enterDesktopLoginSetup()
+    }
   } catch {
     changingDesktopService.value = false
     ElMessage.error('无法打开登录服务设置，请稍后重试')
@@ -413,22 +444,31 @@ const handleLogin = async () => {
 }
 
 .login-card {
+  position: relative;
   width: min(420px, 100%);
-  padding: 42px 42px 38px;
+  padding: 34px 36px 34px;
   border: 1px solid rgba(11, 27, 63, 0.08);
-  border-radius: 16px;
+  border-radius: 12px;
   background: rgba(255, 255, 255, 0.88);
   box-shadow:
-    0 28px 80px rgba(11, 27, 63, 0.11),
+    0 24px 64px rgba(11, 27, 63, 0.1),
     0 1px 2px rgba(11, 27, 63, 0.06);
   backdrop-filter: blur(18px);
+}
+
+.login-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
 }
 
 .login-header {
   display: flex;
   align-items: center;
   gap: 14px;
-  margin-bottom: 32px;
+  min-width: 0;
 }
 
 .login-logo {
@@ -461,48 +501,85 @@ const handleLogin = async () => {
   flex: 1;
 }
 
+.login-service-settings {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  margin-top: 2px;
+  border: 1px solid rgba(11, 27, 63, 0.1);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.8);
+  color: #64748b;
+  cursor: pointer;
+  transition: color 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.login-service-settings:hover:not(:disabled) {
+  border-color: rgba(29, 78, 216, 0.28);
+  background: #fff;
+  color: #1d4ed8;
+}
+
+.login-service-settings:focus-visible {
+  outline: 2px solid rgba(29, 78, 216, 0.28);
+  outline-offset: 3px;
+}
+
+.login-service-settings:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
 .login-service-row {
   min-width: 0;
-  margin-top: 8px;
+  min-height: 34px;
+  margin-bottom: 24px;
+  padding: 7px 10px;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
+  border: 1px solid rgba(11, 27, 63, 0.08);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.72);
   color: #475569;
   font-size: 12px;
   line-height: 18px;
 }
 
-.login-service-row > span {
+.service-status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #16a34a;
+  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.12);
+}
+
+.service-name {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 100%;
+  color: #1e293b;
+  font-weight: 650;
+  overflow-wrap: anywhere;
 }
 
-.login-service-change {
-  flex-shrink: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: #075fa8;
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
+.service-meta,
+.service-host {
+  color: #64748b;
+  overflow-wrap: anywhere;
 }
 
-.login-service-change:hover:not(:disabled) {
-  color: #1d4ed8;
-  text-decoration: underline;
-}
-
-.login-service-change:focus-visible {
-  outline: 2px solid rgba(29, 78, 216, 0.28);
-  outline-offset: 3px;
-}
-
-.login-service-change:disabled {
-  cursor: wait;
-  opacity: 0.55;
+.service-product {
+  padding: 1px 6px;
+  border: 1px solid rgba(29, 78, 216, 0.16);
+  border-radius: 999px;
+  color: #3157b7;
+  background: rgba(219, 234, 254, 0.5);
+  font-size: 11px;
+  line-height: 16px;
 }
 
 .login-form {
@@ -666,12 +743,37 @@ const handleLogin = async () => {
   color: #94a3b8;
 }
 
-.login-page.theme-dark .login-service-row {
+.login-page.theme-dark .login-service-settings {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(15, 23, 42, 0.72);
   color: #94a3b8;
 }
 
-.login-page.theme-dark .login-service-change {
-  color: #60a5fa;
+.login-page.theme-dark .login-service-settings:hover:not(:disabled) {
+  border-color: rgba(96, 165, 250, 0.45);
+  background: rgba(30, 41, 59, 0.92);
+  color: #93c5fd;
+}
+
+.login-page.theme-dark .login-service-row {
+  color: #94a3b8;
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(15, 23, 42, 0.58);
+}
+
+.login-page.theme-dark .service-name {
+  color: #e2e8f0;
+}
+
+.login-page.theme-dark .service-meta,
+.login-page.theme-dark .service-host {
+  color: #94a3b8;
+}
+
+.login-page.theme-dark .service-product {
+  border-color: rgba(147, 197, 253, 0.22);
+  color: #bfdbfe;
+  background: rgba(30, 64, 175, 0.28);
 }
 
 .login-page.theme-dark :deep(.el-input__wrapper) {
@@ -760,13 +862,12 @@ const handleLogin = async () => {
 
   .login-card {
     width: 100%;
-    padding: 28px 22px 24px;
-    border-radius: 14px;
+    padding: 26px 22px 24px;
+    border-radius: 10px;
   }
 
   .login-header {
     gap: 12px;
-    margin-bottom: 26px;
   }
 
   .login-logo {

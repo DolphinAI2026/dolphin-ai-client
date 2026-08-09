@@ -87,6 +87,14 @@ async def _authority_login(db: AsyncSession, data: DesktopLoginIn) -> DesktopLog
 
 @router.post("/login", response_model=DesktopLoginOut)
 async def desktop_login(data: DesktopLoginIn, db: AsyncSession = Depends(get_db)):
+    # Desktop builds authenticate through the configured remote provider.  The
+    # old local desktop-account endpoint remains available to legacy web
+    # deployments, but must never become an identity source for a sidecar.
+    if runtime.is_desktop():
+        raise HTTPException(
+            status_code=410,
+            detail="桌面端不提供本地账号登录，请使用远程平台账号",
+        )
     if runtime.is_federation():
         return await _federation_login(db, data, settings.public_account_base_url)
     return await _authority_login(db, data)

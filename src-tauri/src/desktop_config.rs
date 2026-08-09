@@ -12,7 +12,7 @@ use tauri::Url;
 pub const CONTROL_PLANE_DEFAULT_URL: &str = "https://om-demo.dfy.definesys.cn";
 pub const APAAS_DEFAULT_URL: &str = "https://apaas-trial.definesys.cn/backend";
 
-const DESKTOP_CONFIG_SCHEMA_VERSION: u32 = 1;
+const DESKTOP_CONFIG_SCHEMA_VERSION: u32 = 2;
 
 type TransactionLock = Arc<Mutex<()>>;
 
@@ -44,12 +44,85 @@ pub struct DesktopLoginConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DesktopDiscoveryPlatform {
+    #[serde(rename = "type")]
+    pub platform_type: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DesktopDiscoveryAuth {
+    pub provider: String,
+    pub login_url: String,
+    #[serde(default)]
+    pub api_base_url: Option<String>,
+    #[serde(default)]
+    pub logout_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DesktopDiscoveryProduct {
+    pub enabled: bool,
+    #[serde(default)]
+    pub base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DesktopDiscoveryProducts {
+    pub builder: DesktopDiscoveryProduct,
+    pub code: DesktopDiscoveryProduct,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct DesktopRemoteCapabilities {
+    #[serde(default)]
+    pub models: bool,
+    #[serde(default)]
+    pub mcp: bool,
+    #[serde(default)]
+    pub skills: bool,
+    #[serde(default)]
+    pub knowledge_bases: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DesktopLocalAiConfig {
+    #[serde(default = "default_local_ai_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub allowed_kinds: Vec<String>,
+    #[serde(default = "default_bridge_protocol_version")]
+    pub bridge_protocol_version: u32,
+}
+
+fn default_local_ai_enabled() -> bool { true }
+fn default_bridge_protocol_version() -> u32 { 1 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DesktopDiscoveryDocument {
+    pub schema_version: u32,
+    pub deployment_id: String,
+    pub platform: DesktopDiscoveryPlatform,
+    pub auth: DesktopDiscoveryAuth,
+    pub products: DesktopDiscoveryProducts,
+    #[serde(default)]
+    pub remote_capabilities: DesktopRemoteCapabilities,
+    pub local_ai: DesktopLocalAiConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DesktopConfig {
     pub schema_version: u32,
     pub root_dir: PathBuf,
     pub login: DesktopLoginConfig,
     #[serde(default = "default_workspace_entry_scope")]
     pub workspace_entry_scope: WorkspaceEntryScope,
+    #[serde(default)]
+    pub discovery_url: String,
+    #[serde(default)]
+    pub discovery: Option<DesktopDiscoveryDocument>,
+    #[serde(default = "default_local_ai_enabled")]
+    pub local_ai_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +130,12 @@ pub struct DesktopSetupInput {
     pub root_dir: String,
     pub login: DesktopLoginConfig,
     pub workspace_entry_scope: WorkspaceEntryScope,
+    #[serde(default)]
+    pub discovery_url: Option<String>,
+    #[serde(default)]
+    pub discovery: Option<DesktopDiscoveryDocument>,
+    #[serde(default = "default_local_ai_enabled")]
+    pub local_ai_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,7 +236,7 @@ impl DesktopConfigStore {
         }
 
         let pointer: BootstrapPointer = read_json(&bootstrap_path)?;
-        if pointer.schema_version != DESKTOP_CONFIG_SCHEMA_VERSION {
+        if !matches!(pointer.schema_version, 1 | DESKTOP_CONFIG_SCHEMA_VERSION) {
             return Err(DesktopConfigError::invalid("桌面启动配置版本不受支持"));
         }
 
@@ -176,7 +255,7 @@ impl DesktopConfigStore {
         let paths = DesktopPaths::from_root(root_identity.clone());
         reject_existing_links_in_derived_paths(&paths)?;
         let mut config: DesktopConfig = read_json(&paths.config_path)?;
-        if config.schema_version != DESKTOP_CONFIG_SCHEMA_VERSION {
+        if !matches!(config.schema_version, 1 | DESKTOP_CONFIG_SCHEMA_VERSION) {
             return Err(DesktopConfigError::invalid("桌面根配置版本不受支持"));
         }
         if !config.root_dir.is_absolute() || !paths_equal(&config.root_dir, &root_identity) {
@@ -186,6 +265,11 @@ impl DesktopConfigStore {
         }
 
         config.login.base_url = normalize_login_url(&config.login.base_url)?;
+        if config.discovery_url.trim().is_empty() {
+            config.discovery_url = config.login.base_url.clone();
+        }
+        config.discovery_url = normalize_login_url(&config.discovery_url)?;
+        config.schema_version = DESKTOP_CONFIG_SCHEMA_VERSION;
         Ok(Some(SavedDesktopConfig { config, paths }))
     }
 
@@ -251,11 +335,17 @@ impl DesktopConfigStore {
 
         verify_root_is_writable(&root_dir)?;
 
+        let discovery_url = normalize_login_url(
+            input.discovery_url.as_deref().unwrap_or(&login.base_url),
+        )?;
         let config = DesktopConfig {
             schema_version: DESKTOP_CONFIG_SCHEMA_VERSION,
             root_dir: root_dir.clone(),
             login,
             workspace_entry_scope: input.workspace_entry_scope,
+            discovery_url,
+            discovery: input.discovery,
+            local_ai_enabled: input.local_ai_enabled,
         };
         atomic_write_json(&paths.config_path, &config)?;
 
@@ -276,7 +366,7 @@ impl DesktopConfigStore {
     fn ensure_bootstrap_points_to(&self, root_dir: &Path) -> Result<(), DesktopConfigError> {
         let bootstrap_path = self.system_data_dir.join("bootstrap.json");
         let pointer: BootstrapPointer = read_json(&bootstrap_path)?;
-        if pointer.schema_version != DESKTOP_CONFIG_SCHEMA_VERSION {
+        if !matches!(pointer.schema_version, 1 | DESKTOP_CONFIG_SCHEMA_VERSION) {
             return Err(DesktopConfigError::invalid("桌面启动配置版本不受支持"));
         }
 
@@ -773,6 +863,9 @@ mod tests {
                     base_url: CONTROL_PLANE_DEFAULT_URL.to_string(),
                 },
                 workspace_entry_scope: WorkspaceEntryScope::AiPlatform,
+                discovery_url: None,
+                discovery: None,
+                local_ai_enabled: true,
             })
             .unwrap();
         let loaded = store.load().unwrap().unwrap();
@@ -797,6 +890,9 @@ mod tests {
                     base_url: CONTROL_PLANE_DEFAULT_URL.to_string(),
                 },
                 workspace_entry_scope: WorkspaceEntryScope::Both,
+                discovery_url: None,
+                discovery: None,
+                local_ai_enabled: true,
             })
             .unwrap();
 
@@ -819,6 +915,9 @@ mod tests {
                     base_url: format!("{APAAS_DEFAULT_URL}/"),
                 },
                 workspace_entry_scope: WorkspaceEntryScope::Both,
+                discovery_url: None,
+                discovery: None,
+                local_ai_enabled: true,
             })
             .unwrap();
 
@@ -926,6 +1025,9 @@ mod tests {
                     base_url: CONTROL_PLANE_DEFAULT_URL.to_string(),
                 },
                 workspace_entry_scope: WorkspaceEntryScope::Both,
+                discovery_url: None,
+                discovery: None,
+                local_ai_enabled: true,
             })
             .unwrap_err();
 
@@ -955,6 +1057,9 @@ mod tests {
                     base_url: CONTROL_PLANE_DEFAULT_URL.to_string(),
                 },
                 workspace_entry_scope: WorkspaceEntryScope::Both,
+                discovery_url: None,
+                discovery: None,
+                local_ai_enabled: true,
             });
             let applications_created = root.join("applications").exists();
             let data_created = root.join(".appdata").exists();
@@ -987,6 +1092,9 @@ mod tests {
                 base_url: CONTROL_PLANE_DEFAULT_URL.to_string(),
             },
             workspace_entry_scope: WorkspaceEntryScope::Both,
+            discovery_url: None,
+            discovery: None,
+            local_ai_enabled: true,
         });
         let external_runtime_created = external.join("runtime").exists();
         let bootstrap_created = system_data.join("bootstrap.json").exists();
@@ -1032,6 +1140,9 @@ mod tests {
                                 base_url: format!("https://example.com/{writer}/{round}"),
                             },
                             workspace_entry_scope: WorkspaceEntryScope::Both,
+                            discovery_url: None,
+                            discovery: None,
+                            local_ai_enabled: true,
                         })
                         .unwrap();
                     sender.send(saved.config).unwrap();

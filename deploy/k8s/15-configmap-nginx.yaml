@@ -56,6 +56,30 @@ data:
             proxy_send_timeout 600s;
         }
 
+        # Desktop bootstrap must reach FastAPI instead of the SPA fallback.
+        # Keep both the prefixed public entry and the root compatibility entry
+        # because existing Control Plane URLs use the root origin while the
+        # Builder UI is mounted below /ai-builder.
+        location = /ai-builder/.well-known/dolphin-desktop-bootstrap {
+            rewrite ^/ai-builder/(.*)$ /$1 break;
+            proxy_pass http://127.0.0.1:8003;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $proxy_x_forwarded_proto;
+            proxy_set_header X-Forwarded-Prefix /ai-builder;
+        }
+
+        location = /.well-known/dolphin-desktop-bootstrap {
+            proxy_pass http://127.0.0.1:8003;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $proxy_x_forwarded_proto;
+        }
+
         # 保留根 /api 给少量同源兼容调用；主应用线上入口使用 /ai-builder/api/*。
         location /api/ {
             proxy_pass http://127.0.0.1:8003;
