@@ -10,7 +10,9 @@ from app.agents.profile import (
     narrow_tools_for_locked_ws,
     resolve_overrides_for_session,
     resolve_profile,
+    ws_bind_view_context,
 )
+from app.ai_chat.agent import _apply_session_overrides
 
 
 def test_system_assistant_profile_exposes_workspace_runtime_and_diagnostics_only():
@@ -47,6 +49,41 @@ def test_system_assistant_profile_does_not_require_a_bound_workspace():
     assert prompt == resolve_profile("system_assistant").system_prompt
     assert tools
     assert locked_ws_id is None
+
+
+def test_system_assistant_code_session_locks_bound_workspace_and_context():
+    session = SimpleNamespace(
+        mode="code", assistant_profile="system_assistant", workspace_id="ws-system"
+    )
+
+    prompt, tools, locked_ws_id = resolve_overrides_for_session(session)
+    profile = resolve_profile("system_assistant")
+
+    assert prompt == profile.system_prompt
+    assert tools == set(narrow_tools_for_locked_ws(profile.tool_names, "ws-system"))
+    assert "list_dev_workspaces" not in tools
+    assert locked_ws_id == "ws-system"
+    assert "ws-system" in (ws_bind_view_context(locked_ws_id) or "")
+
+    applied_prompt, applied_tools, view_context = _apply_session_overrides(session, None, None)
+    assert applied_prompt == prompt
+    assert applied_tools == tools
+    assert getattr(session, "_locked_ws_id", None) == "ws-system"
+    assert "ws-system" in (view_context or "")
+
+
+def test_system_assistant_code_session_without_workspace_can_discover_one():
+    session = SimpleNamespace(
+        mode="code", assistant_profile="system_assistant", workspace_id=None
+    )
+
+    _prompt, tools, locked_ws_id = resolve_overrides_for_session(session)
+    profile = resolve_profile("system_assistant")
+
+    assert tools == set(profile.tool_names)
+    assert "list_dev_workspaces" in tools
+    assert locked_ws_id is None
+    assert ws_bind_view_context(locked_ws_id) is None
 
 
 def test_entry_agent_code_mode_keeps_existing_dev_apaas_resolution():

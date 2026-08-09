@@ -237,7 +237,8 @@ def ws_bind_view_context(ws_id: str | None) -> str | None:
 def resolve_overrides_for_session(session) -> tuple[str | None, set[str] | None, str | None]:
     """按 session.mode 推导 run_agent 的 (system_prompt, tool_names_set, locked_ws_id)。
 
-    mode='code' → dev-apaas 提示词 + 按 session.workspace_id 收窄工具集 + 该 ws_id;
+    entry_agent + mode='code' → dev-apaas 提示词 + 按 session.workspace_id 收窄工具集 + 该 ws_id;
+    system_assistant + mode='code' → 系统助手提示词 + 按 session.workspace_id 收窄工具集 + 该 ws_id;
     其它 / 未知 mode → (None, None, None)(走 run_agent 默认通用 Builder 行为,零变化)。
 
     纯函数:不碰 DB、不改 session。run_agent 在调用方未显式传 override 时调它。
@@ -245,7 +246,9 @@ def resolve_overrides_for_session(session) -> tuple[str | None, set[str] | None,
     assistant_profile = getattr(session, "assistant_profile", None) or "entry_agent"
     if assistant_profile == "system_assistant":
         profile = resolve_profile("system_assistant")
-        return (profile.system_prompt, set(profile.tool_names), None)
+        ws_id = getattr(session, "workspace_id", None)
+        tool_names = set(narrow_tools_for_locked_ws(profile.tool_names, ws_id))
+        return (profile.system_prompt, tool_names, ws_id or None)
     if assistant_profile != "entry_agent":
         raise ValueError(f"未知 assistant_profile: {assistant_profile!r}")
 
