@@ -45,6 +45,11 @@ from app.models import (
 from app.routes.chat import _parse_uploaded_document, DOC_PARSE_ERROR_PREFIX  # 复用现有文档解析
 from app.ai_chat.agent import run_agent, generate_title
 from app.coding.workspace_access import workspace_mgr  # 代码会话标题派生用工作区显示名
+from app.system_assistant.contracts import (
+    AssistantProfileRequest,
+    DEFAULT_ASSISTANT_PROFILE,
+    normalize_assistant_profile,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +69,7 @@ def _control_plane_code_tenant_id(ctx: AuthContext, mode: str | None) -> str | N
 
 # ─────────────────────────── 请求 / 响应 schemas ───────────────────────────
 
-class CreateSessionRequest(BaseModel):
+class CreateSessionRequest(AssistantProfileRequest):
     title: Optional[str] = None
     selected_llm_config_id: Optional[int] = None
     # 工作模式：'chat'（从零理需求）/ 'cowork'（批量材料整合）/ 'code'（二次开发，绑工作区）
@@ -121,6 +126,7 @@ def _session_to_dict(s: AIChatSession, generation: Optional[dict] = None) -> dic
         "title": s.title,
         "status": s.status,
         "mode": getattr(s, "mode", None) or "chat",
+        "assistant_profile": getattr(s, "assistant_profile", None) or DEFAULT_ASSISTANT_PROFILE,
         "selected_llm_config_id": s.selected_llm_config_id,
         "workspace_dir": s.workspace_dir,
         "workspace_id": getattr(s, "workspace_id", None),
@@ -465,6 +471,7 @@ async def list_sessions(
     limit: int = 50,
     app_id: Optional[int] = None,
     mode: Optional[str] = None,
+    assistant_profile: Optional[str] = None,
 ):
     query = (
         select(AIChatSession)
@@ -477,6 +484,12 @@ async def list_sessions(
         query = query.where(AIChatSession.app_id == app_id)
     if mode:
         query = query.where(AIChatSession.mode == mode)
+    if assistant_profile is not None:
+        try:
+            profile_filter = normalize_assistant_profile(assistant_profile)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        query = query.where(AIChatSession.assistant_profile == profile_filter)
     query = query.order_by(desc(AIChatSession.updated_at)).limit(limit)
     res = await db.execute(query)
     sessions = res.scalars().all()
@@ -529,6 +542,7 @@ async def create_session(
         title=title,
         selected_llm_config_id=selected_llm_config_id,
         mode="code" if body.mode == "code" else ("cowork" if body.mode == "cowork" else "chat"),
+        assistant_profile=body.assistant_profile,
         status="active",
         app_id=app_id,
         workspace_id=body.workspace_id,

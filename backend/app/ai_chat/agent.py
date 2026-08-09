@@ -55,7 +55,8 @@ def _apply_session_overrides(session, system_prompt_override, tool_names_overrid
 
     返回 (system_prompt_override, tool_names_override, derived_view_context)。语义:
     - 两个 override 都为 None(统一外壳从 /ai-chat 发会话,不传 override)→ 调
-      resolve_overrides_for_session 推导:code 会话拿 dev-apaas 提示词 + 收窄工具,
+      resolve_overrides_for_session 推导:system_assistant 优先拿系统助手提示词和工具集;
+      entry_agent 的 code 会话仍拿 dev-apaas 提示词 + 收窄工具,
       并把非空 ws_id 设到 session._locked_ws_id(单工作区锁,execute_tool 据此强锁),
       **同时推导 ws 绑定 view_context(告诉 agent 当前 ws_id)** —— 缺它 agent 会反问
       「请把 ws_id 发我」(2026-06-25 修复)。caller 没传 view_context 时 run_agent 用它。

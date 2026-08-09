@@ -1,0 +1,69 @@
+"""P0 system-assistant profile selection and tool boundary tests."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from app.agents.profile import (
+    narrow_tools_for_locked_ws,
+    resolve_overrides_for_session,
+    resolve_profile,
+)
+
+
+def test_system_assistant_profile_exposes_workspace_runtime_and_diagnostics_only():
+    profile = resolve_profile("system_assistant")
+    tools = set(profile.tool_names)
+
+    assert profile.name == "system_assistant"
+    assert "先诊断" in profile.system_prompt
+    assert "read_workspace_file" in tools
+    assert "write_workspace_files" in tools
+    assert "run_workspace_command" in tools
+    assert "list_dev_workspaces" in tools
+    assert "doctor_apaas_backend_workspace" in tools
+    assert "lint_apaas_backend_workspace" in tools
+    assert {"use_skill", "read_knowledge", "search_knowledge"}.issubset(tools)
+
+    for forbidden in (
+        "generate_app_from_doc",
+        "update_app_from_doc",
+        "deploy_application",
+        "publish_application",
+        "publish_dev_workspace",
+        "create_apaas_app_dict",
+        "set_apaas_form_permissions",
+    ):
+        assert forbidden not in tools
+
+
+def test_system_assistant_profile_does_not_require_a_bound_workspace():
+    prompt, tools, locked_ws_id = resolve_overrides_for_session(
+        SimpleNamespace(mode="chat", assistant_profile="system_assistant")
+    )
+
+    assert prompt == resolve_profile("system_assistant").system_prompt
+    assert tools
+    assert locked_ws_id is None
+
+
+def test_entry_agent_code_mode_keeps_existing_dev_apaas_resolution():
+    session = SimpleNamespace(mode="code", assistant_profile="entry_agent", workspace_id="ws-1")
+
+    prompt, tools, locked_ws_id = resolve_overrides_for_session(session)
+
+    legacy = resolve_profile("dev-apaas")
+    assert prompt == legacy.system_prompt
+    assert tools == set(narrow_tools_for_locked_ws(legacy.tool_names, "ws-1"))
+    assert locked_ws_id == "ws-1"
+
+
+def test_resolve_profile_rejects_unknown_session_profile_even_in_code_mode():
+    session = SimpleNamespace(
+        mode="code", assistant_profile="system_assistant_v2", workspace_id="ws-1"
+    )
+
+    with pytest.raises(KeyError, match="system_assistant_v2"):
+        resolve_profile(session)
