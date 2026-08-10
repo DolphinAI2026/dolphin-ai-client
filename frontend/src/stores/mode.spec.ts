@@ -15,12 +15,12 @@ describe('mode store metadata', () => {
     expect(MODE_META.code.label).toBe('Code')
     expect(MODE_META.code.home).toBe('/code/apps')
     expect(MODE_META.code.nav).toContainEqual(expect.objectContaining({
-      label: '新建本地应用',
-      path: '/code/apps?create=local',
-    }))
-    expect(MODE_META.code.nav).toContainEqual(expect.objectContaining({
       label: '我的应用',
       path: '/code/apps',
+    }))
+    expect(MODE_META.code.nav).toContainEqual(expect.objectContaining({
+      label: '系统助手',
+      path: '/code/system-assistant',
     }))
     expect(MODE_META.code.nav).not.toContainEqual(expect.objectContaining({ path: '/code/new' }))
   })
@@ -34,13 +34,9 @@ describe('mode store metadata', () => {
     expect(modeForRoutePath('/apps')).toBe('builder')
   })
 
-  it('shows local application creation only in the desktop Code shell', () => {
-    expect(visibleModeNav('code', true)).toContainEqual(expect.objectContaining({
-      key: 'c-local-new',
-    }))
-    expect(visibleModeNav('code', false)).not.toContainEqual(expect.objectContaining({
-      key: 'c-local-new',
-    }))
+  it('keeps Code navigation consistent across desktop and browser shells', () => {
+    expect(visibleModeNav('code', true)).toEqual(MODE_META.code.nav)
+    expect(visibleModeNav('code', false)).toEqual(MODE_META.code.nav)
   })
 
   it('maps desktop entry scope to visible workspace labels', () => {

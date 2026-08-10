@@ -8,6 +8,11 @@ import {
 import { useUserStore } from '@/stores/user'
 import { usePreviewStore } from '@/stores/preview'
 import { modeForRoutePath, useModeStore } from '@/stores/mode'
+import {
+  loadProductAvailability,
+  productForRoute,
+  redirectForDisabledProduct,
+} from '@/stores/productAvailability'
 import request, {
   getAuthSessionState,
   isAuthSessionAlignmentPending,
@@ -56,13 +61,13 @@ export const routes: RouteRecordRaw[] = [
       // 首页 = AI Builder 融合页(新建欢迎草稿 + 对话流), 与 /ai-chat 同组件。
       // (2026-06-21 撤回 ModeHome —— 用已有的新会话欢迎页, 不重复造。)
       component: () => import('@/views/AIChatPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true }
+      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true, product: 'builder' }
     },
     {
       path: '/chat/:id?',
       name: 'Chat',
       component: () => import('@/views/ChatPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required' },
+      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' },
       beforeEnter: (to, _from, next) => {
         // ChatPage 必须绑定到某个应用才有意义
         // 没 app_id / conversation_id / deploy_app_id 也没 pending 上传素材的话直接重定向应用列表
@@ -85,7 +90,7 @@ export const routes: RouteRecordRaw[] = [
       path: '/ai-chat/:id?',
       name: 'AIChat',
       component: () => import('@/views/AIChatPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required' },
+      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' },
       beforeEnter: (to, _from, next) => {
         // Code 会话已经迁移到 /code/:id（由 agent-runtime 承载）。
         // 保留 /ai-chat 给 Builder，但让历史 mode=code 链接失效，避免再次创建旧会话。
@@ -101,7 +106,7 @@ export const routes: RouteRecordRaw[] = [
       component: () => import('@/views/CodeShellLayout.vue'),
       // Code uses the per-tab Control Plane ticket (`cp_tid`), not the
       // Builder/aPaaS local tenant URL contract.
-      meta: { requiresAuth: true, tenantContext: 'none' },
+      meta: { requiresAuth: true, tenantContext: 'none', product: 'code' },
       children: [
         {
           path: '',
@@ -134,13 +139,13 @@ export const routes: RouteRecordRaw[] = [
       path: '/db-connections',
       name: 'DbConnections',
       component: () => import('@/views/DbConnectionsPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true }
+      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true, product: 'builder' }
     },
     {
       path: '/apps',
       name: 'Apps',
       component: () => import('@/views/Apps.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required' }
+      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
     },
     // /projects (v2) 已删 — Project 表无真实进度字段, 真应用页在 /project/:id (单数).
     // /agents /specs /industry /runtime /mcp(McpHub) 这几个 v2 stub 页已删 (2026-06-08 清理).
@@ -148,25 +153,25 @@ export const routes: RouteRecordRaw[] = [
       path: '/workspace-catalog',
       name: 'WorkspaceCatalog',
       component: () => import('@/views/WorkspaceCatalogPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required' }
+      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
     },
     {
       path: '/workspace/:id?',
       name: 'Workspace',
       component: () => import('@/views/workspace/WorkspaceShell.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true }
+      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true, product: 'builder' }
     },
     {
       path: '/tenant-logs',
       name: 'TenantLogs',
       component: () => import('@/views/TenantLogsPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required' }
+      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
     },
     {
       path: '/hub',
       name: 'CapabilitiesHub',
       component: () => import('@/views/CapabilitiesHubPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true }
+      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true, product: 'builder' }
     },
     {
       // 技能库已并入 hub;老链接 / router.push('/skills') 重定向到 hub 的技能 tab
@@ -177,31 +182,31 @@ export const routes: RouteRecordRaw[] = [
         query: { ...to.query, tab: 'skills' },
         hash: to.hash,
       }),
-      meta: { requiresAuth: true, tenantContext: 'required' }
+      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
     },
     {
       path: '/skills/:name/workspace',
       name: 'SkillWorkspace',
       component: () => import('@/views/SkillWorkspacePage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required' }
+      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
     },
     {
       path: '/project/:id',
       name: 'ProjectOverview',
       component: () => import('@/views/ProjectOverview.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required' }
+      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
     },
     {
       path: '/project/:id/git',
       name: 'ProjectGitSetup',
       component: () => import('@/views/ProjectGitSetup.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required' }
+      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
     },
     {
       path: '/git/callback/:provider',
       name: 'GitOAuthCallback',
       component: () => import('@/views/GitOAuthCallback.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required' }
+      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
     },
     {
       path: '/settings',
@@ -220,25 +225,25 @@ export const routes: RouteRecordRaw[] = [
         }
         return { path: '/platform-envs', query: { ...to.query, tab: 'llm' }, hash: to.hash }
       },
-      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true }
+      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true, product: 'builder' }
     },
     {
       path: '/coding',
       name: 'Coding',
       component: () => import('@/views/CodingPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true }
+      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true, product: 'builder' }
     },
     {
       path: '/admin/mcp',
       name: 'McpTools',
       component: () => import('@/views/McpToolsPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true }
+      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true, product: 'builder' }
     },
     {
       path: '/admin/agent-prompts',
       name: 'AgentPrompts',
       component: () => import('@/views/AgentPromptsPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', requiresTenantAdmin: true, navExpanded: true }
+      meta: { requiresAuth: true, tenantContext: 'required', requiresTenantAdmin: true, navExpanded: true, product: 'builder' }
     },
     {
       path: '/work/:appId',
@@ -248,14 +253,14 @@ export const routes: RouteRecordRaw[] = [
         query: { ...to.query, app_id: String(to.params.appId) },
         hash: to.hash,
       }),
-      meta: { requiresAuth: true, tenantContext: 'required' }
+      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
     },
     // M3 (2026-05-27): 删 /datasources stub — 用老 /db-connections 真页 (DbConnectionsPage)
     // 当 "数据源" nav 入口. 重定向兼容 G3 老路径.
     {
       path: '/datasources',
       redirect: '/db-connections',
-      meta: { requiresAuth: true, tenantContext: 'required' }
+      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
     },
     // M1: 删 4 stub 路由 (/apis /docs /reports /models) — 产品定位不符.
     // L1: 删 /manage stub — admin-spa 已是平台管理完整入口. nav 管理直跳 /platform-admin.
@@ -263,25 +268,25 @@ export const routes: RouteRecordRaw[] = [
       path: '/platform-envs',
       name: 'PlatformEnvs',
       component: () => import('@/views/PlatformEnvs.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', requiresTenantAdmin: true, navExpanded: true }
+      meta: { requiresAuth: true, tenantContext: 'required', requiresTenantAdmin: true, navExpanded: true, product: 'builder' }
     },
     {
       path: '/platform-admin/:pathMatch(.*)*',
       name: 'PlatformAdmin',
       component: () => import('@/views/PlatformAdminEmbed.vue'),
-      meta: { requiresAuth: true, tenantContext: 'none', requiresPlatformAdmin: true, navExpanded: true, desktop: 'hidden' }
+      meta: { requiresAuth: true, tenantContext: 'none', requiresPlatformAdmin: true, navExpanded: true, desktop: 'hidden', product: 'builder' }
     },
     {
       path: '/tenant-users',
       name: 'TenantUsers',
       component: () => import('@/views/TenantUsers.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', requiresTenantAdmin: true, navExpanded: true }
+      meta: { requiresAuth: true, tenantContext: 'required', requiresTenantAdmin: true, navExpanded: true, product: 'builder' }
     },
     {
       path: '/admin/tenants',
       name: 'PlatformTenants',
       component: () => import('@/views/PlatformTenants.vue'),
-      meta: { requiresAuth: true, tenantContext: 'none', requiresPlatformAdmin: true, navExpanded: true, desktop: 'hidden' }
+      meta: { requiresAuth: true, tenantContext: 'none', requiresPlatformAdmin: true, navExpanded: true, desktop: 'hidden', product: 'builder' }
     },
     {
       // 知识库已并入 hub;老链接重定向到 hub 的知识 tab(hub 内按 isPlatformAdmin 过滤可见性)
@@ -292,7 +297,7 @@ export const routes: RouteRecordRaw[] = [
         query: { ...to.query, tab: 'knowledge' },
         hash: to.hash,
       }),
-      meta: { requiresAuth: true, tenantContext: 'required' }
+      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
     },
     ...desktopRoutes,
     {
@@ -304,7 +309,7 @@ export const routes: RouteRecordRaw[] = [
         query: { ...to.query, deploy_app_id: to.params.id as string },
         hash: to.hash,
       }),
-      meta: { requiresAuth: true, tenantContext: 'required' }
+      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
     }
 ]
 
@@ -421,6 +426,15 @@ export function installRouterGuards(targetRouter: Router): void {
       } else {
         next(tenantResolution as RouteLocationRaw)
       }
+      return
+    }
+
+    const productRedirect = redirectForDisabledProduct(
+      await loadProductAvailability(),
+      productForRoute(to),
+    )
+    if (productRedirect) {
+      next({ path: productRedirect, replace: true })
       return
     }
   }

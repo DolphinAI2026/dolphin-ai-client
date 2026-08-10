@@ -18,7 +18,12 @@ const routerGuardState = vi.hoisted(() => ({
   alignmentPending: false,
   userStore: {} as Record<string, any>,
   modeStore: {} as Record<string, any>,
+  productAvailability: { builder: true, code: true },
 }))
+
+vi.hoisted(() => {
+  vi.stubGlobal('__DESKTOP__', false)
+})
 
 const requestHarness = vi.hoisted(() => ({
   get: vi.fn(),
@@ -71,6 +76,16 @@ vi.mock('@/stores/preview', () => ({ usePreviewStore: vi.fn() }))
 vi.mock('@/stores/mode', () => ({
   modeForRoutePath: vi.fn(),
   useModeStore: () => routerGuardState.modeStore,
+}))
+vi.mock('@/stores/productAvailability', () => ({
+  loadProductAvailability: () => Promise.resolve(routerGuardState.productAvailability),
+  productForRoute: (route: { meta?: { product?: 'builder' | 'code' } }) => route.meta?.product,
+  redirectForDisabledProduct: (
+    availability: { builder: boolean; code: boolean },
+    product?: 'builder' | 'code',
+  ) => product && !availability[product]
+    ? availability.builder ? '/' : '/code/apps'
+    : undefined,
 }))
 vi.mock('@/utils/request', () => ({
   default: { get: requestHarness.get },
@@ -129,9 +144,22 @@ describe('tenantContext route classification', () => {
   })
 })
 
+describe('product route classification', () => {
+  it('declares Builder and Code routes explicitly while leaving public routes unclassified', () => {
+    const routeMeta = (path: string) => router.getRoutes().find(route => route.path === path)?.meta
+
+    expect(routeMeta('/')?.product).toBe('builder')
+    expect(routeMeta('/apps')?.product).toBe('builder')
+    expect(routeMeta('/ai-chat/:id?')?.product).toBe('builder')
+    expect(routeMeta('/code/apps')?.product).toBe('code')
+    expect(routeMeta('/login')?.product).toBeUndefined()
+  })
+})
+
 describe('tenant URL route mount gate', () => {
   function installBootstrapState() {
     vi.stubGlobal('__DESKTOP__', false)
+    routerGuardState.productAvailability = { builder: true, code: true }
     const userStore = installNavigationCoordinator({
       user: null as { tenant_public_id: string } | null,
       token: 'committed-token',
@@ -211,6 +239,57 @@ describe('tenant URL route mount gate', () => {
       replace: true,
     })
     expect(setMode).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['/', `/?tenantId=${currentUuid}`],
+    ['/apps', `/apps?tenantId=${currentUuid}`],
+    ['/ai-chat', `/ai-chat?tenantId=${currentUuid}`],
+  ])('redirects Code-only access to Builder route %s to the Code home', async (path, fullPath) => {
+    installBootstrapState()
+    routerGuardState.productAvailability = { builder: false, code: true }
+
+    const next = await runGuard({
+      path,
+      fullPath,
+      query: { tenantId: currentUuid },
+      hash: '',
+      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' },
+    })
+
+    expect(next).toHaveBeenCalledWith({ path: '/code/apps', replace: true })
+  })
+
+  it('does not redirect Code-only access to the public login route', async () => {
+    routerGuardState.session = { initialized: false, token: null }
+    routerGuardState.productAvailability = { builder: false, code: true }
+    routerGuardState.userStore = {}
+    routerGuardState.modeStore = {}
+
+    const next = await runGuard({
+      path: '/login',
+      fullPath: '/login',
+      query: {},
+      hash: '',
+      meta: {},
+    })
+
+    expect(next).toHaveBeenCalledWith()
+  })
+
+  it('redirects Builder-only access to Code routes to the Builder home', async () => {
+    installBootstrapState()
+    routerGuardState.productAvailability = { builder: true, code: false }
+
+    const next = await runGuard({
+      path: '/code/apps',
+      fullPath: '/code/apps',
+      query: {},
+      hash: '',
+      meta: { requiresAuth: true, tenantContext: 'none', product: 'code' },
+    })
+
+    expect(next).toHaveBeenCalledWith({ path: '/', replace: true })
   })
 
   it('does not read aPaaS state before a cold-start cross-tenant resolution completes', async () => {
@@ -381,6 +460,7 @@ describe('tenant URL route mount gate', () => {
 function createRedirectRouter() {
   installSessionStorage()
   vi.stubGlobal('__DESKTOP__', false)
+  routerGuardState.productAvailability = { builder: true, code: true }
   const userStore = installNavigationCoordinator({
     user: { tenant_public_id: currentUuid },
     token: 'committed-token',
