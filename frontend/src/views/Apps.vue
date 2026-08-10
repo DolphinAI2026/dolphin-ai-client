@@ -36,6 +36,10 @@
             <el-icon><Plus /></el-icon>
             <span>{{ newAppLabel }}</span>
           </button>
+          <button v-if="isCodeMode" class="btn btn-secondary apps-toolbar-action" type="button" @click="openSystemAssistant">
+            <AppIcon name="sparkles" :size="14" />
+            <span>系统助手</span>
+          </button>
           <button v-if="isCodeMode" class="btn btn-primary apps-toolbar-action" type="button" @click="startNewCodeApp">
             <el-icon><Plus /></el-icon>
             <span>{{ codeApplicationSource === 'local' ? '新建本地应用' : '新建远程应用' }}</span>
@@ -532,6 +536,10 @@ function startNewCodeApp() {
   router.push('/code/new')
 }
 
+function openSystemAssistant() {
+  router.push('/code/system-assistant')
+}
+
 async function handleLocalApplicationCreated(application: CodeApplication) {
   ElMessage.success('本地应用已创建')
   await refreshApps(true)
@@ -805,8 +813,8 @@ function openDeliveryAssetItem(item: ApplicationDeliveryAssetItem) {
   if (!app) return
   const appId = String(appNumericId(app) ?? app.id)
   if (item.kind === 'dev_workspace' && item.meta?.workspace_id) {
-    // SP2b T9: 落统一外壳 /ai-chat 的 code 会话(不再走独立 /coding)。
-    router.push({ path: '/ai-chat', query: { workspace_id: String(item.meta.workspace_id), mode: 'code' } })
+    // Code 工作区由 agent-runtime 承载；旧的 /ai-chat?mode=code 已废弃。
+    router.push({ path: '/code/apps' })
     return
   }
   if (item.kind === 'document_version' || item.meta?.conversation_id) {

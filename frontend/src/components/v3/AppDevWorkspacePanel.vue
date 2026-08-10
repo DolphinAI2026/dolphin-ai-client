@@ -189,8 +189,8 @@ function workspaceAccentStyle(ws: WorkspaceInfo) {
 }
 
 function openWorkspace(ws: WorkspaceInfo) {
-  // SP2b T9: 落统一外壳 /ai-chat 的 code 会话(不再走独立 /coding)。
-  router.push({ path: '/ai-chat', query: { workspace_id: String(ws.id), mode: 'code' } }).catch(() => {})
+  // Code 工作区由 agent-runtime 承载；旧的 /ai-chat?mode=code 已废弃。
+  router.push({ path: '/code/apps' }).catch(() => {})
 }
 
 async function downloadWorkspace(ws: WorkspaceInfo, type: 'src' | 'dist') {

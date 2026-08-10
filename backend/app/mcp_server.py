@@ -158,7 +158,7 @@ def _resolve_identity(tenant_id: int | None, user_id: int | None) -> tuple[int, 
     trusted = _TRUSTED_IDENTITY.get()
     if trusted is not None:
         t_tid, t_uid = trusted
-        if t_tid and t_uid:
+        if t_uid and t_tid >= 0:
             return int(t_tid), int(t_uid)
     from app.routes.current_app import get_current_app_for_user
     rec = get_current_app_for_user(int(user_id) if user_id else 1)

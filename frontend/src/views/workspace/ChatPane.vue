@@ -362,4 +362,10 @@ onMounted(() => {
   border-top: 1px solid var(--line);
   background: var(--surface);
 }
+
+.cp-input-area :deep(.ucc-box),
+.cp-input-area :deep(.ucc-footer),
+.cp-input-area :deep(.ucc-footer-left) {
+  overflow: visible;
+}
 </style>

@@ -71,6 +71,11 @@ class AIChatSession(Base):
     # 工作模式：'chat'（从零理需求）/ 'cowork'（批量材料整合）
     # 影响 agent.py 选用哪套 SYSTEM_PROMPT
     mode: Mapped[str] = mapped_column(String(20), default="chat", nullable=False)
+    # 会话入口 profile，与旧 mode 正交。历史会话迁移为 entry_agent；
+    # system_assistant 不得写入 mode，避免污染 chat/cowork/code 兼容读取。
+    assistant_profile: Mapped[str] = mapped_column(
+        String(40), default="entry_agent", server_default="entry_agent", nullable=False, index=True
+    )
     # 用户选择的 LLM 配置（拉自 llm_configs.options，purpose='all'）
     selected_llm_config_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # 应用上下文常驻锁：非空 = 锁定该内部 applications.id（app 配置/二次开发态）；

@@ -93,6 +93,56 @@ _DEV_APAAS_SYSTEM_PROMPT = """你是睿鲸 AI 的代码开发助手,在一个【
 记住:你的价值是把需求**落成代码**,不是反复确认和聊天。"""
 
 
+_SYSTEM_ASSISTANT_SYSTEM_PROMPT = """你是睿鲸 AI 的 Code 系统助手，主要为 Dolphin Code 的工程工作区和系统能力提供协助。
+你不负责 Builder 的应用搭建流程，也不是平台管理后台；回答必须以当前实际提供的工具和真实数据为准。
+
+工作顺序必须是：先诊断并读取现状，再根据证据执行受控动作，最后验证并报告结果。
+- 可以发现工作区，读取和修改已绑定工作区文件，运行受控命令，并使用诊断、lint、验证工具。
+- 可以读取已批准的 Skill、知识库和系统基线；模板或文档只是可选参考来源。
+- 不创建新应用，不进入 Builder 的 create_new 或 doc_pipeline 流程，不写入平台配置，不部署、发布或上传产物。
+- 当前不要主动声称支持应用健康检查、应用详情、模型/表单/权限查询等平台管理能力，除非本轮确实提供了对应工具并成功取得真实结果。
+- 没有绑定 ws_id 时先发现并确认目标工作区；不要猜测、切换到无关工作区或扩大操作范围。
+- 修改前说明依据和影响，修改后运行必要验证；遇到权限、环境或目标不明确时停止并说明阻断原因。
+
+当用户只是问候或询问“你能做什么”时，使用简短的自然语言说明，最多覆盖三个真实方向，不使用 emoji、长能力清单或虚构功能。可参考：
+“你好，我是睿鲸 AI 的系统助手。你可以直接告诉我需要排查的工程问题、要修改的工作区文件，或要查询的知识和技能；我会先读取真实上下文，再执行并验证。”
+用户提出具体任务后不要重复介绍能力，直接进入诊断和处理。
+"""
+
+
+def _system_assistant_tool_names() -> tuple[str, ...]:
+    """Return the non-destructive system/runtime boundary from the registry."""
+    reg = _load_registry()
+    allowed_categories = {"dev_workspace", "dev_scene", "introspection"}
+    allowed_skill_reads = {
+        "get_config_skill", "list_config_skills", "list_skills", "read_skill_file",
+    }
+    allow = {
+        name for name, meta in reg["tools"].items()
+        if (
+            (meta.get("category") in allowed_categories or name in allowed_skill_reads)
+            and not meta.get("writes_apaas")
+            and not meta.get("deploys_or_publishes")
+        )
+    }
+    allow -= _paused_tool_names()
+    session_tools = [
+        "read_attachment",
+        "run_python",
+        "write_artifact",
+        "read_artifact",
+        "edit_artifact",
+        "create_artifact_from_attachment",
+        "ask_clarifying_question",
+        "search_tools",
+        "save_binary_artifact",
+        "use_skill",
+        "read_knowledge",
+        "search_knowledge",
+    ]
+    return tuple(session_tools + sorted(allow - set(session_tools)))
+
+
 _PROFILE_BUILDERS = {
     "dev-apaas": lambda: AgentProfile(
         name="dev-apaas",
@@ -102,11 +152,29 @@ _PROFILE_BUILDERS = {
         use_mcp=True,
         max_turns=30,
     ),
+    "system_assistant": lambda: AgentProfile(
+        name="system_assistant",
+        system_prompt=_SYSTEM_ASSISTANT_SYSTEM_PROMPT,
+        tool_names=_system_assistant_tool_names(),
+        skill_pack=(),
+        use_mcp=True,
+        max_turns=30,
+    ),
 }
 
 
-def resolve_profile(name: str) -> AgentProfile:
-    """按场景名解析 AgentProfile。未知 name 抛 KeyError。"""
+def resolve_profile(name: str | object) -> AgentProfile:
+    """按 profile 名或会话解析 AgentProfile。未知值抛 KeyError。"""
+    if not isinstance(name, str):
+        assistant_profile = getattr(name, "assistant_profile", None)
+        if assistant_profile not in (None, "", "entry_agent", "system_assistant"):
+            raise KeyError(f"未知 assistant_profile: {assistant_profile!r}")
+        if assistant_profile == "system_assistant":
+            name = "system_assistant"
+        elif getattr(name, "mode", None) == "code":
+            name = "dev-apaas"
+        else:
+            raise KeyError("会话没有可解析的 agent profile")
     if name not in _PROFILE_BUILDERS:
         raise KeyError(
             f"未知 agent profile: {name!r}(已知:{sorted(_PROFILE_BUILDERS)})"
@@ -187,11 +255,21 @@ def ws_bind_view_context(ws_id: str | None) -> str | None:
 def resolve_overrides_for_session(session) -> tuple[str | None, set[str] | None, str | None]:
     """按 session.mode 推导 run_agent 的 (system_prompt, tool_names_set, locked_ws_id)。
 
-    mode='code' → dev-apaas 提示词 + 按 session.workspace_id 收窄工具集 + 该 ws_id;
+    entry_agent + mode='code' → dev-apaas 提示词 + 按 session.workspace_id 收窄工具集 + 该 ws_id;
+    system_assistant + mode='code' → 系统助手提示词 + 按 session.workspace_id 收窄工具集 + 该 ws_id;
     其它 / 未知 mode → (None, None, None)(走 run_agent 默认通用 Builder 行为,零变化)。
 
     纯函数:不碰 DB、不改 session。run_agent 在调用方未显式传 override 时调它。
     """
+    assistant_profile = getattr(session, "assistant_profile", None) or "entry_agent"
+    if assistant_profile == "system_assistant":
+        profile = resolve_profile("system_assistant")
+        ws_id = getattr(session, "workspace_id", None)
+        tool_names = set(narrow_tools_for_locked_ws(profile.tool_names, ws_id))
+        return (profile.system_prompt, tool_names, ws_id or None)
+    if assistant_profile != "entry_agent":
+        raise ValueError(f"未知 assistant_profile: {assistant_profile!r}")
+
     mode = getattr(session, "mode", None)
     profile_name = MODE_PROFILE.get(mode or "")
     if profile_name is None:

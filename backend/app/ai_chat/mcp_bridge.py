@@ -323,13 +323,20 @@ async def _call_inprocess_tool(tool_name: str, args: dict) -> str:
         }, ensure_ascii=False)
 
 
-async def call_tool(tool_name: str, args: dict, tenant_id: int = 0, user_id: int = 0) -> str:
+async def call_tool(
+    tool_name: str,
+    args: dict,
+    tenant_id: int = 0,
+    user_id: int = 0,
+    *,
+    allow_zero_tenant: bool = False,
+) -> str:
     """调本机 MCP server 的某个工具，自动塞 tenant_id/user_id 到 args。
 
     返回 result 的第一个 content 块的 text（通常是 JSON 字符串，调用方自己 parse）。
     错误情况返回 {"ok": false, "error_code": ..., "message": ...} 的 JSON 串。
     """
-    if not tenant_id or not user_id:
+    if (not tenant_id and not allow_zero_tenant) or not user_id:
         return json.dumps({
             "ok": False,
             "error_code": "MISSING_LOCAL_IDENTITY",

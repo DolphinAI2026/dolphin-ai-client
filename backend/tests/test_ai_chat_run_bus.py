@@ -119,7 +119,7 @@ async def test_abort_cancels_background_task(monkeypatch):
     那样 task.cancel()。否则点停止「AI 思考中」停不掉(线上 bug)。
     """
     from types import SimpleNamespace
-    from unittest.mock import AsyncMock
+    from unittest.mock import AsyncMock, MagicMock
 
     import app.routes.ai_chat as aichat
     from app.ai_chat.run_bus import AiChatRunBus, ai_chat_run_registry
@@ -139,9 +139,28 @@ async def test_abort_cancels_background_task(monkeypatch):
     monkeypatch.setattr(
         aichat, "_load_session_or_404", AsyncMock(return_value=SimpleNamespace(id=sid))
     )
+    running_tool = SimpleNamespace(
+        status="running",
+        result_text=None,
+        error_message=None,
+        started_at=None,
+        ended_at=None,
+        duration_ms=None,
+    )
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = [running_tool]
+    db = SimpleNamespace(
+        execute=AsyncMock(return_value=result),
+        commit=AsyncMock(),
+    )
     try:
-        res = await aichat.abort_session(sid, ctx=SimpleNamespace(), db=AsyncMock())
+        res = await aichat.abort_session(sid, ctx=SimpleNamespace(), db=db)
         assert res.get("stopped") is True
+        db.commit.assert_awaited_once()
+        assert running_tool.status == "aborted"
+        assert running_tool.error_message == "用户已停止本轮执行"
+        assert '"error_code": "ABORTED"' in running_tool.result_text
+        assert running_tool.ended_at is not None
         await asyncio.sleep(0.02)
         assert task.cancelled()
     finally:

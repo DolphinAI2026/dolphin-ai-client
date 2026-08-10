@@ -85,7 +85,16 @@ export const routes: RouteRecordRaw[] = [
       path: '/ai-chat/:id?',
       name: 'AIChat',
       component: () => import('@/views/AIChatPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required' }
+      meta: { requiresAuth: true, tenantContext: 'required' },
+      beforeEnter: (to, _from, next) => {
+        // Code 会话已经迁移到 /code/:id（由 agent-runtime 承载）。
+        // 保留 /ai-chat 给 Builder，但让历史 mode=code 链接失效，避免再次创建旧会话。
+        if (String(to.query.mode || '') === 'code') {
+          next({ path: '/code/apps' })
+          return
+        }
+        next()
+      },
     },
     {
       path: '/code',
@@ -102,6 +111,11 @@ export const routes: RouteRecordRaw[] = [
           path: 'apps',
           name: 'CodeApps',
           component: () => import('@/views/Apps.vue'),
+        },
+        {
+          path: 'system-assistant',
+          name: 'CodeSystemAssistant',
+          component: () => import('@/views/SystemAssistantPage.vue'),
         },
         {
           path: 'new',

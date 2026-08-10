@@ -80,6 +80,7 @@ const statusGlyph = computed(() => {
   switch (props.tool.status) {
     case 'success': return '✓'
     case 'error': return '✗'
+    case 'aborted': return '■'
     case 'running': return '◌'
     case 'pending': return '·'
     default: return ''
@@ -91,6 +92,7 @@ const statusLabel = computed(() => {
   switch (props.tool.status) {
     case 'success': return '已完成'
     case 'error': return '失败'
+    case 'aborted': return '已停止'
     case 'running': return '执行中'
     case 'pending': return '准备中'
     default: return ''
@@ -150,6 +152,10 @@ function formatArgs(args: any): string {
   border-color: rgba(239, 68, 68, 0.32);
   background: rgba(239, 68, 68, 0.04);
 }
+.tool-card.status-aborted {
+  border-color: rgba(100, 116, 139, 0.28);
+  background: rgba(100, 116, 139, 0.05);
+}
 
 .tc-head {
   display: flex;
@@ -167,6 +173,7 @@ function formatArgs(args: any): string {
 }
 .tc-status-label.success { color: var(--ok); }
 .tc-status-label.error { color: var(--err); }
+.tc-status-label.aborted { color: var(--text-3); }
 .tc-status-label.running { color: var(--info); }
 .tc-status-label.pending { color: rgba(116, 128, 171, 0.85); }
 
@@ -211,6 +218,7 @@ function formatArgs(args: any): string {
 }
 .tool-card.status-success .tc-result-summary { color: var(--ok); }
 .tool-card.status-error .tc-result-summary { color: var(--err); }
+.tool-card.status-aborted .tc-result-summary { color: var(--text-3); }
 .tc-duration {
   font-size: 11.5px;
   color: rgba(116, 128, 171, 0.85);

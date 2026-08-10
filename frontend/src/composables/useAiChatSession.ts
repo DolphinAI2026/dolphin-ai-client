@@ -24,6 +24,10 @@ import {
 import type { AgentAttachment, AgentMessage } from '@/components/common/agent-conversation/types'
 
 export interface UseAiChatSessionOptions {
+  /** 固定会话入口；系统助手只读取和创建自己的会话。 */
+  assistantProfile?: 'entry_agent' | 'system_assistant'
+  /** 固定工作模式；系统助手使用 code，但 profile 与 mode 仍保持正交。 */
+  mode?: 'chat' | 'cowork' | 'code'
   /** 锁定的应用 id（建会话时带上；listSessions 也按它过滤） */
   appId?: Ref<number | null | undefined>
   /** 业务段落标识（建会话 + 每次 send 透传到后端） */
@@ -320,6 +324,7 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
    * status=error/aborted 时退化到 "❌ ..."；解析失败/未知工具 → 空串（ToolCard 退化到默认）。
    */
   function summarizeToolResult(name: string, status: string, resultText: string | null | undefined): string {
+    if (status === 'aborted') return '已停止'
     if (status === 'error' || status === 'aborted') {
       const r = _parseToolResult(resultText) || {}
       const ec = r.error_code || r.code
@@ -533,8 +538,8 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
   // 把 renderTimeline 映射成 AgentConversation 公共消息契约（AgentMessage[]）
   const agentMessages = computed<AgentMessage[]>(() => {
     const out: AgentMessage[] = []
-    const mapStatus = (s: string): 'pending' | 'running' | 'success' | 'error' =>
-      (s === 'aborted' ? 'error' : (s as any)) || 'pending'
+    const mapStatus = (s: string): 'pending' | 'running' | 'success' | 'error' | 'aborted' =>
+      (s as any) || 'pending'
     const mapTool = (tc: AIChatToolCall) => ({
       id: tc.id,
       name: tc.tool_name,
@@ -646,11 +651,50 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
   // ─────────────────────────────────────────────────────────────────────
   async function loadSessions(): Promise<void> {
     const appId = opts?.appId?.value
-    const data = await aiChatApi.listSessions(appId != null ? { app_id: appId } : undefined)
+    const params = {
+      ...(appId != null ? { app_id: appId } : {}),
+      ...(opts?.mode ? { mode: opts.mode } : {}),
+      ...(opts?.assistantProfile ? { assistant_profile: opts.assistantProfile } : {}),
+    }
+    const data = await aiChatApi.listSessions(Object.keys(params).length ? params : undefined)
     sessions.value = data.sessions
   }
 
-  async function loadSession(id: number): Promise<void> {
+  async function restoreRunningSession(id: number): Promise<void> {
+    try {
+      const status = await aiChatApi.getRunStatus(id)
+      if (!status.running || currentSession.value?.id !== id || sending.value) return
+
+      sending.value = true
+      currentRunId.value = status.run_id
+      currentTurnAssistantMessageReceived.value = false
+      currentTurnFallbackErrorShown.value = false
+      startSecondsTimer()
+      const controller = new AbortController()
+      currentAbort.value = controller
+      void aiChatApi.attachRun(id, status.last_seq, {
+        signal: controller.signal,
+        onEvent: handleSseEvent,
+      }).finally(async () => {
+        if (currentAbort.value !== controller) return
+        stopDrain()
+        stopSecondsTimer()
+        sending.value = false
+        currentAbort.value = null
+        transientItems.value = []
+        streamingText.value = ''
+        currentTurnAssistantMessageReceived.value = false
+        currentTurnFallbackErrorShown.value = false
+        if (currentSession.value?.id === id) {
+          try { await loadSession(id, false) } catch { /* keep current history */ }
+        }
+      })
+    } catch {
+      // 历史内容已经加载；恢复状态不可用时不阻断用户继续对话。
+    }
+  }
+
+  async function loadSession(id: number, restoreRun = true): Promise<void> {
     // 切到不同 session 前，先 abort 进行中的 SSE，清流式临时态，避免「新会话显示旧会话尾巴」
     if (currentSession.value && currentSession.value.id !== id) {
       if (currentAbort.value) {
@@ -682,6 +726,7 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
     attachments.value = Array.isArray(data.attachments) ? data.attachments : []
     transientItems.value = []
     streamingText.value = ''
+    if (restoreRun) void restoreRunningSession(id)
   }
 
   async function ensureSession(): Promise<AIChatSession> {
@@ -690,6 +735,8 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
       app_id: opts?.appId?.value ?? null,
       section: opts?.section?.value ?? null,
       selected_llm_config_id: opts?.selectedLlmId?.value ?? null,
+      mode: opts?.mode,
+      assistant_profile: opts?.assistantProfile,
     })
     currentSession.value = created
     // 新建会话并入列表头部（不重复）
@@ -796,10 +843,24 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
   }
 
   async function stop(): Promise<void> {
-    if (currentSession.value) {
-      try { await aiChatApi.abort(currentSession.value.id) } catch { /* ignore */ }
+    const sessionId = currentSession.value?.id ?? null
+    if (sessionId) {
+      try { await aiChatApi.abort(sessionId) } catch { /* ignore */ }
     }
     currentAbort.value?.abort()
+    stopDrain()
+    stopSecondsTimer()
+    pendingChars.value = []
+    pendingFinalMessage.value = null
+    sending.value = false
+    currentAbort.value = null
+    transientItems.value = []
+    streamingText.value = ''
+    currentTurnAssistantMessageReceived.value = false
+    currentTurnFallbackErrorShown.value = false
+    if (sessionId) {
+      try { await loadSession(sessionId, false) } catch { /* keep current history */ }
+    }
   }
 
   function dispose(): void {

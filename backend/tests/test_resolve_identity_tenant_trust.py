@@ -64,3 +64,11 @@ def test_trusted_identity_resets_after_context():
         assert tid == WRONG_TID, "trusted_identity 退出后标记未复位，串了租户"
     finally:
         clear_current_app(UID)
+
+
+def test_trusted_control_plane_identity_accepts_zero_local_tenant():
+    """Control Plane organization scope may legitimately use local tenant_id=0."""
+
+    clear_current_app(UID)
+    with trusted_identity(0, UID):
+        assert _resolve_identity(0, UID) == (0, UID)

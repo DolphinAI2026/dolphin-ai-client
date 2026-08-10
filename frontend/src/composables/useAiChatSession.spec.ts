@@ -19,6 +19,8 @@ vi.mock('@/api/aiChat', async (importOriginal) => {
       getArtifact: vi.fn(),
       listArtifactVersions: vi.fn(),
       sendMessage: vi.fn(),
+      getRunStatus: vi.fn(),
+      attachRun: vi.fn(),
     },
   }
 })
@@ -102,6 +104,63 @@ describe('createAiChatSseReducer', () => {
 })
 
 describe('useAiChatSession', () => {
+  it('filters and creates sessions with the requested assistant profile', async () => {
+    vi.mocked(aiChatApi.listSessions).mockResolvedValueOnce({ sessions: [] })
+    vi.mocked(aiChatApi.createSession).mockResolvedValueOnce({
+      ...makeSession(),
+      mode: 'code',
+      assistant_profile: 'system_assistant',
+    })
+
+    const session = useAiChatSession({
+      mode: 'code',
+      assistantProfile: 'system_assistant',
+    })
+    await session.loadSessions()
+    await session.ensureSession()
+
+    expect(aiChatApi.listSessions).toHaveBeenCalledWith({
+      mode: 'code',
+      assistant_profile: 'system_assistant',
+    })
+    expect(aiChatApi.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      mode: 'code',
+      assistant_profile: 'system_assistant',
+    }))
+  })
+
+  it('reattaches a running session after loading persisted history', async () => {
+    let releaseAttach: (() => void) | undefined
+    vi.mocked(aiChatApi.getSession).mockResolvedValueOnce({
+      session: makeSession(),
+      messages: [],
+      attachments: [],
+      artifacts: [],
+      tool_calls: [],
+    })
+    vi.mocked(aiChatApi.getRunStatus).mockResolvedValueOnce({
+      running: true,
+      last_seq: 7,
+      run_id: 'run-42',
+    })
+    vi.mocked(aiChatApi.attachRun).mockImplementationOnce(
+      () => new Promise<void>(resolve => { releaseAttach = resolve }),
+    )
+
+    const session = useAiChatSession()
+    await session.loadSession(42)
+    await Promise.resolve()
+
+    expect(aiChatApi.attachRun).toHaveBeenCalledWith(
+      42,
+      7,
+      expect.objectContaining({ onEvent: expect.any(Function) }),
+    )
+    expect(session.sending.value).toBe(true)
+    expect(session.currentRunId.value).toBe('run-42')
+    releaseAttach?.()
+  })
+
   it('renders persisted compacted tool arguments without throwing', async () => {
     vi.mocked(aiChatApi.getSession).mockResolvedValueOnce({
       session: makeSession(),
@@ -130,6 +189,7 @@ describe('useAiChatSession', () => {
         },
       ],
     })
+    vi.mocked(aiChatApi.getRunStatus).mockResolvedValueOnce({ running: false, last_seq: 0, run_id: null })
 
     const session = useAiChatSession()
     await session.loadSession(42)

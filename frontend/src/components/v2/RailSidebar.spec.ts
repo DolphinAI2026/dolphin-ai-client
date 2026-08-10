@@ -47,7 +47,7 @@ describe('RailSidebar unified session source (SP2b)', () => {
     expect(railSidebarSource).toContain('codeRuntimeApi.createAgentSession')
     expect(railSidebarSource).toContain('rail-sess-group-new')
     expect(railSidebarSource).toContain('g.shellSessionId')
-    expect(railSidebarSource).toContain('items.find(s => s.shellSessionId)?.shellSessionId')
+    expect(railSidebarSource).toContain("createCodeAgentSession(g.shellSessionId)")
     expect(railSidebarSource).toContain("effectiveGroupBy === 'app'")
     expect(railSidebarSource).not.toContain('class="rail-sess-new"')
     expect(railSidebarSource).toContain(

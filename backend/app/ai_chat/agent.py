@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from datetime import datetime
 from typing import Any, AsyncIterator, Optional
@@ -45,6 +46,7 @@ from app.models import (
 from app.ai_chat.tools import TOOL_SCHEMAS, execute_tool, get_all_tool_schemas, split_core_deferred, build_deferred_manifest
 from app.observability import recorder
 from app.routes.llm_configs import build_llm_chat_completions_url
+from app.system_assistant.contracts import assistant_model_purpose
 from app import llm_transport
 
 logger = logging.getLogger(__name__)
@@ -55,7 +57,8 @@ def _apply_session_overrides(session, system_prompt_override, tool_names_overrid
 
     返回 (system_prompt_override, tool_names_override, derived_view_context)。语义:
     - 两个 override 都为 None(统一外壳从 /ai-chat 发会话,不传 override)→ 调
-      resolve_overrides_for_session 推导:code 会话拿 dev-apaas 提示词 + 收窄工具,
+      resolve_overrides_for_session 推导:system_assistant 优先拿系统助手提示词和工具集;
+      entry_agent 的 code 会话仍拿 dev-apaas 提示词 + 收窄工具,
       并把非空 ws_id 设到 session._locked_ws_id(单工作区锁,execute_tool 据此强锁),
       **同时推导 ws 绑定 view_context(告诉 agent 当前 ws_id)** —— 缺它 agent 会反问
       「请把 ws_id 发我」(2026-06-25 修复)。caller 没传 view_context 时 run_agent 用它。
@@ -491,10 +494,11 @@ async def _resolve_llm_config(
     """
     from app.routes.llm_configs import resolve_llm_config_for_purpose
 
+    purpose = assistant_model_purpose(getattr(session, "assistant_profile", None))
     cfg: Optional[LLMConfig] = await resolve_llm_config_for_purpose(
         db,
         getattr(session, "tenant_id", None) or 0,
-        "builder",
+        purpose,
         session.selected_llm_config_id,
     )
     if not cfg:
@@ -797,6 +801,36 @@ async def _build_initial_messages(
 
 MAX_TURNS = 25  # 工具循环最大轮数（统一 config 的 25：app 配置/codegen 多步任务需要）
 
+_SYSTEM_ASSISTANT_INTRO_RESPONSE = (
+    "你好，我是睿鲸 AI 的 Code 系统助手。你可以直接告诉我需要排查的工程问题、"
+    "要修改的工作区文件，或要查询的知识和技能；我会先读取真实上下文，再执行并验证。"
+    "应用搭建、平台配置、发布部署和应用详情查询不属于当前系统助手入口。"
+)
+
+
+def _is_system_assistant_intro_request(session: AIChatSession, text: str) -> bool:
+    """Only short greetings/capability prompts use the deterministic boundary reply.
+
+    Keeping this narrow prevents a model from inventing unsupported platform
+    capabilities while leaving all concrete work requests on the real agent loop.
+    """
+    if getattr(session, "assistant_profile", None) != "system_assistant":
+        return False
+    normalized = re.sub(r"[\s!！?？。.,，、:：；;]+", "", (text or "").strip().lower())
+    return normalized in {
+        "你好",
+        "您好",
+        "嗨",
+        "hello",
+        "hi",
+        "在吗",
+        "你是谁",
+        "介绍一下自己",
+        "你能做什么",
+        "你可以做什么",
+        "你有哪些能力",
+    }
+
 
 def _sse(event: str, data: dict) -> dict:
     return {"event": event, "data": json.dumps(data, ensure_ascii=False)}
@@ -807,6 +841,7 @@ async def _persist_assistant_notice(
     session: AIChatSession,
     content: str,
     run_id: Optional[str] = None,
+    notice_type: str = "llm_error",
 ) -> Optional[AIChatMessage]:
     """Persist a visible assistant notice so stream failures survive refresh."""
     try:
@@ -815,7 +850,7 @@ async def _persist_assistant_notice(
             role="assistant",
             content=content,
             extra_meta={
-                "notice_type": "llm_error",
+                "notice_type": notice_type,
                 **({"run_id": run_id} if run_id else {}),
             },
         )
@@ -901,6 +936,21 @@ async def _run_agent_inner(
     # caller 未传 view_context 时,用推导出的 ws 绑定上下文 —— code 会话据此知道当前 ws_id,
     # 不再反问「请把 ws_id 发我」(2026-06-25 修复)。caller 显式传的 view_context 优先。
     view_context = view_context or _derived_vc
+
+    # 纯问候/能力询问不需要模型推理。固定回复同时作为能力边界，避免旧模型提示词
+    # 缓存或自由生成时把平台管理能力误报给用户；具体任务仍完整走真实 agent loop。
+    if _is_system_assistant_intro_request(session, current_user_message):
+        msg = await _persist_assistant_notice(
+            db,
+            session,
+            _SYSTEM_ASSISTANT_INTRO_RESPONSE,
+            notice_type="system_assistant_intro",
+        )
+        if msg:
+            yield _assistant_message_event(msg)
+        yield _sse("done", {"ok": True})
+        return
+
     try:
         cfg = await _resolve_llm_config(db, session)
     except RuntimeError as e:
@@ -938,15 +988,21 @@ async def _run_agent_inner(
     # 每个 session 的第一轮拉一次合并 schemas（base 4 + MCP bridge 注入的 N 个）
     # 这是 lazy 设计 — backend 启动时 MCP 可能还没 ready，所以放在 turn loop 外的第一次调用
     all_schemas = await get_all_tool_schemas()
-    # profile 工具白名单(如 dev-apaas):base 本地工具恒保留(search_tools/ask_clarifying_question 等),
-    # MCP 工具按白名单收窄 — 砍掉 deploy/生成/配置增删改,防 Code agent 跑偏。默认 None 不过滤(Builder 全量)。
+    # profile 工具白名单。旧 entry_agent/dev-apaas 继续恒保留 AIChat base tools；
+    # system_assistant 则严格按白名单过滤，避免会话临时目录工具绕过 ws_id 工作区边界。
     if tool_names_override is not None:
         from app.ai_chat.tools import _BASE_LOCAL_NAMES
         _allow = set(tool_names_override)
+        _strict_base_allow = (
+            getattr(session, "assistant_profile", None) == "system_assistant"
+        )
         all_schemas = [
             s for s in all_schemas
-            if s.get("function", {}).get("name") in _BASE_LOCAL_NAMES
-            or s.get("function", {}).get("name") in _allow
+            if s.get("function", {}).get("name") in _allow
+            or (
+                not _strict_base_allow
+                and s.get("function", {}).get("name") in _BASE_LOCAL_NAMES
+            )
         ]
     # 延迟工具:核心集恒在；长尾只在 system prompt 列清单，按需 search_tools 激活。
     core_schemas, deferred_by_name = split_core_deferred(all_schemas)

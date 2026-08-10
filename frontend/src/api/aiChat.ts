@@ -18,6 +18,7 @@ export interface AIChatSession {
   } | null
   /** 工作模式：'chat'（从零理需求）/ 'cowork'（批量材料整合）/ 'code'（智能开发） */
   mode?: 'chat' | 'cowork' | 'code' | string
+  assistant_profile?: 'entry_agent' | 'system_assistant'
   /** 会话所属应用（code 会话从工作区绑定继承）；用于左栏「按应用」分组 */
   app_id?: number | null
   /** Code 模式外部应用来源：d-ai-code Control Plane 的 applicationId */
@@ -144,14 +145,15 @@ async function _consumeSse(resp: Response, onEvent: (eventName: string, data: an
 }
 
 export const aiChatApi = {
-  listSessions(params?: { app_id?: number; mode?: string }): Promise<{ sessions: AIChatSession[] }> {
+  listSessions(params?: { app_id?: number; mode?: string; assistant_profile?: 'entry_agent' | 'system_assistant' }): Promise<{ sessions: AIChatSession[] }> {
     const search = new URLSearchParams()
     if (params?.app_id != null) search.set('app_id', String(params.app_id))
     if (params?.mode) search.set('mode', params.mode)
+    if (params?.assistant_profile) search.set('assistant_profile', params.assistant_profile)
     const qs = search.toString() ? `?${search.toString()}` : ''
     return request.get<any, { sessions: AIChatSession[] }>(`/ai-chat/sessions${qs}`)
   },
-  createSession(body: { title?: string; selected_llm_config_id?: number | null; mode?: 'chat' | 'cowork' | 'code'; app_id?: number | null; workspace_id?: string; section?: string | null }): Promise<AIChatSession> {
+  createSession(body: { title?: string; selected_llm_config_id?: number | null; mode?: 'chat' | 'cowork' | 'code'; assistant_profile?: 'entry_agent' | 'system_assistant'; app_id?: number | null; workspace_id?: string; section?: string | null }): Promise<AIChatSession> {
     return request.post<any, AIChatSession>('/ai-chat/sessions', body)
   },
   getSession(id: number, params?: { app_id?: number | null }): Promise<AIChatSessionDetail> {

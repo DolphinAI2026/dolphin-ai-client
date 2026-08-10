@@ -1732,11 +1732,18 @@ async def execute_tool(
         # 锁定 app 上下文注入：强制覆盖 LLM 给的 env_id / apaas_app_id (Task A4)
         args = await _inject_locked_app_ctx(tool_name, args, session, db)
         args = _force_locked_ws_id(tool_name, args, session)
-        result_text = await _mcp_call(
-            tool_name, args,
-            tenant_id=int(getattr(session, "tenant_id", 0) or 0),
-            user_id=int(getattr(session, "user_id", 0) or 0),
+        tenant_id = int(getattr(session, "tenant_id", 0) or 0)
+        allow_zero_tenant = (
+            getattr(session, "assistant_profile", None) == "system_assistant"
+            and bool(str(getattr(session, "control_plane_tenant_id", "") or "").strip())
         )
+        call_kwargs = {
+            "tenant_id": tenant_id,
+            "user_id": int(getattr(session, "user_id", 0) or 0),
+        }
+        if allow_zero_tenant:
+            call_kwargs["allow_zero_tenant"] = True
+        result_text = await _mcp_call(tool_name, args, **call_kwargs)
         # SPEC artifact 落地副作用 — 仅 ai_chat 走这条 dispatcher，外部调用方不会触发
         # 2026-05-24: generate_app_from_doc 改强制 artifact_id 后, args 里没 md_content,
         # 而 artifact 已经在 write_artifact 时落表 — 不需要 _persist. update_app_from_doc

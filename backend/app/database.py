@@ -107,6 +107,21 @@ async def _execute_best_effort(conn, statement: str) -> None:
             return
 
 
+# Kept as a small, named migration boundary so the old-session upgrade can be
+# tested without bootstrapping the entire application schema.
+AI_CHAT_SESSION_PROFILE_MIGRATIONS = (
+    "ALTER TABLE ai_chat_sessions ADD COLUMN assistant_profile VARCHAR(40) NOT NULL DEFAULT 'entry_agent'",
+    "CREATE INDEX IF NOT EXISTS ix_ai_chat_sessions_assistant_profile ON ai_chat_sessions(assistant_profile)",
+)
+
+
+async def migrate_ai_chat_session_profile(conn) -> None:
+    """Add the P0 profile column to an existing SQLite/MySQL AIChat table."""
+
+    for statement in AI_CHAT_SESSION_PROFILE_MIGRATIONS:
+        await _execute_best_effort(conn, statement)
+
+
 async def init_db():
     import app.models.tenant  # noqa: F401
     # 确保 extension models 被 Base 注册（create_all 会创建新表）
@@ -295,6 +310,8 @@ async def init_db():
             "ON code_runtime_browser_sessions(binding_id, browser_session_id)",
         ]:
             await _execute_best_effort(conn, stmt)
+
+        await migrate_ai_chat_session_profile(conn)
 
         await _migrate_code_runtime_binding_app_id_nullable(conn, inspect)
 

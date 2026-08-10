@@ -51,6 +51,7 @@ from app.routes import (
     skills as skills_routes,
     spec,
     sse,
+    system_assistant,
     templates,
     tenant_logs,
     voice,
@@ -175,6 +176,7 @@ app.include_router(browser.router, prefix="/api")
 app.include_router(harness.router, prefix="/api")
 app.include_router(spec.router, prefix="/api")
 app.include_router(sse.router, prefix="/api")
+app.include_router(system_assistant.router, prefix="/api")
 app.include_router(application_members.router, prefix="/api")
 app.include_router(git_connection.router, prefix="/api")
 app.include_router(git_connection.app_router, prefix="/api")
