@@ -68,7 +68,7 @@ export function visibleModeNav(mode: AppMode, desktop: boolean): ModeNavItem[] {
 }
 
 export function isCodeRoutePath(path: string): boolean {
-  return path === '/code' || path.startsWith('/code/')
+  return path === '/coding' || path === '/code' || path.startsWith('/code/')
 }
 
 export function modeForRoutePath(path: string): AppMode {

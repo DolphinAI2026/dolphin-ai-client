@@ -152,6 +152,7 @@ describe('product route classification', () => {
     expect(routeMeta('/apps')?.product).toBe('builder')
     expect(routeMeta('/ai-chat/:id?')?.product).toBe('builder')
     expect(routeMeta('/code/apps')?.product).toBe('code')
+    expect(routeMeta('/coding')?.product).toBe('code')
     expect(routeMeta('/login')?.product).toBeUndefined()
   })
 })
@@ -287,6 +288,38 @@ describe('tenant URL route mount gate', () => {
       query: {},
       hash: '',
       meta: { requiresAuth: true, tenantContext: 'none', product: 'code' },
+    })
+
+    expect(next).toHaveBeenCalledWith({ path: '/', replace: true })
+  })
+
+  it('keeps the legacy coding route inside the Code product boundary', async () => {
+    installBootstrapState()
+    routerGuardState.productAvailability = { builder: false, code: true }
+    const routeMeta = router.getRoutes().find(route => route.path === '/coding')?.meta
+
+    const next = await runGuard({
+      path: '/coding',
+      fullPath: `/coding?tenantId=${currentUuid}`,
+      query: { tenantId: currentUuid },
+      hash: '',
+      meta: routeMeta,
+    })
+
+    expect(next).toHaveBeenCalledWith()
+  })
+
+  it('redirects Builder-only access to the legacy coding route to Builder home', async () => {
+    installBootstrapState()
+    routerGuardState.productAvailability = { builder: true, code: false }
+    const routeMeta = router.getRoutes().find(route => route.path === '/coding')?.meta
+
+    const next = await runGuard({
+      path: '/coding',
+      fullPath: `/coding?tenantId=${currentUuid}`,
+      query: { tenantId: currentUuid },
+      hash: '',
+      meta: routeMeta,
     })
 
     expect(next).toHaveBeenCalledWith({ path: '/', replace: true })

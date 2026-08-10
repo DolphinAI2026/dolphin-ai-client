@@ -581,7 +581,6 @@ def _control_plane_headers(
     )
     if delegation_secret and delegated_context is not None:
         headers["X-AI-Builder-Delegation-Secret"] = delegation_secret
-    if delegated_context is not None:
         headers.update(_delegated_identity_headers(delegated_context, shell_session_id=shell_session_id))
     return headers
 
@@ -593,19 +592,17 @@ def _workspace_open_headers(
     shell_session_id: int | None = None,
     auth_provider: str | None = None,
 ) -> dict[str, str]:
-    token = workspace_open_token()
-    if token:
-        return {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {token}",
-        }
-    return _control_plane_headers(
+    headers = _control_plane_headers(
         authorization_header,
         include_content_type=True,
         delegated_context=delegated_context,
         shell_session_id=shell_session_id,
         auth_provider=auth_provider,
     )
+    token = workspace_open_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 
 def _header_text(value: Any) -> str | None:

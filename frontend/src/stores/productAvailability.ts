@@ -52,6 +52,7 @@ export function loadProductAvailability(): Promise<ProductAvailability> {
       })
       .catch(() => {
         availability = fallbackProductAvailability()
+        availabilityLoad = null
         return availability
       })
   }

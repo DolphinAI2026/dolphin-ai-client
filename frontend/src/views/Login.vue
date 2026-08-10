@@ -182,6 +182,7 @@ const themeStore = useThemeStore()
 const loginFormRef = ref<FormInstance>()
 const loginLoading = ref(false)
 const captchaRequired = ref(false)
+const captchaProbeFailed = ref(false)
 const captchaId = ref('')
 const captchaImage = ref('')
 type DesktopServiceSummary = {
@@ -219,20 +220,26 @@ const loginRules: FormRules = {
   }],
 }
 
-const refreshCaptcha = async () => {
-  if (changingDesktopService.value) return
+const refreshCaptcha = async (): Promise<boolean> => {
+  if (changingDesktopService.value) return false
   try {
     const result = await authApi.getCaptcha()
     captchaRequired.value = result.required
     captchaId.value = result.captcha_id || ''
     captchaImage.value = result.image_data || ''
     loginForm.captcha_code = ''
+    return true
   } catch {
     captchaRequired.value = false
     captchaId.value = ''
     captchaImage.value = ''
     loginForm.captcha_code = ''
+    return false
   }
+}
+
+const probeCaptcha = async () => {
+  captchaProbeFailed.value = !(await refreshCaptcha())
 }
 
 async function loadDesktopService() {
@@ -278,7 +285,7 @@ async function changeDesktopService() {
 }
 
 onMounted(() => {
-  void refreshCaptcha()
+  void probeCaptcha()
   void loadDesktopService()
 })
 
@@ -335,6 +342,9 @@ const handleLogin = async () => {
         '登录失败，请检查用户名和密码'
       ElMessage.error(detail)
       if (captchaRequired.value) {
+        await refreshCaptcha()
+      } else if (captchaProbeFailed.value) {
+        captchaProbeFailed.value = false
         await refreshCaptcha()
       }
     }

@@ -753,7 +753,7 @@ def test_control_plane_headers_prefer_active_builder_tenant_mapping(monkeypatch)
     assert headers["X-Tenant-Id"] == "0"
 
 
-def test_control_plane_headers_use_apaas_tenant_when_no_control_plane_mapping(monkeypatch):
+def test_control_plane_headers_use_apaas_tenant_without_untrusted_delegation(monkeypatch):
     from app.config import settings
     from app.code_runtime import service
 
@@ -776,9 +776,7 @@ def test_control_plane_headers_use_apaas_tenant_when_no_control_plane_mapping(mo
 
     assert headers["Authorization"] == "Bearer apaas-access-token"
     assert headers["X-Tenant-Id"] == "apaas-tenant-1"
-    assert headers["X-AI-Builder-Delegated-Tenant-Id"] == "apaas-tenant-1"
-    assert headers["X-AI-Builder-Local-Tenant-Id"] == "3"
-    assert "X-AI-Builder-Delegation-Secret" not in headers
+    assert not any(key.startswith("X-AI-Builder-") for key in headers)
 
 
 @pytest.mark.asyncio
@@ -839,6 +837,74 @@ def test_control_plane_headers_include_delegation_secret(monkeypatch):
     headers = service._control_plane_headers(delegated_context=ctx)
 
     assert headers["X-AI-Builder-Delegation-Secret"] == "shared-secret"
+
+
+@pytest.mark.parametrize(
+    ("username", "expected"),
+    [
+        ("admin", "ai-builder-admin-11"),
+        ("root", "ai-builder-root-11"),
+    ],
+)
+def test_workspace_open_headers_preserve_trusted_delegation_with_coordinator_token(
+    monkeypatch,
+    username,
+    expected,
+):
+    from app.config import settings
+    from app.code_runtime import service
+
+    monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_TOKEN", "workspace-token")
+    monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_DELEGATION_SECRET", "shared-secret")
+    monkeypatch.setattr(settings, "dolphin_code_control_plane_delegation_secret", "", raising=False)
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(
+            id=11,
+            username=username,
+            display_name="Admin User",
+            coding_tenant_id="tenant-current",
+        ),
+        apaas_user_id="apaas-user-1",
+        apaas_tenant_id="apaas-tenant-1",
+        tenant_id=7,
+    )
+
+    headers = service._workspace_open_headers(
+        "Bearer user-token",
+        delegated_context=ctx,
+        shell_session_id=42,
+    )
+
+    assert headers["Content-Type"] == "application/json"
+    assert headers["Authorization"] == "Bearer workspace-token"
+    assert headers["X-Tenant-Id"] == "tenant-current"
+    assert headers["X-AI-Builder-Delegation-Secret"] == "shared-secret"
+    assert headers["X-AI-Builder-Delegated-User-Id"] == "apaas-user-1"
+    assert headers["X-AI-Builder-Delegated-Username"] == expected
+    assert headers["X-AI-Builder-Delegated-Display-Name-B64"] == "QWRtaW4gVXNlcg=="
+
+
+def test_workspace_open_headers_omit_delegated_identity_without_secret(monkeypatch):
+    from app.config import settings
+    from app.code_runtime import service
+
+    monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_TOKEN", "workspace-token")
+    monkeypatch.delenv("DOLPHIN_CODE_CONTROL_PLANE_DELEGATION_SECRET", raising=False)
+    monkeypatch.setattr(settings, "dolphin_code_control_plane_delegation_secret", "", raising=False)
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(id=11, username="admin", coding_tenant_id="tenant-current"),
+        apaas_user_id="apaas-user-1",
+        tenant_id=7,
+    )
+
+    headers = service._workspace_open_headers(
+        "Bearer user-token",
+        delegated_context=ctx,
+    )
+
+    assert headers["Content-Type"] == "application/json"
+    assert headers["Authorization"] == "Bearer workspace-token"
+    assert not any(key.startswith("X-AI-Builder-") for key in headers)
 
 
 @pytest.mark.asyncio
@@ -1553,7 +1619,7 @@ async def test_default_workspace_open_requires_override_url_and_token_together(
 
 
 @pytest.mark.asyncio
-async def test_default_workspace_open_omits_delegation_headers_for_user_token(monkeypatch):
+async def test_default_workspace_open_sends_trusted_delegation_with_user_token(monkeypatch):
     from app.code_runtime import service
 
     calls: list[dict] = []
@@ -1601,7 +1667,10 @@ async def test_default_workspace_open_omits_delegation_headers_for_user_token(mo
 
     headers = calls[0]["headers"]
     assert headers["Authorization"] == "Bearer user-token"
-    assert not any(key.startswith("X-AI-Builder-") for key in headers)
+    assert headers["X-AI-Builder-Delegation-Secret"] == "shared-secret"
+    assert headers["X-AI-Builder-Delegated-User-Id"] == "100169876816012509184"
+    assert headers["X-AI-Builder-Delegated-Username"] == "ai-builder-admin-11"
+    assert headers["X-AI-Builder-Delegated-Display-Name-B64"] == "5byg5LiJ"
 
 
 def test_delegated_identity_keeps_non_reserved_username():

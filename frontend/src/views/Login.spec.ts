@@ -193,8 +193,13 @@ describe('Login captcha fallback', () => {
     document.body.innerHTML = ''
   })
 
-  it('keeps account login available when captcha capability is unavailable', async () => {
+  it('restores the captcha input after a failed probe and the first login failure', async () => {
     loginHarness.getCaptcha.mockRejectedValueOnce(new Error('captcha unavailable'))
+    loginHarness.getCaptcha.mockResolvedValueOnce({
+      required: true,
+      captcha_id: 'captcha-2',
+      image_data: 'data:image/png;base64,captcha-2',
+    })
     loginHarness.login.mockRejectedValueOnce({
       response: { data: { detail: '账号或密码不正确' } },
     })
@@ -213,9 +218,45 @@ describe('Login captcha fallback', () => {
     container.querySelector<HTMLButtonElement>('button.submit-btn')!.click()
 
     await flushPromises()
+    await flushPromises()
 
     expect(loginHarness.login).toHaveBeenCalledWith('alice', 'secret', '', '')
     expect(loginHarness.error).toHaveBeenCalledWith('账号或密码不正确')
+    expect(loginHarness.getCaptcha).toHaveBeenCalledTimes(2)
+    expect(container.querySelector('input[placeholder="验证码"]')).not.toBeNull()
+    app.unmount()
+  })
+
+  it('does not retry captcha discovery after the one recovery attempt also fails', async () => {
+    loginHarness.getCaptcha
+      .mockRejectedValueOnce(new Error('captcha unavailable'))
+      .mockRejectedValueOnce(new Error('captcha still unavailable'))
+    loginHarness.login.mockRejectedValue({
+      response: { data: { detail: '账号或密码不正确' } },
+    })
+    const { app, container } = mountLogin()
+
+    await flushPromises()
+
+    const username = container.querySelector<HTMLInputElement>('input[placeholder="账号"]')
+    const password = container.querySelector<HTMLInputElement>('input[placeholder="密码"]')
+    const submit = container.querySelector<HTMLButtonElement>('button.submit-btn')
+    username!.value = 'alice'
+    username!.dispatchEvent(new Event('input'))
+    password!.value = 'secret'
+    password!.dispatchEvent(new Event('input'))
+
+    submit!.click()
+    await flushPromises()
+    await flushPromises()
+    submit!.click()
+    await flushPromises()
+    await flushPromises()
+
+    expect(loginHarness.login).toHaveBeenCalledTimes(2)
+    expect(loginHarness.getCaptcha).toHaveBeenCalledTimes(2)
+    expect(loginHarness.error).toHaveBeenCalledTimes(2)
+    expect(container.querySelector('input[placeholder="验证码"]')).toBeNull()
     app.unmount()
   })
 })

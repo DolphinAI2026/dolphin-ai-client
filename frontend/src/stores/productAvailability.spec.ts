@@ -62,10 +62,19 @@ describe('product availability', () => {
     expect(defaultProductHome({ builder: true, code: true })).toBe('/')
   })
 
-  it('falls back to both products when public settings cannot be loaded', async () => {
-    authSettingsHarness.getPublic.mockRejectedValue(new Error('unavailable'))
+  it('falls back once and retries public settings on the next load', async () => {
+    authSettingsHarness.getPublic
+      .mockRejectedValueOnce(new Error('unavailable'))
+      .mockResolvedValueOnce({
+        products: {
+          builder: { enabled: false },
+          code: { enabled: true },
+        },
+      })
 
     await expect(loadProductAvailability()).resolves.toEqual({ builder: true, code: true })
+    await expect(loadProductAvailability()).resolves.toEqual({ builder: false, code: true })
+    expect(authSettingsHarness.getPublic).toHaveBeenCalledTimes(2)
   })
 
   it('reuses the in-flight public settings request', async () => {
@@ -76,6 +85,7 @@ describe('product availability', () => {
 
     const first = loadProductAvailability()
     const second = loadProductAvailability()
+    expect(second).toBe(first)
     resolveSettings({
       products: {
         builder: { enabled: false },

@@ -231,7 +231,7 @@ export const routes: RouteRecordRaw[] = [
       path: '/coding',
       name: 'Coding',
       component: () => import('@/views/CodingPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true, product: 'builder' }
+      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true, product: 'code' }
     },
     {
       path: '/admin/mcp',
