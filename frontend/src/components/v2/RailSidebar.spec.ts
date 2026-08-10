@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import railSidebarSource from './RailSidebar.vue?raw'
+import { railTenantHome } from './RailSidebar.vue'
 
 describe('RailSidebar brand mark', () => {
   it('uses the Ruijing whale mark in the rail logo', () => {
@@ -140,30 +141,29 @@ describe('RailSidebar unified session source (SP2b)', () => {
 })
 
 describe('RailSidebar tenant navigation', () => {
-  it('maps the visible tenant id to the public id only for web navigation', () => {
+  it('maps the visible tenant id to the public id for atomic tenant navigation', () => {
     expect(railSidebarSource).toContain(
       '@click="selectTenant(String(tenant.tenant_id))"',
     )
     expect(railSidebarSource).toContain(
       'const targetPublicId = tenant.tenant_public_id',
     )
-    expect(railSidebarSource).toContain(
-      'if (__DESKTOP__) {',
-    )
-    expect(railSidebarSource).toContain('await user.switchTenant(value)')
+    expect(railSidebarSource).toContain('await user.switchTenantContext(')
   })
 
-  it('keeps desktop discovery navigation while using the configured Web product home', () => {
-    expect(railSidebarSource).toContain('__DESKTOP__ ? MODE_META[currentMode.value].home')
-    expect(railSidebarSource).toContain('defaultProductHome(productAvailability.value)')
+  it('keeps the Code discovery home when desktop product configuration enables both products', () => {
+    expect(railTenantHome(true, 'code', { builder: true, code: true })).toBe('/code/apps')
+  })
+
+  it('uses the configured Web product home outside desktop discovery', () => {
+    expect(railTenantHome(false, 'code', { builder: false, code: true })).toBe('/code/apps')
     expect(railSidebarSource).toContain('user.advanceTenantNavigationEpoch()')
     expect(railSidebarSource).toContain('user.switchTenantContext(')
     expect(railSidebarSource).toContain('withTenantId(')
   })
 
   it('leaves navigation replacement to the selected switch path', () => {
-    expect(railSidebarSource).toContain('if (__DESKTOP__) {')
-    expect(railSidebarSource).toContain('await user.switchTenant(value)')
+    expect(railSidebarSource).not.toContain('await user.switchTenant(value)')
     expect(railSidebarSource).not.toContain("router.push('/')")
   })
 })

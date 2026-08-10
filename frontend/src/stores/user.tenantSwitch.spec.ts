@@ -831,7 +831,7 @@ describe('user tenant switching', () => {
     })
     expect(store.user).toEqual(sourceUser)
     expect(replace).toHaveBeenNthCalledWith(1, '/')
-    expect(replace).toHaveBeenNthCalledWith(2, '/')
+    expect(replace).toHaveBeenCalledTimes(1)
   })
 
   it('keeps the current in-memory session and tabs while reloading for storage alignment', async () => {
@@ -894,6 +894,45 @@ describe('user tenant switching', () => {
     await flushPromises()
 
     expect(replace).toHaveBeenCalledWith('/code/apps')
+  })
+
+  it('does not reload for a stale storage alignment after the token is cleared during product loading', async () => {
+    const { fireStorageEvent, replace } = installBrowserGlobals()
+    const pendingAvailability = deferred<{ builder: boolean; code: boolean }>()
+    productAvailabilityMocks.loadProductAvailability.mockReturnValue(pendingAvailability.promise)
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.setToken('source-token')
+    store.user = makeUser()
+
+    localStorage.setItem('token', 'candidate-token')
+    fireStorageEvent('candidate-token')
+    localStorage.removeItem('token')
+    fireStorageEvent(null)
+    pendingAvailability.resolve({ builder: false, code: true })
+    await flushPromises()
+
+    expect(replace).not.toHaveBeenCalled()
+  })
+
+  it('does not reload for a stale storage alignment after the token is replaced during product loading', async () => {
+    const { fireStorageEvent, replace } = installBrowserGlobals()
+    const pendingAvailability = deferred<{ builder: boolean; code: boolean }>()
+    productAvailabilityMocks.loadProductAvailability.mockReturnValue(pendingAvailability.promise)
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.setToken('source-token')
+    store.user = makeUser()
+
+    localStorage.setItem('token', 'candidate-token')
+    fireStorageEvent('candidate-token')
+    localStorage.setItem('token', 'replacement-token')
+    pendingAvailability.resolve({ builder: false, code: true })
+    await flushPromises()
+
+    expect(replace).not.toHaveBeenCalled()
   })
 
   it('keeps storage alignment fail-closed when controlled navigation throws', async () => {
@@ -1194,7 +1233,7 @@ describe('user tenant switching', () => {
     expect(getAuthSessionBootstrapToken()).toBe('token-a')
     expect(reloadedStore.user).toBeNull()
     expect(localStorage.getItem('ai-builder-tabs-v1')).toBe('source-tabs')
-    expect(replace).toHaveBeenCalledTimes(2)
+    expect(replace).toHaveBeenCalledTimes(1)
   })
 
   it('drops an old fetchUser success after local session A to B to A', async () => {

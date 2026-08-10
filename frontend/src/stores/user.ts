@@ -586,9 +586,17 @@ export const useUserStore = defineStore('user', () => {
     if (localStorage.getItem('token') !== eventToken) return
     if (!ownsSessionOwner()) return
     beginAuthSessionAlignment(eventToken)
+    const alignmentRevision = getAuthSessionState().revision
     advanceTenantNavigationEpoch()
     void storageAlignmentReloadDestination().then((destination) => {
-      if (!destination) return
+      const currentSession = getAuthSessionState()
+      if (
+        !destination
+        || !ownsSessionOwner()
+        || localStorage.getItem('token') !== eventToken
+        || getAuthSessionBootstrapToken() !== eventToken
+        || currentSession.revision !== alignmentRevision
+      ) return
       try {
         window.location.replace(destination)
       } catch {

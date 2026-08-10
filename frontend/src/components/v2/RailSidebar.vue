@@ -1,3 +1,19 @@
+<script lang="ts">
+import { MODE_META as railModeMeta, type AppMode as RailAppMode } from '@/stores/mode'
+import {
+  defaultProductHome as railDefaultProductHome,
+  type ProductAvailability as RailProductAvailability,
+} from '@/stores/productAvailability'
+
+export function railTenantHome(
+  desktop: boolean,
+  mode: RailAppMode,
+  availability: RailProductAvailability,
+): string {
+  return desktop ? railModeMeta[mode].home : railDefaultProductHome(availability)
+}
+</script>
+
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -650,10 +666,6 @@ async function selectTenant(value: string) {
     if (outcome === 'committed') window.location.reload()
     return
   }
-  if (__DESKTOP__) {
-    await user.switchTenant(value)
-    return
-  }
   const targetPublicId = tenant.tenant_public_id
   if (!targetPublicId) return
   const localTenantId = Number(tenant.tenant_id)
@@ -663,7 +675,7 @@ async function selectTenant(value: string) {
     productAvailability.value = await loadProductAvailability()
   }
   const destination = withTenantId(
-    __DESKTOP__ ? MODE_META[currentMode.value].home : defaultProductHome(productAvailability.value),
+    railTenantHome(__DESKTOP__, currentMode.value, productAvailability.value),
     targetPublicId,
   )
   await user.switchTenantContext(
