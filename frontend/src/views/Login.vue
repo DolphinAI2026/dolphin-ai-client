@@ -161,6 +161,12 @@ import { useThemeStore } from '@/stores/theme'
 import ruijingWhaleMarkUrl from '@/assets/brand/ruijing-whale-mark.svg'
 import { resolveExternalLoginRedirect, safeLoginRedirectPath } from '@/router/loginRedirect'
 import {
+  defaultProductHome,
+  loadProductAvailability,
+  productForRoute,
+  redirectForDisabledProduct,
+} from '@/stores/productAvailability'
+import {
   enterDesktopLoginSetup,
   getDesktopState,
   isDesktop,
@@ -312,9 +318,13 @@ const handleLogin = async () => {
           window.location.replace(externalRedirect)
           return
         }
-        router.replace(
-          safeLoginRedirectPath(route.query.redirect) || result.entryPath || '/',
+        const productAvailability = await loadProductAvailability()
+        const redirect = safeLoginRedirectPath(route.query.redirect) || result.entryPath
+        const disabledProductRedirect = redirectForDisabledProduct(
+          productAvailability,
+          productForRoute(router.resolve(redirect || defaultProductHome(productAvailability))),
         )
+        router.replace(disabledProductRedirect || redirect || defaultProductHome(productAvailability))
       }
     } catch (error: any) {
       const detail =

@@ -15,11 +15,16 @@ import {
   isCodeRoutePath,
   useModeStore,
   MODE_META,
-  MODE_ORDER,
   visibleModeNav,
   visibleModesForDesktopScope,
   type AppMode,
 } from '@/stores/mode'
+import {
+  defaultProductHome,
+  enabledProductModes,
+  loadProductAvailability,
+  type ProductAvailability,
+} from '@/stores/productAvailability'
 import { aiChatApi, type AIChatSession } from '@/api/aiChat'
 import {
   CODE_APPLICATION_SOURCE_CHANGED_EVENT,
@@ -56,15 +61,16 @@ const codeApplications = useCodeApplicationsStore()
 const codeApplicationSource = ref<CodeApplicationSource>(
   'remote',
 )
+const productAvailability = ref<ProductAvailability>({ builder: true, code: true })
 
 const desktopWorkspaceEntryScope = ref<DesktopWorkspaceEntryScope>('both')
 const visibleModeOrder = computed(() => __DESKTOP__
   ? visibleModesForDesktopScope(desktopWorkspaceEntryScope.value)
-  : MODE_ORDER)
+  : enabledProductModes(productAvailability.value))
 // 当前路由驱动左栏导航、会话加载和会话路由；桌面公共路由收敛到当前可见入口。
 const currentMode = computed<AppMode>(() => {
   const routeMode: AppMode = isCodeRoutePath(route.path) ? 'code' : 'builder'
-  return __DESKTOP__ && !visibleModeOrder.value.includes(routeMode)
+  return !visibleModeOrder.value.includes(routeMode)
     ? visibleModeOrder.value[0]
     : routeMode
 })
@@ -543,6 +549,11 @@ async function loadDesktopWorkspaceEntryScope() {
   } catch { /* desktop bootstrap owns state errors */ }
 }
 
+async function loadWebProductAvailability() {
+  if (__DESKTOP__) return
+  productAvailability.value = await loadProductAvailability()
+}
+
 function onDesktopWorkspaceEntryScopeChanged(event: Event) {
   applyDesktopWorkspaceEntryScope(
     (event as CustomEvent<DesktopWorkspaceEntryScope | undefined>).detail,
@@ -564,6 +575,7 @@ onMounted(() => {
   ]
   startupTasks.push(user.fetchAvailableTenants())
   if (__DESKTOP__) startupTasks.push(loadDesktopWorkspaceEntryScope())
+  else startupTasks.push(loadWebProductAvailability())
   void Promise.allSettled(startupTasks)
   syncSystemAssistantSessionPolling()
   window.addEventListener('click', closeTenantMenu)
@@ -647,7 +659,13 @@ async function selectTenant(value: string) {
   const localTenantId = Number(tenant.tenant_id)
   if (!Number.isSafeInteger(localTenantId)) return
   const navigationEpoch = user.advanceTenantNavigationEpoch()
-  const destination = withTenantId(MODE_META[currentMode.value].home, targetPublicId)
+  if (!__DESKTOP__) {
+    productAvailability.value = await loadProductAvailability()
+  }
+  const destination = withTenantId(
+    __DESKTOP__ ? MODE_META[currentMode.value].home : defaultProductHome(productAvailability.value),
+    targetPublicId,
+  )
   await user.switchTenantContext(
     localTenantId,
     targetPublicId,
@@ -766,7 +784,7 @@ function renderIcon(name: string): string {
         class="rail-logo"
         type="button"
         :aria-label="effectiveCollapsed ? '展开导航' : 'Dolphin Code 首页'"
-        @click="effectiveCollapsed ? toggleCollapsed() : go('/')"
+        @click="effectiveCollapsed ? toggleCollapsed() : go(defaultProductHome(productAvailability))"
       >
         <img class="rail-logo-mark" :src="ruijingWhaleMarkUrl" alt="" aria-hidden="true" />
       </button>

@@ -9,12 +9,23 @@ const authMocks = vi.hoisted(() => ({
   switchControlPlaneCodeTenant: vi.fn(),
 }))
 
+const productAvailabilityMocks = vi.hoisted(() => ({
+  availability: { builder: true, code: true },
+  loadProductAvailability: vi.fn(),
+  defaultProductHome: vi.fn(),
+}))
+
 vi.mock('@/api/auth', () => ({
   authApi: authMocks,
 }))
 
 vi.mock('@/composables/useOnboardingState', () => ({
   resetOnboardingCache: vi.fn(),
+}))
+
+vi.mock('@/stores/productAvailability', () => ({
+  loadProductAvailability: productAvailabilityMocks.loadProductAvailability,
+  defaultProductHome: productAvailabilityMocks.defaultProductHome,
 }))
 
 import { useUserStore } from './user'
@@ -170,6 +181,13 @@ describe('user tenant switching', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.unstubAllGlobals()
+    productAvailabilityMocks.availability = { builder: true, code: true }
+    productAvailabilityMocks.loadProductAvailability.mockImplementation(() => (
+      Promise.resolve(productAvailabilityMocks.availability)
+    ))
+    productAvailabilityMocks.defaultProductHome.mockImplementation((availability) => (
+      availability.builder ? '/' : '/code/apps'
+    ))
   })
 
   it('keeps the committed Builder session while committing the switched Code organization in this tab', async () => {
@@ -683,6 +701,30 @@ describe('user tenant switching', () => {
     expect(replace).toHaveBeenCalledWith('/?tenantId=22222222-2222-4222-8222-222222222222')
   })
 
+  it('moves a Builder tenant switch to the Code home when Builder is disabled', async () => {
+    const { replace } = installBrowserGlobals('/')
+    const targetUser = makeUser({
+      tenant_id: 2,
+      tenant_name: 'Target tenant',
+      tenant_public_id: targetUuid,
+    })
+    productAvailabilityMocks.availability = { builder: false, code: true }
+    authMocks.switchTenant.mockResolvedValue({ access_token: 'candidate-token' })
+    authMocks.getMeWithToken.mockResolvedValue(targetUser)
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.user = makeUser()
+    store.availableTenants = [
+      makeTenantOption(1, sourceUuid),
+      makeTenantOption(2, targetUuid),
+    ]
+
+    await store.switchTenant(2)
+
+    expect(replace).toHaveBeenCalledWith(`/code/apps?tenantId=${targetUuid}`)
+  })
+
   it('uses the shared navigation epoch to cancel an active tenant switch', async () => {
     const { replace } = installBrowserGlobals()
     const slowCandidate = deferred<User>()
@@ -779,6 +821,7 @@ describe('user tenant switching', () => {
 
     localStorage.setItem('token', 'token-a')
     fireStorageEvent('token-a')
+    await flushPromises()
 
     expect(authMocks.getMeWithToken).not.toHaveBeenCalled()
     expect(getAuthSessionBootstrapToken()).toBe('token-a')
@@ -812,7 +855,7 @@ describe('user tenant switching', () => {
     expect(replace).toHaveBeenCalledWith('/')
   })
 
-  it('fails closed and reloads the Code tenant home without retaining source resource IDs', async () => {
+  it('fails closed and reloads the configured product home without retaining source resource IDs', async () => {
     const { fireStorageEvent, replace } = installBrowserGlobals(
       '/code/session-42',
       `?tenantId=${sourceUuid}&agent=codex&view=diff`,
@@ -833,6 +876,23 @@ describe('user tenant switching', () => {
       Promise.resolve().then(() => runRequestInterceptor({ headers: {} })),
     ).rejects.toMatchObject({ code: 'AUTH_SESSION_PENDING' })
     expect(authMocks.getMeWithToken).not.toHaveBeenCalled()
+    expect(replace).toHaveBeenCalledWith('/')
+  })
+
+  it('uses the Code home for a cross-tab reload when Builder is disabled', async () => {
+    const { fireStorageEvent, replace } = installBrowserGlobals('/')
+    productAvailabilityMocks.availability = { builder: false, code: true }
+    localStorage.setItem('token', 'source-token')
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.setToken('source-token')
+    store.user = makeUser()
+
+    localStorage.setItem('token', 'candidate-token')
+    fireStorageEvent('candidate-token')
+    await flushPromises()
+
     expect(replace).toHaveBeenCalledWith('/code/apps')
   })
 
@@ -852,6 +912,7 @@ describe('user tenant switching', () => {
 
     localStorage.setItem('token', 'candidate-token')
     expect(() => fireStorageEvent('candidate-token')).not.toThrow()
+    await flushPromises()
 
     expect(getAuthSessionState().revision).toBe(sourceRevision + 1)
     expect(getAuthSessionBootstrapToken()).toBe('candidate-token')
@@ -1024,8 +1085,8 @@ describe('user tenant switching', () => {
 
   it.each([
     ['builder', '/'],
-    ['code', '/code/apps'],
-  ])('reloads the current %s path without resolving the target tenant in the old page', async (mode, expectedDestination) => {
+    ['code', '/'],
+  ])('reloads the configured home without resolving the target tenant in the old page: %s route', async (mode, expectedDestination) => {
     const { fireStorageEvent, replace } = installBrowserGlobals(
       mode === 'code' ? '/code/apps' : '/',
     )
@@ -1037,12 +1098,13 @@ describe('user tenant switching', () => {
 
     localStorage.setItem('token', 'candidate-token')
     fireStorageEvent('candidate-token')
+    await flushPromises()
 
     expect(authMocks.getMeWithToken).not.toHaveBeenCalled()
     expect(replace).toHaveBeenCalledWith(expectedDestination)
   })
 
-  it('uses the initial Code pathname to select the safe Code home during pending user loading', async () => {
+  it('uses the configured product home during pending user loading', async () => {
     const { fireStorageEvent, replace } = installBrowserGlobals('/code/projects/42')
     const pendingSourceUser = deferred<User>()
     localStorage.setItem('token', 'source-token')
@@ -1063,7 +1125,7 @@ describe('user tenant switching', () => {
     fireStorageEvent('candidate-token')
     await flushPromises()
 
-    expect(replace).toHaveBeenCalledWith('/code/apps')
+    expect(replace).toHaveBeenCalledWith('/')
     expect(authMocks.getMeWithToken).not.toHaveBeenCalled()
 
     pendingSourceUser.resolve(makeUser())
@@ -1356,6 +1418,7 @@ describe('user tenant switching', () => {
 
     localStorage.setItem('token', 'token-c')
     fireStorageEvent('token-c')
+    await flushPromises()
     expect(getAuthSessionBootstrapToken()).toBe('token-c')
     expect(replace).toHaveBeenCalledWith('/')
 

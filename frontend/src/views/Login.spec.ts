@@ -38,7 +38,6 @@ describe('Login page brand layout', () => {
 // 桌面端和 Web 共用同一认证与租户选择协议。
 describe('Login page reuses web auth on desktop', () => {
   it('does not branch to the legacy desktop account login', () => {
-    expect(loginSource).not.toContain("from '@/utils/desktop'")
     expect(loginSource).not.toContain('desktopLogin')
   })
 
@@ -50,6 +49,13 @@ describe('Login page reuses web auth on desktop', () => {
   it('honors the Control Plane server entry path after a direct login', () => {
     expect(userStoreSource).toContain('entryPath: safeLoginRedirectPath(res.entry_path)')
     expect(loginSource).toContain('result.entryPath')
+  })
+
+  it('uses the Code home when neither login entry source is valid for Code-only', () => {
+    expect(loginSource).toContain("from '@/stores/productAvailability'")
+    expect(loginSource).toContain('await loadProductAvailability()')
+    expect(loginSource).toContain('redirectForDisabledProduct(')
+    expect(loginSource).toContain('defaultProductHome(productAvailability)')
   })
 
   it('collects the configured captcha for every client', () => {

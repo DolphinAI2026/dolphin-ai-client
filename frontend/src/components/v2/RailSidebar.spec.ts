@@ -10,6 +10,20 @@ describe('RailSidebar brand mark', () => {
   })
 })
 
+describe('RailSidebar product availability', () => {
+  it('uses public product availability for Web modes while preserving the desktop discovery scope', () => {
+    expect(railSidebarSource).toContain("from '@/stores/productAvailability'")
+    expect(railSidebarSource).toContain('enabledProductModes(productAvailability.value)')
+    expect(railSidebarSource).toContain('loadProductAvailability()')
+    expect(railSidebarSource).toContain('visibleModesForDesktopScope(desktopWorkspaceEntryScope.value)')
+    expect(railSidebarSource).not.toContain(': MODE_ORDER')
+  })
+
+  it('sends the rail logo to the configured product home', () => {
+    expect(railSidebarSource).toContain('go(defaultProductHome(productAvailability))')
+  })
+})
+
 // SP2b(2026-06-25): rail 会话统一单一来源 aiChatApi; Code 模式复用同一
 // 会话分组，只是按 mode=code 拉取并路由到 /code。
 describe('RailSidebar unified session source (SP2b)', () => {
@@ -139,8 +153,9 @@ describe('RailSidebar tenant navigation', () => {
     expect(railSidebarSource).toContain('await user.switchTenant(value)')
   })
 
-  it('enters the current mode home through the shared epoch switch contract', () => {
-    expect(railSidebarSource).toContain('MODE_META[currentMode.value].home')
+  it('keeps desktop discovery navigation while using the configured Web product home', () => {
+    expect(railSidebarSource).toContain('__DESKTOP__ ? MODE_META[currentMode.value].home')
+    expect(railSidebarSource).toContain('defaultProductHome(productAvailability.value)')
     expect(railSidebarSource).toContain('user.advanceTenantNavigationEpoch()')
     expect(railSidebarSource).toContain('user.switchTenantContext(')
     expect(railSidebarSource).toContain('withTenantId(')

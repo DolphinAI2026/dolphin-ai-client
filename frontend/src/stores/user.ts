@@ -2,8 +2,8 @@ import { defineStore } from 'pinia'
 import { ref, computed, onScopeDispose } from 'vue'
 import { authApi } from '@/api/auth'
 import type { User, TenantOption } from '@/types'
-import { MODE_META, modeForRoutePath, useModeStore } from '@/stores/mode'
 import { safeLoginRedirectPath } from '@/router/loginRedirect'
+import { defaultProductHome, loadProductAvailability } from '@/stores/productAvailability'
 import {
   beginAuthSessionAlignment,
   beginAuthSessionBootstrap,
@@ -128,35 +128,19 @@ export const useUserStore = defineStore('user', () => {
     }
   }
 
-  const currentModeTenantHome = (tenantPublicId: string) => {
+  const defaultProductTenantHome = async (tenantPublicId: string) => {
     const basePath = currentAppBasePath()
     const prefix = basePath === '/' ? '' : basePath
-    const pathname = typeof window === 'undefined' ? '' : window.location.pathname
-    const routePath = (
-      basePath !== '/'
-      && (pathname === basePath || pathname.startsWith(`${basePath}/`))
-    )
-      ? `/${pathname.slice(basePath.length).replace(/^\/+/, '')}`
-      : pathname
-    const mode = routePath
-      ? modeForRoutePath(routePath)
-      : useModeStore().mode
-    const home = MODE_META[mode].home
+    const home = defaultProductHome(await loadProductAvailability())
     return `${prefix}${home}?tenantId=${encodeURIComponent(tenantPublicId)}`
   }
 
-  const storageAlignmentReloadDestination = (): string | null => {
+  const storageAlignmentReloadDestination = async (): Promise<string | null> => {
     if (typeof window === 'undefined') return null
     const basePath = currentAppBasePath()
     const prefix = basePath === '/' ? '' : basePath
-    const pathname = window.location.pathname
-    const routePath = (
-      basePath !== '/'
-      && (pathname === basePath || pathname.startsWith(`${basePath}/`))
-    )
-      ? `/${pathname.slice(basePath.length).replace(/^\/+/, '')}`
-      : pathname
-    return normalizeTenantDestination(`${prefix}${MODE_META[modeForRoutePath(routePath)].home}`)
+    const home = defaultProductHome(await loadProductAvailability())
+    return normalizeTenantDestination(`${prefix}${home}`)
   }
 
   // 多租户状态
@@ -371,7 +355,7 @@ export const useUserStore = defineStore('user', () => {
       requiresSelection: false,
       // Control Plane login selects the Code shell explicitly. Do not discard
       // the server-directed internal entry route and fall back to Builder home.
-      entryPath: safeLoginRedirectPath(res.entry_path) || '/',
+      entryPath: safeLoginRedirectPath(res.entry_path),
     }
   }
 
@@ -580,7 +564,7 @@ export const useUserStore = defineStore('user', () => {
     await switchTenantContext(
       targetTenantId,
       targetTenant.tenant_public_id,
-      currentModeTenantHome(targetTenant.tenant_public_id),
+      await defaultProductTenantHome(targetTenant.tenant_public_id),
       navigationEpoch,
     )
   }
@@ -603,14 +587,14 @@ export const useUserStore = defineStore('user', () => {
     if (!ownsSessionOwner()) return
     beginAuthSessionAlignment(eventToken)
     advanceTenantNavigationEpoch()
-    const destination = storageAlignmentReloadDestination()
-    if (destination) {
+    void storageAlignmentReloadDestination().then((destination) => {
+      if (!destination) return
       try {
         window.location.replace(destination)
       } catch {
         // The old page remains auth-pending if browser navigation is blocked.
       }
-    }
+    })
   }
   if (typeof window !== 'undefined') {
     window.addEventListener('storage', storageListener)
