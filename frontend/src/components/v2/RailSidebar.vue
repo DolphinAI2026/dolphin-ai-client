@@ -26,11 +26,7 @@ import {
   codeRuntimeApi,
   type CodeApplicationSource,
 } from '@/api/codeRuntime'
-import { authApi } from '@/api/auth'
-import {
-  getControlPlaneCodeSession,
-  setControlPlaneCodeSession,
-} from '@/utils/controlPlaneCodeSession'
+import { getControlPlaneCodeSession } from '@/utils/controlPlaneCodeSession'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import SystemAssistantSessionSections from '@/components/v2/SystemAssistantSessionSections.vue'
 import {
@@ -638,9 +634,8 @@ async function selectTenant(value: string) {
     const session = getControlPlaneCodeSession()
     const authToken = session?.token || user.token
     if (!authToken) return
-    const next = await authApi.switchControlPlaneCodeTenant(value, authToken)
-    setControlPlaneCodeSession(next.access_token)
-    window.location.reload()
+    const outcome = await user.switchControlPlaneCodeTenant(value, authToken)
+    if (outcome === 'committed') window.location.reload()
     return
   }
   if (__DESKTOP__) {

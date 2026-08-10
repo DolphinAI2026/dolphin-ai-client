@@ -6,6 +6,7 @@ const authMocks = vi.hoisted(() => ({
   getMeWithToken: vi.fn(),
   selectTenant: vi.fn(),
   switchTenant: vi.fn(),
+  switchControlPlaneCodeTenant: vi.fn(),
 }))
 
 vi.mock('@/api/auth', () => ({
@@ -19,9 +20,11 @@ vi.mock('@/composables/useOnboardingState', () => ({
 import { useUserStore } from './user'
 import type { TenantOption, User } from '@/types'
 import request, {
+  getCommittedAuthToken,
   getAuthSessionBootstrapToken,
   getAuthSessionState,
 } from '@/utils/request'
+import { getControlPlaneCodeSession } from '@/utils/controlPlaneCodeSession'
 import { aiChatApi } from '@/api/aiChat'
 import { extensionApi } from '@/api/extension'
 
@@ -50,6 +53,14 @@ function makeTenantOption(tenantId: number, tenantPublicId: string): TenantOptio
     tenant_code: tenantId === 1 ? 'source' : 'target',
     tenant_public_id: tenantPublicId,
   }
+}
+
+function controlPlaneCodeToken(tenantId: string, tenantName: string) {
+  const payload = Buffer.from(JSON.stringify({
+    cp_tid: tenantId,
+    cp_tname: tenantName,
+  })).toString('base64url')
+  return `header.${payload}.signature`
 }
 
 function installBrowserGlobals(pathname = '/', search = '', hash = '') {
@@ -159,6 +170,84 @@ describe('user tenant switching', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.unstubAllGlobals()
+  })
+
+  it('keeps the committed Builder session while committing the switched Code organization in this tab', async () => {
+    installBrowserGlobals()
+    const sourceToken = controlPlaneCodeToken('admin-org', 'Admin organization')
+    const targetToken = controlPlaneCodeToken('target-org', 'Target organization')
+    authMocks.switchControlPlaneCodeTenant.mockResolvedValue({
+      access_token: targetToken,
+    })
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.setToken(sourceToken)
+
+    await store.switchControlPlaneCodeTenant('target-org', sourceToken)
+
+    expect(authMocks.switchControlPlaneCodeTenant).toHaveBeenCalledWith(
+      'target-org',
+      sourceToken,
+    )
+    expect(getCommittedAuthToken()).toBe(sourceToken)
+    expect(localStorage.getItem('token')).toBe(sourceToken)
+    expect(store.token).toBe(sourceToken)
+    expect(getControlPlaneCodeSession()).toMatchObject({
+      token: targetToken,
+      tenantId: 'target-org',
+      tenantName: 'Target organization',
+    })
+  })
+
+  it('only commits the newest Control Plane Code organization switch', async () => {
+    installBrowserGlobals()
+    const sourceToken = controlPlaneCodeToken('admin-org', 'Admin organization')
+    const first = deferred<{ access_token: string }>()
+    const second = deferred<{ access_token: string }>()
+    const firstToken = controlPlaneCodeToken('first-org', 'First organization')
+    const secondToken = controlPlaneCodeToken('second-org', 'Second organization')
+    authMocks.switchControlPlaneCodeTenant.mockImplementation((tenantId: string) => (
+      tenantId === 'first-org' ? first.promise : second.promise
+    ))
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.setToken(sourceToken)
+    const firstSwitch = store.switchControlPlaneCodeTenant('first-org', sourceToken)
+    const secondSwitch = store.switchControlPlaneCodeTenant('second-org', sourceToken)
+
+    second.resolve({ access_token: secondToken })
+    await expect(secondSwitch).resolves.toBe('committed')
+    first.resolve({ access_token: firstToken })
+    await expect(firstSwitch).resolves.toBe('stale_cancelled')
+
+    expect(getControlPlaneCodeSession()).toMatchObject({
+      token: secondToken,
+      tenantId: 'second-org',
+    })
+  })
+
+  it('rejects a Control Plane Code candidate with a mismatched organization claim without changing state', async () => {
+    installBrowserGlobals()
+    const sourceToken = controlPlaneCodeToken('admin-org', 'Admin organization')
+    const wrongToken = controlPlaneCodeToken('other-org', 'Other organization')
+    authMocks.switchControlPlaneCodeTenant.mockResolvedValue({ access_token: wrongToken })
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.setToken(sourceToken)
+
+    await expect(
+      store.switchControlPlaneCodeTenant('target-org', sourceToken),
+    ).rejects.toThrow('control-plane tenant candidate mismatch')
+    expect(getCommittedAuthToken()).toBe(sourceToken)
+    expect(localStorage.getItem('token')).toBe(sourceToken)
+    expect(store.token).toBe(sourceToken)
+    expect(getControlPlaneCodeSession()).toMatchObject({
+      token: sourceToken,
+      tenantId: 'admin-org',
+    })
   })
 
   it('fails closed for ordinary requests until a cold-start token passes explicit validation', async () => {

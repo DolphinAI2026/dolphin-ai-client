@@ -15,6 +15,7 @@ import {
 } from '@/utils/request'
 import {
   clearControlPlaneCodeSession,
+  setExplicitControlPlaneCodeSession,
   setControlPlaneCodeSession,
 } from '@/utils/controlPlaneCodeSession'
 
@@ -63,6 +64,7 @@ export const useUserStore = defineStore('user', () => {
   let tenantSwitchAbortController: AbortController | null = null
   let tenantSelectionGeneration = 0
   let tenantSelectionAbortController: AbortController | null = null
+  let controlPlaneCodeTenantSwitchGeneration = 0
   let tenantNavigationEpoch = 0
   let sessionOwner: symbol | null = null
   let sessionOwnerReleased = false
@@ -527,6 +529,34 @@ export const useUserStore = defineStore('user', () => {
     }
   }
 
+  const switchControlPlaneCodeTenant = async (
+    targetTenantId: string,
+    authToken: string,
+  ) => {
+    const sourceSession = getAuthSessionState()
+    const generation = ++controlPlaneCodeTenantSwitchGeneration
+    const candidate = await authApi.switchControlPlaneCodeTenant(targetTenantId, authToken)
+    const currentSession = getAuthSessionState()
+    if (
+      generation !== controlPlaneCodeTenantSwitchGeneration
+      || currentSession.revision !== sourceSession.revision
+      || currentSession.token !== sourceSession.token
+    ) {
+      return 'stale_cancelled' as const
+    }
+    if (
+      !sourceSession.token
+      || !setExplicitControlPlaneCodeSession(
+        candidate.access_token,
+        sourceSession.token,
+        targetTenantId,
+      )
+    ) {
+      throw new Error('control-plane tenant candidate mismatch')
+    }
+    return 'committed' as const
+  }
+
   const switchTenant = async (targetTenantId: number | string) => {
     const navigationEpoch = advanceTenantNavigationEpoch()
     if (String(targetTenantId) === String(tenantId.value || '')) return
@@ -628,6 +658,7 @@ export const useUserStore = defineStore('user', () => {
     login,
     selectTenant,
     switchTenantContext,
+    switchControlPlaneCodeTenant,
     switchTenant,
     fetchAvailableTenants,
     advanceTenantNavigationEpoch,
