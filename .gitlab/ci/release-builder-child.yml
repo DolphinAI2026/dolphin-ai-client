@@ -15,6 +15,7 @@ release_and_update_server:
     name: hub-mirror.dfy.definesys.cn/bitnami/kubectl:1.30.7
     entrypoint: [""]
   script:
+    - bash scripts/prepare_release_kubectl.sh export
     - test -n "${BUILDER_IMAGE:-}"
     - test -n "${DEPLOYED_REVISION:-}"
     - test -n "${BUILDER_K8S_NAMESPACE:-}"
@@ -362,6 +363,7 @@ release_and_update_server:
     expire_in: 1 day
     paths:
       - build/release.env
+      - build/tools/kubectl
     reports:
       dotenv: build/release.env
 
@@ -387,8 +389,7 @@ release_builder_browser_smoke:
     KUBE_SERVICE: $BUILDER_K8S_SERVICE
     KUBE_INGRESS_PATH: $BUILDER_K8S_INGRESS_PATH
   before_script:
-    - curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.30.7/bin/linux/amd64/kubectl
-    - chmod +x /usr/local/bin/kubectl
+    - bash scripts/prepare_release_kubectl.sh install
     - kubectl version --client
     - npm ci
     - npm exec -- playwright install msedge
