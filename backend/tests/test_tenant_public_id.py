@@ -106,6 +106,26 @@ def test_dialect_runner_selects_reachable_host_for_local_docker_and_dind():
     assert result.stdout == "local=127.0.0.1|127.0.0.1\ndind=docker|0.0.0.0\n"
 
 
+def test_dialect_runner_uses_configurable_database_images():
+    runner = Path(__file__).parent / "integration" / "run_tenant_public_id_dialects.sh"
+    command = (
+        'export TENANT_PUBLIC_ID_MYSQL_IMAGE="mirror/mysql:test"; '
+        'export TENANT_PUBLIC_ID_POSTGRES_IMAGE="mirror/postgres:test"; '
+        'source "$1"; '
+        'printf "%s|%s\\n" "$mysql_image" "$postgresql_image"'
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", command, "bash", str(runner)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "mirror/mysql:test|mirror/postgres:test\n"
+
+
 @pytest.mark.parametrize(
     ("dialect_name", "error", "column_duplicate", "index_duplicate"),
     [
@@ -235,6 +255,11 @@ def test_dialect_runner_job_uses_standard_gitlab_yaml_and_preserves_dind_network
     ]
     assert job["variables"]["DOCKER_HOST"] == "tcp://docker:2375"
     assert job["variables"]["DOCKER_TLS_CERTDIR"] == ""
+    assert job["variables"]["TENANT_PUBLIC_ID_MYSQL_IMAGE"] == "$BUILDER_MYSQL_IMAGE"
+    assert (
+        job["variables"]["TENANT_PUBLIC_ID_POSTGRES_IMAGE"]
+        == "$BUILDER_POSTGRES_IMAGE"
+    )
     assert "${ALPINE_APK_MIRROR}" in before_script
     assert "sed '/^playwright[<>=]/d' backend/requirements.txt" in before_script
     assert '--index-url="${BUILDER_PIP_INDEX_URL}"' in before_script

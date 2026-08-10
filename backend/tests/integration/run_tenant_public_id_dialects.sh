@@ -6,6 +6,8 @@ cd "$backend_dir"
 
 mysql_name="tenant-public-id-mysql-$$"
 pg_name="tenant-public-id-postgresql-$$"
+mysql_image="${TENANT_PUBLIC_ID_MYSQL_IMAGE:-mysql:8.4}"
+postgresql_image="${TENANT_PUBLIC_ID_POSTGRES_IMAGE:-postgres:16}"
 
 database_host() {
   if [[ "${DOCKER_HOST:-}" == tcp://* ]]; then
@@ -115,12 +117,12 @@ main() {
     -e MYSQL_ROOT_PASSWORD=test \
     -e MYSQL_DATABASE=builder \
     -p "${bind_host}::3306" \
-    mysql:8.4
+    "$mysql_image"
   docker run -d --rm --name "$pg_name" \
     -e POSTGRES_PASSWORD=test \
     -e POSTGRES_DB=builder \
     -p "${bind_host}::5432" \
-    postgres:16
+    "$postgresql_image"
 
   wait_for_mysql
   wait_for_postgresql

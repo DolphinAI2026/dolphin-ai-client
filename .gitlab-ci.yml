@@ -34,6 +34,8 @@ variables:
   BUILDER_METADATA_PYTHON_IMAGE: "hub-mirror.dfy.definesys.cn/library/python:3.12-slim-bookworm"
   BUILDER_DOCKER_CLI_IMAGE: "hub-mirror.dfy.definesys.cn/library/docker:24.0.7-cli"
   BUILDER_DOCKER_DIND_IMAGE: "hub-mirror.dfy.definesys.cn/library/docker:24.0.7-dind"
+  BUILDER_MYSQL_IMAGE: "hub-mirror.dfy.definesys.cn/library/mysql:8.4"
+  BUILDER_POSTGRES_IMAGE: "hub-mirror.dfy.definesys.cn/library/postgres:16"
   BUILDER_NPM_REGISTRY: "https://registry.npmmirror.com"
   BUILDER_PIP_INDEX_URL: "https://mirrors.aliyun.com/pypi/simple"
   # Optional: override when the default Alpine package mirror is unavailable.
@@ -64,6 +66,8 @@ verify_tenant_public_id_dialects:
   variables:
     DOCKER_HOST: "tcp://docker:2375"
     DOCKER_TLS_CERTDIR: ""
+    TENANT_PUBLIC_ID_MYSQL_IMAGE: "$BUILDER_MYSQL_IMAGE"
+    TENANT_PUBLIC_ID_POSTGRES_IMAGE: "$BUILDER_POSTGRES_IMAGE"
   before_script:
     - sed -i "s|https://dl-cdn.alpinelinux.org/alpine|${ALPINE_APK_MIRROR}|g" /etc/apk/repositories
     - apk add --no-cache bash python3 py3-pip
