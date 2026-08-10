@@ -579,9 +579,9 @@ def _control_plane_headers(
         os.getenv("DOLPHIN_CODE_CONTROL_PLANE_DELEGATION_SECRET", "").strip()
         or (settings.dolphin_code_control_plane_delegation_secret or "").strip()
     )
-    if not has_user_bearer and delegation_secret and delegated_context is not None:
+    if delegation_secret and delegated_context is not None:
         headers["X-AI-Builder-Delegation-Secret"] = delegation_secret
-    if not has_user_bearer:
+    if delegated_context is not None:
         headers.update(_delegated_identity_headers(delegated_context, shell_session_id=shell_session_id))
     return headers
 

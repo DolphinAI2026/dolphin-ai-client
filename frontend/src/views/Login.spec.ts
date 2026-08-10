@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest'
+// @vitest-environment happy-dom
+import { createApp, defineComponent, h, nextTick } from 'vue'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import loginSource from './Login.vue?raw'
 import tenantSelectSource from './TenantSelect.vue?raw'
 import userStoreSource from '@/stores/user.ts?raw'
@@ -7,6 +9,126 @@ import {
   safeLoginRedirectPath,
   tenantIdFromRedirect,
 } from '@/router/loginRedirect'
+
+const loginHarness = vi.hoisted(() => ({
+  error: vi.fn(),
+  getCaptcha: vi.fn(),
+  login: vi.fn(),
+  logout: vi.fn(),
+  push: vi.fn(),
+  replace: vi.fn(),
+  toggleTheme: vi.fn(),
+}))
+
+vi.mock('vue-router', async importOriginal => ({
+  ...await importOriginal<typeof import('vue-router')>(),
+  useRoute: () => ({ query: {} }),
+  useRouter: () => ({
+    push: loginHarness.push,
+    replace: loginHarness.replace,
+    resolve: (path: string) => ({ path }),
+  }),
+}))
+
+vi.mock('@/api/auth', () => ({
+  authApi: { getCaptcha: loginHarness.getCaptcha },
+}))
+
+vi.mock('@/stores/user', () => ({
+  useUserStore: () => ({
+    login: loginHarness.login,
+    logout: loginHarness.logout,
+  }),
+}))
+
+vi.mock('@/stores/theme', () => ({
+  useThemeStore: () => ({ isDark: false, toggle: loginHarness.toggleTheme }),
+}))
+
+vi.mock('@/stores/productAvailability', () => ({
+  defaultProductHome: () => '/code/apps',
+  loadProductAvailability: vi.fn(),
+  productForRoute: vi.fn(),
+  redirectForDisabledProduct: vi.fn(),
+}))
+
+vi.mock('@/utils/desktop', () => ({
+  enterDesktopLoginSetup: vi.fn(),
+  getDesktopState: vi.fn(),
+  isDesktop: false,
+}))
+
+vi.mock('element-plus', () => ({
+  ElMessage: { error: loginHarness.error, success: vi.fn() },
+}))
+
+vi.mock('@element-plus/icons-vue', () => ({
+  Lock: { template: '<span />' },
+  Moon: { template: '<span />' },
+  Setting: { template: '<span />' },
+  Sunny: { template: '<span />' },
+  User: { template: '<span />' },
+}))
+
+import Login from './Login.vue'
+
+const ElForm = defineComponent({
+  inheritAttrs: false,
+  setup(_props, { attrs, expose, slots }) {
+    expose({ validate: () => Promise.resolve(true) })
+    return () => h('form', attrs, slots.default?.())
+  },
+})
+
+const ElInput = defineComponent({
+  inheritAttrs: false,
+  props: { modelValue: { type: String, default: '' } },
+  emits: ['update:modelValue'],
+  setup(props, { attrs, emit }) {
+    return () => h('input', {
+      ...attrs,
+      value: props.modelValue,
+      onInput: (event: Event) => emit(
+        'update:modelValue',
+        (event.target as HTMLInputElement).value,
+      ),
+    })
+  },
+})
+
+const Passthrough = defineComponent({
+  inheritAttrs: false,
+  setup(_props, { attrs, slots }) {
+    return () => h('div', attrs, slots.default?.())
+  },
+})
+
+const ElButton = defineComponent({
+  inheritAttrs: false,
+  setup(_props, { attrs, slots }) {
+    return () => h('button', attrs, slots.default?.())
+  },
+})
+
+function mountLogin() {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const app = createApp(Login)
+  app.component('el-form', ElForm)
+  app.component('el-form-item', Passthrough)
+  app.component('el-input', ElInput)
+  app.component('el-button', ElButton)
+  app.component('el-icon', Passthrough)
+  app.component('el-tooltip', Passthrough)
+  app.mount(container)
+  return { app, container }
+}
+
+async function flushPromises() {
+  await Promise.resolve()
+  await Promise.resolve()
+  await nextTick()
+}
 
 const currentUuid = '11111111-1111-4111-8111-111111111111'
 const targetUuid = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -62,6 +184,39 @@ describe('Login page reuses web auth on desktop', () => {
     expect(loginSource).toContain('captcha_code')
     expect(loginSource).toContain('captchaImage')
     expect(loginSource).toContain('refreshCaptcha')
+  })
+})
+
+describe('Login captcha fallback', () => {
+  afterEach(() => {
+    vi.clearAllMocks()
+    document.body.innerHTML = ''
+  })
+
+  it('keeps account login available when captcha capability is unavailable', async () => {
+    loginHarness.getCaptcha.mockRejectedValueOnce(new Error('captcha unavailable'))
+    loginHarness.login.mockRejectedValueOnce({
+      response: { data: { detail: '账号或密码不正确' } },
+    })
+    const { app, container } = mountLogin()
+
+    await flushPromises()
+
+    expect(container.querySelector('input[placeholder="验证码"]')).toBeNull()
+
+    const username = container.querySelector<HTMLInputElement>('input[placeholder="账号"]')
+    const password = container.querySelector<HTMLInputElement>('input[placeholder="密码"]')
+    username!.value = 'alice'
+    username!.dispatchEvent(new Event('input'))
+    password!.value = 'secret'
+    password!.dispatchEvent(new Event('input'))
+    container.querySelector<HTMLButtonElement>('button.submit-btn')!.click()
+
+    await flushPromises()
+
+    expect(loginHarness.login).toHaveBeenCalledWith('alice', 'secret', '', '')
+    expect(loginHarness.error).toHaveBeenCalledWith('账号或密码不正确')
+    app.unmount()
   })
 })
 

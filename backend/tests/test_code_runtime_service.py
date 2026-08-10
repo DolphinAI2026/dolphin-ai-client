@@ -650,16 +650,25 @@ def test_control_plane_base_url_defaults_to_local_dev_port(monkeypatch):
     assert control_plane_base_url() == "http://127.0.0.1:8080"
 
 
-def test_control_plane_headers_prefer_user_token_and_add_workspace_tenant(monkeypatch):
+def test_control_plane_headers_combine_user_bearer_and_delegated_identity(monkeypatch):
     from app.config import settings
     from app.code_runtime import service
 
     monkeypatch.delenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", raising=False)
+    monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_DELEGATION_SECRET", "shared-secret")
     monkeypatch.setattr(settings, "dolphin_code_control_plane_token", "settings-token", raising=False)
+    monkeypatch.setattr(settings, "dolphin_code_control_plane_delegation_secret", "", raising=False)
 
     ctx = SimpleNamespace(
-        user=SimpleNamespace(coding_tenant_id="default"),
+        user=SimpleNamespace(
+            id=11,
+            username="admin",
+            display_name="Admin User",
+            coding_tenant_id="default",
+        ),
+        apaas_user_id="apaas-user-1",
         apaas_tenant_id="apaas-tenant-1",
+        tenant_id=7,
     )
     headers = service._control_plane_headers(
         "Bearer user-token",
@@ -669,7 +678,39 @@ def test_control_plane_headers_prefer_user_token_and_add_workspace_tenant(monkey
     assert headers["Authorization"] == "Bearer user-token"
     assert "X-Auth-Provider" not in headers
     assert headers["X-Tenant-Id"] == "default"
-    assert not any(key.startswith("X-AI-Builder-") for key in headers)
+    assert headers["X-AI-Builder-Delegation-Secret"] == "shared-secret"
+    assert headers["X-AI-Builder-Delegated-User-Id"] == "apaas-user-1"
+    assert headers["X-AI-Builder-Delegated-Username"] == "ai-builder-admin-11"
+    assert headers["X-AI-Builder-Delegated-Display-Name-B64"] == "QWRtaW4gVXNlcg=="
+
+
+def test_control_plane_headers_omit_delegated_headers_without_context(monkeypatch):
+    from app.config import settings
+    from app.code_runtime import service
+
+    monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_DELEGATION_SECRET", "shared-secret")
+    monkeypatch.setattr(settings, "dolphin_code_control_plane_delegation_secret", "", raising=False)
+
+    headers = service._control_plane_headers("Bearer user-token")
+
+    assert headers == {"Authorization": "Bearer user-token"}
+
+
+@pytest.mark.parametrize(
+    ("username", "expected"),
+    [
+        ("admin", "ai-builder-admin-11"),
+        ("root", "ai-builder-root-11"),
+    ],
+)
+def test_delegated_identity_headers_map_reserved_usernames(username, expected):
+    from app.code_runtime import service
+
+    headers = service._delegated_identity_headers(
+        SimpleNamespace(user=SimpleNamespace(id=11, username=username)),
+    )
+
+    assert headers["X-AI-Builder-Delegated-Username"] == expected
 
 
 def test_control_plane_headers_prefer_current_builder_tenant_mapping(monkeypatch):
@@ -717,7 +758,9 @@ def test_control_plane_headers_use_apaas_tenant_when_no_control_plane_mapping(mo
     from app.code_runtime import service
 
     monkeypatch.delenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", raising=False)
+    monkeypatch.delenv("DOLPHIN_CODE_CONTROL_PLANE_DELEGATION_SECRET", raising=False)
     monkeypatch.setattr(settings, "dolphin_code_control_plane_token", "", raising=False)
+    monkeypatch.setattr(settings, "dolphin_code_control_plane_delegation_secret", "", raising=False)
 
     ctx = SimpleNamespace(
         user=SimpleNamespace(coding_tenant_id=None),
@@ -731,10 +774,11 @@ def test_control_plane_headers_use_apaas_tenant_when_no_control_plane_mapping(mo
         auth_provider="apaas",
     )
 
-    assert headers == {
-        "Authorization": "Bearer apaas-access-token",
-        "X-Tenant-Id": "apaas-tenant-1",
-    }
+    assert headers["Authorization"] == "Bearer apaas-access-token"
+    assert headers["X-Tenant-Id"] == "apaas-tenant-1"
+    assert headers["X-AI-Builder-Delegated-Tenant-Id"] == "apaas-tenant-1"
+    assert headers["X-AI-Builder-Local-Tenant-Id"] == "3"
+    assert "X-AI-Builder-Delegation-Secret" not in headers
 
 
 @pytest.mark.asyncio

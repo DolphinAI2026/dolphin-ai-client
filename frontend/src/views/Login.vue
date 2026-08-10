@@ -228,9 +228,10 @@ const refreshCaptcha = async () => {
     captchaImage.value = result.image_data || ''
     loginForm.captcha_code = ''
   } catch {
-    captchaRequired.value = true
+    captchaRequired.value = false
     captchaId.value = ''
     captchaImage.value = ''
+    loginForm.captcha_code = ''
   }
 }
 
