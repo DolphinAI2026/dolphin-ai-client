@@ -224,6 +224,7 @@ def test_dialect_runner_job_uses_standard_gitlab_yaml_and_preserves_dind_network
     config_path = Path(__file__).parents[2] / ".gitlab-ci.yml"
     config = yaml.safe_load(config_path.read_text())
     job = config["verify_tenant_public_id_dialects"]
+    before_script = "\n".join(job["before_script"])
 
     assert "privileged" not in job
     assert job["services"] == [
@@ -234,3 +235,6 @@ def test_dialect_runner_job_uses_standard_gitlab_yaml_and_preserves_dind_network
     ]
     assert job["variables"]["DOCKER_HOST"] == "tcp://docker:2375"
     assert job["variables"]["DOCKER_TLS_CERTDIR"] == ""
+    assert "${ALPINE_APK_MIRROR}" in before_script
+    assert "sed '/^playwright[<>=]/d' backend/requirements.txt" in before_script
+    assert '--index-url="${BUILDER_PIP_INDEX_URL}"' in before_script

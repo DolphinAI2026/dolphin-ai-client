@@ -65,8 +65,10 @@ verify_tenant_public_id_dialects:
     DOCKER_HOST: "tcp://docker:2375"
     DOCKER_TLS_CERTDIR: ""
   before_script:
+    - sed -i "s|https://dl-cdn.alpinelinux.org/alpine|${ALPINE_APK_MIRROR}|g" /etc/apk/repositories
     - apk add --no-cache bash python3 py3-pip
-    - python3 -m pip install --no-cache-dir --break-system-packages -r backend/requirements.txt
+    - sed '/^playwright[<>=]/d' backend/requirements.txt > /tmp/tenant-public-id-requirements.txt
+    - python3 -m pip install --no-cache-dir --break-system-packages --index-url="${BUILDER_PIP_INDEX_URL}" -r /tmp/tenant-public-id-requirements.txt
   script:
     - cd backend
     - bash tests/integration/run_tenant_public_id_dialects.sh
