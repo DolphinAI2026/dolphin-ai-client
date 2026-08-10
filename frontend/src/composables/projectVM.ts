@@ -65,8 +65,8 @@ export function buildArtifacts(
       mode: projectTypeToMode(w.project_type),
       summary: projectTypeToLabel(w.project_type),
       status: normalizeArtifactStatus(w.status),
-      // SP2b T9: 落统一外壳 /ai-chat 的 code 会话(不再走独立 /coding)。
-      target: { path: '/ai-chat', query: { workspace_id: String(w.id), mode: 'code' } },
+      // Code 工作区由 agent-runtime 承载；旧的 /ai-chat?mode=code 已废弃。
+      target: { path: '/code/apps', query: {} },
     })
   }
   return out

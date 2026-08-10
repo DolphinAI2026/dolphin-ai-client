@@ -544,7 +544,7 @@ async function confirmClone() {
     })
     cloneDialogOpen.value = false
     ElMessage.success('clone 完成,正在打开代码会话')
-    router.push({ path: '/ai-chat', query: { workspace_id: String((ws as any).id), mode: 'code' } }).catch(() => {})
+    router.push({ path: '/code/apps' }).catch(() => {})
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.detail || e?.message || 'clone 失败')
   } finally {
@@ -638,8 +638,8 @@ function workspaceAccentStyle(ws: WorkspaceInfo) {
 }
 
 function openWorkspace(ws: WorkspaceInfo) {
-  // 打开代码工作区 —— 落统一外壳 /ai-chat 的 code 会话(SP2b T9, 不再走独立 /coding)。
-  router.push({ path: '/ai-chat', query: { workspace_id: String(ws.id), mode: 'code' } }).catch(() => {})
+  // Code 工作区由 agent-runtime 承载；旧的 /ai-chat?mode=code 已废弃。
+  router.push({ path: '/code/apps' }).catch(() => {})
 }
 
 async function openLocalFolder() {
@@ -654,7 +654,7 @@ async function openLocalFolder() {
   } catch { return }  // 用户取消确认
   try {
     const ws = await codingApi.openLocalFolder(picked)
-    router.push({ path: '/ai-chat', query: { workspace_id: String(ws.ws_id), mode: 'code' } }).catch(() => {})
+    router.push({ path: '/code/apps' }).catch(() => {})
   } catch (e: any) {
     ElMessage.error(`打开失败: ${e?.response?.data?.detail || e?.message || e}`)
   }

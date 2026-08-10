@@ -10,15 +10,9 @@ import type {
 const props = withDefaults(defineProps<{
   bootstrap: SystemAssistantBootstrap
   compact?: boolean
-  disabled?: boolean
 }>(), {
   compact: false,
-  disabled: false,
 })
-
-const emit = defineEmits<{
-  (e: 'run-recommendation', action: SystemAssistantBootstrap['recommended_action']): void
-}>()
 
 const nodeIcons: Record<string, string> = {
   workspace: 'folder',
@@ -61,15 +55,6 @@ function nodeSummary(node: SystemAssistantBaselineNode): string {
     <span class="baseline-compact-mark"><AppIcon name="sparkles" :size="14" /></span>
     <span class="baseline-compact-title">企业 Code 基线</span>
     <span class="baseline-compact-summary">{{ readyCount }} 项就绪，{{ attentionCount }} 项待处理</span>
-    <button
-      class="baseline-compact-action"
-      type="button"
-      :disabled="disabled"
-      @click="emit('run-recommendation', bootstrap.recommended_action)"
-    >
-      {{ bootstrap.recommended_action.title }}
-      <AppIcon name="arrow-right" :size="13" />
-    </button>
   </section>
 
   <section v-else class="baseline" aria-label="企业 Code 基线">
@@ -98,23 +83,6 @@ function nodeSummary(node: SystemAssistantBaselineNode): string {
         </span>
         <span class="baseline-node-status">{{ statusLabels[node.status] }}</span>
       </div>
-    </div>
-
-    <div class="baseline-recommendation">
-      <div class="baseline-recommendation-copy">
-        <span class="baseline-recommendation-label">建议先做</span>
-        <strong>{{ bootstrap.recommended_action.title }}</strong>
-        <p>{{ bootstrap.recommended_action.reason }}</p>
-      </div>
-      <button
-        class="baseline-primary"
-        type="button"
-        :disabled="disabled"
-        @click="emit('run-recommendation', bootstrap.recommended_action)"
-      >
-        开始
-        <AppIcon name="arrow-right" :size="15" />
-      </button>
     </div>
 
     <p v-if="generatedAt" class="baseline-time">基线更新时间：{{ generatedAt }}</p>
@@ -249,65 +217,6 @@ function nodeSummary(node: SystemAssistantBaselineNode): string {
   font-size: 11.5px;
 }
 
-.baseline-recommendation {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  padding: 20px 4px 8px;
-}
-
-.baseline-recommendation-copy {
-  min-width: 0;
-  flex: 1;
-}
-
-.baseline-recommendation-label {
-  display: block;
-  margin-bottom: 5px;
-  color: var(--text-4);
-  font-size: 11.5px;
-}
-
-.baseline-recommendation-copy strong {
-  font-size: 14px;
-  font-weight: 650;
-}
-
-.baseline-recommendation-copy p {
-  margin: 5px 0 0;
-  color: var(--text-3);
-  font-size: 12.5px;
-  line-height: 1.5;
-}
-
-.baseline-primary,
-.baseline-compact-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  border: 0;
-  background: var(--brand);
-  color: var(--text-inverse, #fff);
-  cursor: pointer;
-  font: inherit;
-}
-
-.baseline-primary {
-  min-width: 92px;
-  height: 38px;
-  padding: 0 16px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.baseline-primary:disabled,
-.baseline-compact-action:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
 .baseline-time {
   margin: 8px 4px 0;
   color: var(--text-4);
@@ -344,17 +253,6 @@ function nodeSummary(node: SystemAssistantBaselineNode): string {
   font-size: 11.5px;
 }
 
-.baseline-compact-action {
-  max-width: 260px;
-  min-height: 28px;
-  padding: 0 10px;
-  border-radius: 6px;
-  overflow: hidden;
-  font-size: 11.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 @media (max-width: 760px) {
   .baseline {
     width: calc(100% - 24px);
@@ -374,15 +272,6 @@ function nodeSummary(node: SystemAssistantBaselineNode): string {
 
   .baseline-node:last-child {
     border-bottom: 0;
-  }
-
-  .baseline-recommendation {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .baseline-primary {
-    width: 100%;
   }
 
   .baseline-compact {

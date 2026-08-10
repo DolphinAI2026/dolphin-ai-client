@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from datetime import datetime
 from typing import Any, AsyncIterator, Optional
@@ -800,6 +801,36 @@ async def _build_initial_messages(
 
 MAX_TURNS = 25  # 工具循环最大轮数（统一 config 的 25：app 配置/codegen 多步任务需要）
 
+_SYSTEM_ASSISTANT_INTRO_RESPONSE = (
+    "你好，我是睿鲸 AI 的 Code 系统助手。你可以直接告诉我需要排查的工程问题、"
+    "要修改的工作区文件，或要查询的知识和技能；我会先读取真实上下文，再执行并验证。"
+    "应用搭建、平台配置、发布部署和应用详情查询不属于当前系统助手入口。"
+)
+
+
+def _is_system_assistant_intro_request(session: AIChatSession, text: str) -> bool:
+    """Only short greetings/capability prompts use the deterministic boundary reply.
+
+    Keeping this narrow prevents a model from inventing unsupported platform
+    capabilities while leaving all concrete work requests on the real agent loop.
+    """
+    if getattr(session, "assistant_profile", None) != "system_assistant":
+        return False
+    normalized = re.sub(r"[\s!！?？。.,，、:：；;]+", "", (text or "").strip().lower())
+    return normalized in {
+        "你好",
+        "您好",
+        "嗨",
+        "hello",
+        "hi",
+        "在吗",
+        "你是谁",
+        "介绍一下自己",
+        "你能做什么",
+        "你可以做什么",
+        "你有哪些能力",
+    }
+
 
 def _sse(event: str, data: dict) -> dict:
     return {"event": event, "data": json.dumps(data, ensure_ascii=False)}
@@ -810,6 +841,7 @@ async def _persist_assistant_notice(
     session: AIChatSession,
     content: str,
     run_id: Optional[str] = None,
+    notice_type: str = "llm_error",
 ) -> Optional[AIChatMessage]:
     """Persist a visible assistant notice so stream failures survive refresh."""
     try:
@@ -818,7 +850,7 @@ async def _persist_assistant_notice(
             role="assistant",
             content=content,
             extra_meta={
-                "notice_type": "llm_error",
+                "notice_type": notice_type,
                 **({"run_id": run_id} if run_id else {}),
             },
         )
@@ -904,6 +936,21 @@ async def _run_agent_inner(
     # caller 未传 view_context 时,用推导出的 ws 绑定上下文 —— code 会话据此知道当前 ws_id,
     # 不再反问「请把 ws_id 发我」(2026-06-25 修复)。caller 显式传的 view_context 优先。
     view_context = view_context or _derived_vc
+
+    # 纯问候/能力询问不需要模型推理。固定回复同时作为能力边界，避免旧模型提示词
+    # 缓存或自由生成时把平台管理能力误报给用户；具体任务仍完整走真实 agent loop。
+    if _is_system_assistant_intro_request(session, current_user_message):
+        msg = await _persist_assistant_notice(
+            db,
+            session,
+            _SYSTEM_ASSISTANT_INTRO_RESPONSE,
+            notice_type="system_assistant_intro",
+        )
+        if msg:
+            yield _assistant_message_event(msg)
+        yield _sse("done", {"ok": True})
+        return
+
     try:
         cfg = await _resolve_llm_config(db, session)
     except RuntimeError as e:

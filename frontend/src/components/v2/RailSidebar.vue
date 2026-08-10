@@ -31,15 +31,19 @@ import {
   getControlPlaneCodeSession,
   setControlPlaneCodeSession,
 } from '@/utils/controlPlaneCodeSession'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import SystemAssistantSessionSections from '@/components/v2/SystemAssistantSessionSections.vue'
 import {
+  groupRailSessionsByApplication,
   normalizeAiSessions,
   normalizeCodeRailHistory,
   nextAgentQuery,
   railSessionTarget,
   isRailSessionActive,
   railSessionFallback,
+  sortRailSessionsByUpdatedAt,
   type RailSession,
+  type RailSessionGroup,
 } from '@/composables/railSessions'
 import type { CodeAgentSessionRecord, CodeRailHistoryResponse } from '@/api/codeRuntime'
 import ruijingWhaleMarkUrl from '@/assets/brand/ruijing-whale-mark.svg'
@@ -77,13 +81,20 @@ const codeRailHistory = ref<CodeRailHistoryResponse | null>(null)
 const showRecent = computed(() => !effectiveCollapsed.value)
 let railAppsSeq = 0
 let railSessionsSeq = 0
+let systemAssistantSessionsTimer: ReturnType<typeof setInterval> | null = null
 
 // app_id → 应用名映射(供「按应用」分组,code 会话从工作区继承 app_id 后据此归到应用)。
 const appNameById = ref<Map<number, string>>(new Map())
 
-// 归一会话列表(单一来源)。
+const systemAssistantSessions = computed<RailSession[]>(() =>
+  sortRailSessionsByUpdatedAt(normalizeAiSessions(aiSessions.value)),
+)
+const systemAssistantApplicationGroups = computed<RailSessionGroup[]>(() =>
+  groupRailSessionsByApplication(normalizeCodeRailHistory(codeRailHistory.value), 'code'),
+)
+
+// 非系统助手入口仍使用当前模式对应的单一会话源。
 const railSessions = computed<RailSession[]>(() => {
-  if (isSystemAssistantRoute.value) return normalizeAiSessions(aiSessions.value)
   return currentMode.value === 'code'
     ? normalizeCodeRailHistory(codeRailHistory.value)
     : normalizeAiSessions(aiSessions.value, appNameById.value)
@@ -138,10 +149,17 @@ async function loadRailSessions() {
   const mode = currentMode.value
   try {
     if (isSystemAssistantRoute.value) {
-      const data = await aiChatApi.listSessions({ mode: 'code', assistant_profile: 'system_assistant' })
+      const [systemResult, applicationResult] = await Promise.allSettled([
+        aiChatApi.listSessions({ mode: 'code', assistant_profile: 'system_assistant' }),
+        codeRuntimeApi.listRailHistory(codeApplicationSource.value),
+      ])
       if (seq !== railSessionsSeq || !isSystemAssistantRoute.value) return
-      codeRailHistory.value = null
-      aiSessions.value = data?.sessions || []
+      aiSessions.value = systemResult.status === 'fulfilled'
+        ? systemResult.value?.sessions || []
+        : []
+      codeRailHistory.value = applicationResult.status === 'fulfilled'
+        ? applicationResult.value
+        : { apps: [] }
       return
     }
     if (mode === 'code') {
@@ -161,6 +179,17 @@ async function loadRailSessions() {
     aiSessions.value = []
     if (mode === 'code') codeRailHistory.value = { apps: [] }
   }
+}
+
+function syncSystemAssistantSessionPolling() {
+  if (systemAssistantSessionsTimer) {
+    clearInterval(systemAssistantSessionsTimer)
+    systemAssistantSessionsTimer = null
+  }
+  if (!isSystemAssistantRoute.value) return
+  systemAssistantSessionsTimer = setInterval(() => {
+    if (document.visibilityState === 'visible') void loadRailSessions()
+  }, 6000)
 }
 
 function refreshCodeRail() {
@@ -209,6 +238,7 @@ watch(currentMode, () => {
 watch(isSystemAssistantRoute, () => {
   void loadRailApps()
   void loadRailSessions()
+  syncSystemAssistantSessionPolling()
 })
 const collapsedGroups = ref<Set<string>>(new Set())
 function toggleGroup(label: string) {
@@ -219,29 +249,9 @@ function toggleGroup(label: string) {
 
 const creatingCodeAgentSession = ref(false)
 const creatingBuilderSession = ref(false)
-const sessionGroups = computed<{ label: string; items: RailSession[]; shellSessionId?: string; appId?: number }[]>(() => {
+const sessionGroups = computed<RailSessionGroup[]>(() => {
   if (effectiveGroupBy.value === 'app') {
-    const map = new Map<string, RailSession[]>()
-    for (const s of railSessions.value) {
-      const key = s.appId ? `app:${s.appId}` : `name:${s.appName || '未关联应用'}`
-      if (!map.has(key)) map.set(key, [])
-      map.get(key)!.push(s)
-    }
-    return [...map.entries()].map(([label, items]) => {
-      const shellSessionId = currentMode.value === 'code'
-        ? items.find(s => s.shellSessionId)?.shellSessionId
-        : undefined
-      const appId = currentMode.value === 'builder' ? items.find(s => s.appId)?.appId : undefined
-      const displayLabel = label.startsWith('app:')
-        ? (items.find(s => s.appName)?.appName || `应用 #${label.slice(4)}`)
-        : label.slice(5)
-      return {
-        label: displayLabel,
-        items,
-        ...(shellSessionId ? { shellSessionId } : {}),
-        ...(appId ? { appId } : {}),
-      }
-    })
+    return groupRailSessionsByApplication(railSessions.value, currentMode.value)
   }
   const now = new Date()
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
@@ -261,7 +271,7 @@ const sessionGroups = computed<{ label: string; items: RailSession[]; shellSessi
 })
 
 async function openSession(session: RailSession) {
-  if (isSystemAssistantRoute.value) {
+  if (isSystemAssistantRoute.value && session.source !== 'code-agent' && session.source !== 'code-shell') {
     router.push({ path: '/code/system-assistant', query: { ...route.query, session: String(session.id) } })
     return
   }
@@ -272,9 +282,42 @@ async function openSession(session: RailSession) {
   }
   router.push(railSessionTarget(currentMode.value, session, route.query))
 }
+
+function createSystemAssistantSession() {
+  const query = { ...route.query }
+  delete query.session
+  router.push({ path: '/code/system-assistant', query })
+}
+
 function sessionActive(s: RailSession) {
   if (isSystemAssistantRoute.value) return String(route.query.session || '') === String(s.id)
   return isRailSessionActive(currentMode.value, s, route)
+}
+
+function sessionRunning(session: RailSession): boolean {
+  return ['running', 'processing'].includes(String(session.status || '').toLowerCase())
+}
+
+async function renameSystemAssistantSession(session: RailSession) {
+  try {
+    const { value } = await ElMessageBox.prompt('输入新的会话名称', '重命名会话', {
+      inputValue: session.title || '',
+      inputPlaceholder: '会话名称',
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValidator: value => Boolean(String(value || '').trim()) || '请输入会话名称',
+    })
+    const title = String(value || '').trim()
+    if (!title || title === session.title) return
+    await aiChatApi.updateSession(Number(session.id), { title })
+    await loadRailSessions()
+    window.dispatchEvent(new CustomEvent('system-assistant-session-renamed', {
+      detail: { id: Number(session.id), title },
+    }))
+  } catch (error: any) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error?.response?.data?.detail || error?.message || '重命名失败')
+  }
 }
 
 function upsertOptimisticCodeAgentSession(
@@ -363,7 +406,15 @@ async function createCodeAgentSession(shellSessionId?: string | null) {
   }
 }
 async function deleteRailSession(s: RailSession) {
-  if (!window.confirm(`删除会话「${s.title || '未命名会话'}」?`)) return
+  try {
+    await ElMessageBox.confirm(
+      `删除会话「${s.title || '未命名会话'}」后无法恢复。`,
+      '删除会话',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
   try {
     if (currentMode.value === 'code' && s.source === 'code-agent' && s.shellSessionId && s.runtimeSessionId) {
       await codeRuntimeApi.deleteAgentSession(s.shellSessionId, s.runtimeSessionId)
@@ -518,6 +569,7 @@ onMounted(() => {
   startupTasks.push(user.fetchAvailableTenants())
   if (__DESKTOP__) startupTasks.push(loadDesktopWorkspaceEntryScope())
   void Promise.allSettled(startupTasks)
+  syncSystemAssistantSessionPolling()
   window.addEventListener('click', closeTenantMenu)
   window.addEventListener('code-rail-refresh', refreshCodeRail)
   if (__DESKTOP__) {
@@ -533,6 +585,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  if (systemAssistantSessionsTimer) clearInterval(systemAssistantSessionsTimer)
   window.removeEventListener('click', closeTenantMenu)
   window.removeEventListener('code-rail-refresh', refreshCodeRail)
   if (__DESKTOP__) {
@@ -700,6 +753,9 @@ const ICONS: Record<string, string> = {
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
   refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4"/><polyline points="21 3 21 9 15 9"/>',
   plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+  trash: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  moreHorizontal: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
 }
 
 function renderIcon(name: string): string {
@@ -786,49 +842,72 @@ function renderIcon(name: string): string {
         <span v-if="it.badge" class="rail-item-badge">{{ it.badge }}</span>
       </a>
 
-      <!-- 会话历史(单一左栏, 参考 Claude Code): 日期/应用 分组 + 可折叠 + 删除。 -->
-      <div v-if="showRecent" class="rail-sessions">
+      <SystemAssistantSessionSections
+        v-if="showRecent && isSystemAssistantRoute"
+        class="rail-sessions rail-system-assistant-sessions"
+        :system-sessions="systemAssistantSessions"
+        :application-groups="systemAssistantApplicationGroups"
+        :active-system-session-id="String(route.query.session || '')"
+        @new-system-session="createSystemAssistantSession"
+        @open-system-session="openSession"
+        @rename-system-session="renameSystemAssistantSession"
+        @delete-system-session="deleteRailSession"
+        @open-application-session="openSession"
+        @new-application-session="createCodeAgentSession"
+      />
+
+      <!-- 普通应用会话继续按日期或应用分组。 -->
+      <div v-else-if="showRecent" class="rail-sessions">
         <div class="rail-sess-toolbar">
-          <span class="rail-sess-cap">{{ isSystemAssistantRoute ? '系统助手会话' : '会话' }}</span>
+          <span class="rail-sess-cap">会话</span>
           <div class="rail-sess-groupby">
             <button type="button" :class="{ on: effectiveGroupBy === 'date' }" @click="setGroupBy('date')">日期</button>
-            <button v-if="!isSystemAssistantRoute" type="button" :class="{ on: effectiveGroupBy === 'app' }" @click="setGroupBy('app')">应用</button>
+            <button type="button" :class="{ on: effectiveGroupBy === 'app' }" @click="setGroupBy('app')">应用</button>
           </div>
         </div>
-        <div v-for="g in sessionGroups" :key="g.label" class="rail-sess-group">
-          <div class="rail-sess-label-row">
-            <button type="button" class="rail-sess-label" @click="toggleGroup(g.label)">
-              <span class="rail-sess-chev" :class="{ collapsed: collapsedGroups.has(g.label) }" v-html="renderIcon('chevronDown')" />
-              <span class="rail-sess-glabel">{{ g.label }}</span>
-              <span class="rail-sess-cnt">{{ g.items.length }}</span>
-            </button>
-            <button
-              v-if="effectiveGroupBy === 'app' && ((currentMode === 'code' && g.shellSessionId) || (currentMode === 'builder' && g.appId))"
-              type="button"
-              class="rail-sess-group-new"
-              title="新建对话"
-              aria-label="新建对话"
-              :disabled="currentMode === 'code' ? creatingCodeAgentSession : creatingBuilderSession"
-              @click.stop="currentMode === 'code' ? createCodeAgentSession(g.shellSessionId) : createBuilderSession(g.appId)"
-            >
-              <span v-html="renderIcon('plus')" />
-            </button>
-          </div>
-          <template v-if="!collapsedGroups.has(g.label)">
-            <div
-              v-for="s in g.items"
-              :key="s.id"
-              class="rail-sess-item"
-              :class="{ active: sessionActive(s) }"
-              :title="s.title || '未命名会话'"
-              @click="openSession(s)"
-            >
-              <span class="rail-sess-title">{{ s.title || '未命名会话' }}</span>
-              <button class="rail-sess-del" type="button" title="删除会话" @click.stop="deleteRailSession(s)">×</button>
+        <div class="rail-sess-list">
+          <div v-for="g in sessionGroups" :key="g.label" class="rail-sess-group">
+            <div class="rail-sess-label-row">
+              <button type="button" class="rail-sess-label" @click="toggleGroup(g.label)">
+                <span class="rail-sess-chev" :class="{ collapsed: collapsedGroups.has(g.label) }" v-html="renderIcon('chevronDown')" />
+                <span class="rail-sess-glabel">{{ g.label }}</span>
+                <span class="rail-sess-cnt">{{ g.items.length }}</span>
+              </button>
+              <button
+                v-if="effectiveGroupBy === 'app' && ((currentMode === 'code' && g.shellSessionId) || (currentMode === 'builder' && g.appId))"
+                type="button"
+                class="rail-sess-group-new"
+                title="新建对话"
+                aria-label="新建对话"
+                :disabled="currentMode === 'code' ? creatingCodeAgentSession : creatingBuilderSession"
+                @click.stop="currentMode === 'code' ? createCodeAgentSession(g.shellSessionId) : createBuilderSession(g.appId)"
+              >
+                <span v-html="renderIcon('plus')" />
+              </button>
             </div>
-          </template>
+            <template v-if="!collapsedGroups.has(g.label)">
+              <div
+                v-for="s in g.items"
+                :key="s.id"
+                class="rail-sess-item"
+                :class="{ active: sessionActive(s) }"
+                :title="s.title || '未命名会话'"
+                @click="openSession(s)"
+              >
+                <span
+                  class="rail-sess-state"
+                  :class="{ running: sessionRunning(s) }"
+                  :title="sessionRunning(s) ? '执行中' : ''"
+                />
+                <span class="rail-sess-title">{{ s.title || '未命名会话' }}</span>
+                <button class="rail-sess-del" type="button" title="删除会话" aria-label="删除会话" @click.stop="deleteRailSession(s)">
+                  <span v-html="renderIcon('trash')" />
+                </button>
+              </div>
+            </template>
+          </div>
+          <div v-if="!sessionGroups.length" class="rail-sess-empty">还没有会话</div>
         </div>
-        <div v-if="!sessionGroups.length" class="rail-sess-empty">还没有会话</div>
       </div>
     </nav>
 
@@ -2055,35 +2134,69 @@ html[data-theme="dark"] .rail-item { color: #a8b5c8; }
 .logout-row:hover { color: #d9685e; }
 
 /* Final visual pass (kept at the end so it wins over legacy compatibility rules). */
-.rail { width: 248px; background: #f7f9fc; border-right-color: #e3e8f0; }
-.rail-brand { min-height: 72px; padding: 16px; border-bottom: 1px solid #e8edf4; }
-.rail-logo { width: 32px; height: 32px; border-radius: 9px; }
-.rail-brand-copy::after { content: 'AI 应用工作台'; display: block; margin-top: 4px; color: #8a96a8; font-size: 10.5px; font-weight: 500; letter-spacing: .03em; }
-.rail-mode-switch { margin: 14px 14px 10px; padding: 3px; gap: 3px; border-color: #e1e7f0; border-radius: 10px; background: #eef2f7; }
-.rail-mode-btn { height: 30px; border-radius: 8px; }
+.rail { width: 232px; background: #f7f9fc; border-right-color: #e3e8f0; }
+.rail-brand { min-height: 58px; padding: 11px 12px; border-bottom: 1px solid #e8edf4; }
+.rail-logo { width: 30px; height: 30px; border-radius: 8px; }
+.rail-brand-copy::after { content: 'AI 应用工作台'; display: block; margin-top: 2px; color: #8a96a8; font-size: 10px; font-weight: 500; letter-spacing: .03em; }
+.rail-mode-switch { margin: 8px 10px 6px; padding: 3px; gap: 3px; border-color: #e1e7f0; border-radius: 9px; background: #eef2f7; }
+.rail-mode-btn { height: 28px; border-radius: 7px; }
 .rail-mode-btn.active { color: #1f56c7; background: #fff; box-shadow: 0 2px 7px rgba(25,52,96,.09); }
-.rail-scroll { gap: 3px; padding: 9px 12px 12px; }
-.rail-scroll::before { content: '工作区'; display: block; padding: 4px 10px 7px; color: #9aa6b7; font-size: 10px; font-weight: 700; letter-spacing: .1em; }
-.rail-item { min-height: 40px; gap: 11px; padding: 0 11px; border-radius: 10px; color: #56657a; font-size: 13px; transition: background .16s ease, color .16s ease, transform .16s ease; }
+.rail-scroll { gap: 2px; padding: 5px 10px 0; overflow: hidden; }
+.rail-scroll::before { content: '工作区'; display: block; flex: 0 0 auto; padding: 3px 9px 5px; color: #9aa6b7; font-size: 10px; font-weight: 700; letter-spacing: .08em; }
+.rail-item { flex: 0 0 auto; min-height: 36px; gap: 10px; padding: 0 10px; border-radius: 8px; color: #56657a; font-size: 13px; transition: background .16s ease, color .16s ease, transform .16s ease; }
 .rail-item:hover { color: #274d92; background: #edf3ff; transform: translateX(1px); }
 .rail-item.active { color: #1f56c7; background: #e9f1ff; font-weight: 650; }
-.rail-item.active::before { left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 0 4px 4px 0; }
-.rail-item-icon { width: 20px; height: 20px; color: #7d8ca3; }
+.rail-item.active::before { left: 0; top: 7px; bottom: 7px; width: 3px; border-radius: 0 4px 4px 0; }
+.rail-item-icon { width: 18px; height: 18px; color: #7d8ca3; }
 .rail-item.active .rail-item-icon, .rail-item:hover .rail-item-icon { color: #2f65d5; }
 .rail-item-badge { min-width: 20px; height: 20px; background: #dce9ff; color: #2860ca; }
-.rail-sessions { margin-top: 13px; padding: 13px 9px 0; border-top: 1px solid #e7ecf3; }
-.rail-sess-cap { color: #97a3b4; font-size: 10px; font-weight: 700; letter-spacing: .1em; }
-.rail-sess-item { min-height: 31px; border-radius: 8px; color: #68768a; }
-.rail-sess-item:hover, .rail-sess-item.active { color: #2458bd; background: #edf3ff; }
-.rail-hub { margin: 5px 12px 8px; padding: 11px 11px 0; border-top: 1px solid #e5eaf2; }
+.rail-sessions { flex: 1 1 auto; min-height: 112px; display: flex; flex-direction: column; margin-top: 7px; padding: 9px 2px 0; overflow: hidden; border-top: 1px solid #e7ecf3; }
+.rail-sessions.rail-system-assistant-sessions { overflow-y: auto; }
+.rail-sess-toolbar { flex: 0 0 auto; min-height: 28px; padding: 0 6px 5px; }
+.rail-sess-cap { color: #7f8b9d; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; }
+.rail-sess-new { width: 26px; height: 26px; display: grid; place-items: center; padding: 0; color: #637188; background: transparent; border: 1px solid transparent; border-radius: 7px; cursor: pointer; }
+.rail-sess-new:hover { color: #1f56c7; background: #e9f1ff; border-color: #d4e2fb; }
+.rail-sess-new:focus-visible { outline: 2px solid var(--line-focus, var(--brand-ring)); outline-offset: 1px; }
+.rail-sess-new :deep(svg) { width: 15px; height: 15px; }
+.rail-sess-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 2px 8px 0; scrollbar-width: thin; scrollbar-color: #cfd7e3 transparent; }
+.rail-sess-list::-webkit-scrollbar { width: 5px; }
+.rail-sess-list::-webkit-scrollbar-thumb { background: #cfd7e3; border-radius: 999px; }
+.rail-sess-group { margin: 0 0 5px; }
+.rail-sess-label { min-height: 28px; padding: 4px 5px; color: #68768a; font-size: 12px; }
+.rail-sess-cnt { min-width: 18px; text-align: right; }
+.rail-sess-item { position: relative; min-height: 30px; padding: 4px 5px 4px 8px; border-radius: 7px; color: #68768a; }
+.rail-sess-state { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: #c2cad6; }
+.rail-sess-state.running { background: #2f65d5; box-shadow: 0 0 0 3px rgba(47, 101, 213, .12); animation: rail-session-pulse 1.6s ease-in-out infinite; }
+.rail-sess-item:hover { color: #2458bd; background: #edf3ff; }
+.rail-sess-item.active { color: #1f56c7; background: #e5efff; font-weight: 600; }
+.rail-sess-item.active .rail-sess-state { background: #2f65d5; }
+.rail-sess-manage { position: relative; flex: 0 0 auto; }
+.rail-sess-more,
+.rail-sess-del { width: 22px; height: 22px; display: grid; place-items: center; flex: 0 0 auto; padding: 0; border-radius: 6px; }
+.rail-sess-more { opacity: 0; color: #758298; background: transparent; border: 0; cursor: pointer; }
+.rail-sess-item:hover .rail-sess-more,
+.rail-sess-item.active .rail-sess-more,
+.rail-sess-more[aria-expanded="true"] { opacity: 1; }
+.rail-sess-more:hover { color: #1f56c7; background: #fff; }
+.rail-sess-more :deep(svg),
+.rail-sess-del :deep(svg) { width: 13px; height: 13px; }
+.rail-sess-del:hover { background: #fff; }
+.rail-sess-menu { position: absolute; right: 0; top: 26px; z-index: 30; width: 112px; padding: 4px; border: 1px solid #dfe5ee; border-radius: 8px; background: #fff; box-shadow: 0 8px 24px rgba(28, 43, 68, .14); }
+.rail-sess-menu button { width: 100%; min-height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 8px; color: #46556b; background: transparent; border: 0; border-radius: 6px; font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.rail-sess-menu button:hover { color: #1f56c7; background: #edf3ff; }
+.rail-sess-menu button.danger { color: #bb3f3f; }
+.rail-sess-menu button.danger:hover { color: #a82f2f; background: #fff0f0; }
+.rail-sess-menu button :deep(svg) { width: 14px; height: 14px; }
+.rail-sess-empty { padding: 18px 8px; text-align: center; }
+.rail-hub { min-height: 36px; margin: 5px 10px 6px; padding: 8px 10px 0; border-top: 1px solid #e5eaf2; }
 .rail-hub .rail-item-icon { color: #c88710; }
-.rail-foot { padding: 12px 12px 14px; border-top: 1px solid #e3e8f0; background: #f4f7fb; }
-.rail-console { gap: 8px; }
+.rail-foot { padding: 9px 10px 10px; border-top: 1px solid #e3e8f0; background: #f4f7fb; }
+.rail-console { gap: 6px; }
 .rail-console-label { margin: 0 4px 1px; color: #94a0b1; font-size: 10px; letter-spacing: .1em; }
-.tenant-switch { min-height: 38px; padding: 0 11px; border-color: #e0e6ee; border-radius: 10px; background: #fff; color: #34445b; }
+.tenant-switch { min-height: 34px; padding: 0 10px; border-color: #e0e6ee; border-radius: 8px; background: #fff; color: #34445b; }
 .tenant-switch:hover, .tenant-switch.open { border-color: #b9cdf5; background: #eef4ff; color: #2458bd; }
-.account-row { min-height: 48px; margin-top: 2px; padding: 10px 4px 0; border-top-color: #e1e7f0; }
-.rail-avatar { width: 30px; height: 30px; background: #285bd0; box-shadow: 0 3px 8px rgba(40,91,208,.22); }
+.account-row { min-height: 42px; margin-top: 1px; padding: 8px 4px 0; border-top-color: #e1e7f0; }
+.rail-avatar { width: 28px; height: 28px; background: #285bd0; box-shadow: 0 3px 8px rgba(40,91,208,.22); }
 .rail-user-name { color: #273952; }
 .rail-user-status { color: #8b98aa; }
 .rail-collapsed .rail-scroll::before, .rail-collapsed .rail-brand-copy { display: none; }
@@ -2095,4 +2208,28 @@ html[data-theme="dark"] .rail-foot { background: #121822; }
 html[data-theme="dark"] .rail-scroll::before, html[data-theme="dark"] .rail-console-label, html[data-theme="dark"] .rail-sess-cap { color: #748198; }
 html[data-theme="dark"] .tenant-switch { background: #1b2431; border-color: #2a374a; color: #d6deeb; }
 html[data-theme="dark"] .rail-item { color: #a8b5c8; }
+html[data-theme="dark"] .rail-sess-new { color: #94a3b8; }
+html[data-theme="dark"] .rail-sess-new:hover { color: #8fb4ff; background: #202d42; border-color: #334763; }
+html[data-theme="dark"] .rail-sess-list { scrollbar-color: #3b485a transparent; }
+html[data-theme="dark"] .rail-sess-list::-webkit-scrollbar-thumb { background: #3b485a; }
+html[data-theme="dark"] .rail-sess-label,
+html[data-theme="dark"] .rail-sess-item { color: #9eacc0; }
+html[data-theme="dark"] .rail-sess-state { background: #526177; }
+html[data-theme="dark"] .rail-sess-item:hover { color: #cbd8eb; background: #1d2838; }
+html[data-theme="dark"] .rail-sess-item.active { color: #a9c5ff; background: #22304a; }
+html[data-theme="dark"] .rail-sess-item.active .rail-sess-state,
+html[data-theme="dark"] .rail-sess-state.running { background: #7da5f8; box-shadow: 0 0 0 3px rgba(125, 165, 248, .14); }
+html[data-theme="dark"] .rail-sess-more { color: #94a3b8; }
+html[data-theme="dark"] .rail-sess-more:hover { color: #a9c5ff; background: #151b25; }
+html[data-theme="dark"] .rail-sess-menu { background: #1b2431; border-color: #334155; box-shadow: 0 10px 28px rgba(0, 0, 0, .32); }
+html[data-theme="dark"] .rail-sess-menu button { color: #c2cede; }
+html[data-theme="dark"] .rail-sess-menu button:hover { color: #a9c5ff; background: #26344a; }
+html[data-theme="dark"] .rail-sess-menu button.danger { color: #f09a9a; }
+html[data-theme="dark"] .rail-sess-menu button.danger:hover { color: #ffb0b0; background: #3a2428; }
+html[data-theme="dark"] .rail-sess-del:hover { background: #151b25; }
+
+@keyframes rail-session-pulse {
+  0%, 100% { opacity: .65; }
+  50% { opacity: 1; }
+}
 </style>

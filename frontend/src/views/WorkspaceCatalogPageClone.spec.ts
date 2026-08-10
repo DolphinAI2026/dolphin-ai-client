@@ -10,7 +10,7 @@ describe('P3 clone 入口契约', () => {
     expect(workspaceCatalogSource).toContain('confirmClone')
     expect(workspaceCatalogSource).toContain('gitCloneWorkspace')
     // clone 成功导航到统一外壳 code 会话
-    expect(workspaceCatalogSource).toContain("mode: 'code'")
+    expect(workspaceCatalogSource).toContain("path: '/code/apps'")
   })
 
   it('codingApi 暴露 gitCloneWorkspace 打到 /coding/workspaces/git/clone', () => {

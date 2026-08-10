@@ -17,6 +17,7 @@ export interface RailSession {
   id: number | string
   title: string
   updatedAt?: string
+  status?: string
   /** 用于「按应用」分组(coding 会话暂无,落「未关联应用」) */
   appId?: number
   appName?: string
@@ -28,6 +29,58 @@ export interface RailSession {
   userLabel?: string
   sandboxKey?: string
   sandboxLabel?: string
+}
+
+export interface RailSessionGroup {
+  label: string
+  items: RailSession[]
+  shellSessionId?: string
+  appId?: number
+}
+
+export function sortRailSessionsByUpdatedAt(sessions: RailSession[]): RailSession[] {
+  return [...sessions].sort((left, right) => {
+    const leftTime = left.updatedAt ? Date.parse(left.updatedAt) : 0
+    const rightTime = right.updatedAt ? Date.parse(right.updatedAt) : 0
+    return rightTime - leftTime
+  })
+}
+
+export function groupRailSessionsByApplication(
+  sessions: RailSession[],
+  mode: AppMode,
+): RailSessionGroup[] {
+  const map = new Map<string, RailSession[]>()
+  for (const session of sessions) {
+    const key = session.appId ? `app:${session.appId}` : `name:${session.appName || '未关联应用'}`
+    if (!map.has(key)) map.set(key, [])
+    map.get(key)!.push(session)
+  }
+
+  return [...map.entries()]
+    .map(([key, items]) => {
+      const sortedItems = sortRailSessionsByUpdatedAt(items)
+      const shellSessionId = mode === 'code'
+        ? sortedItems.find(session => session.shellSessionId)?.shellSessionId
+        : undefined
+      const appId = mode === 'builder'
+        ? sortedItems.find(session => session.appId)?.appId
+        : undefined
+      const label = key.startsWith('app:')
+        ? (sortedItems.find(session => session.appName)?.appName || `应用 #${key.slice(4)}`)
+        : key.slice(5)
+      return {
+        label,
+        items: sortedItems,
+        ...(shellSessionId ? { shellSessionId } : {}),
+        ...(appId ? { appId } : {}),
+      }
+    })
+    .sort((left, right) => {
+      const leftTime = left.items[0]?.updatedAt ? Date.parse(left.items[0].updatedAt) : 0
+      const rightTime = right.items[0]?.updatedAt ? Date.parse(right.items[0].updatedAt) : 0
+      return rightTime - leftTime
+    })
 }
 
 export function normalizeAiSessions(
@@ -66,6 +119,7 @@ export function normalizeAiSessions(
       id: s.id,
       title: s.title || '未命名会话',
       updatedAt: s.updated_at ?? undefined,
+      status: s.status || undefined,
       // Builder 用生成产出的应用名 / 本地 app_id 反查；Code 用 d-ai-code 外部应用名。
       ...(appId ? { appId } : {}),
       appName: s.generation?.app_name || s.external_app_name || (s.app_id ? appNameById?.get(s.app_id) : undefined) || undefined,

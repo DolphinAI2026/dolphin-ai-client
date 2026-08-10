@@ -12,7 +12,7 @@ from app.agents.profile import (
     resolve_profile,
     ws_bind_view_context,
 )
-from app.ai_chat.agent import _apply_session_overrides
+from app.ai_chat.agent import _apply_session_overrides, _is_system_assistant_intro_request
 
 
 def test_system_assistant_profile_exposes_workspace_runtime_and_diagnostics_only():
@@ -54,6 +54,25 @@ def test_system_assistant_profile_does_not_require_a_bound_workspace():
     assert prompt == resolve_profile("system_assistant").system_prompt
     assert tools
     assert locked_ws_id is None
+
+
+@pytest.mark.parametrize("text", ["你好", "你能做什么？", "介绍一下自己"])
+def test_system_assistant_intro_requests_use_the_bounded_reply(text: str):
+    session = SimpleNamespace(assistant_profile="system_assistant")
+
+    assert _is_system_assistant_intro_request(session, text) is True
+
+
+def test_concrete_system_assistant_work_does_not_use_the_intro_reply():
+    session = SimpleNamespace(assistant_profile="system_assistant")
+
+    assert _is_system_assistant_intro_request(session, "帮我检查并修复当前工程的构建问题") is False
+
+
+def test_builder_session_does_not_use_the_system_assistant_intro_reply():
+    session = SimpleNamespace(assistant_profile="entry_agent")
+
+    assert _is_system_assistant_intro_request(session, "你能做什么") is False
 
 
 def test_system_assistant_code_session_locks_bound_workspace_and_context():

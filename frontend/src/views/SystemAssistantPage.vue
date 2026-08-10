@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import AgentConversation from '@/components/common/AgentConversation.vue'
@@ -14,7 +14,6 @@ import type { BuilderModelOption } from '@/api/llmConfig'
 import {
   systemAssistantApi,
   type SystemAssistantBootstrap,
-  type SystemAssistantRecommendedAction,
 } from '@/api/systemAssistant'
 import { listSkills } from '@/api/skills'
 import { useAiChatSession } from '@/composables/useAiChatSession'
@@ -29,6 +28,7 @@ const llmOptions = ref<BuilderModelOption[]>([])
 
 const {
   currentSession,
+  sessions,
   agentMessages,
   typing,
   typingSeconds,
@@ -57,6 +57,11 @@ const artifactDrawerVisible = ref(false)
 const activeArtifact = ref<any>(null)
 
 const hasConversation = computed(() => agentMessages.value.length > 0 || Boolean(currentSession.value))
+const currentSessionTitle = computed(() => {
+  const id = currentSession.value?.id
+  const latest = id == null ? null : sessions.value.find(session => session.id === id)
+  return latest?.title?.trim() || currentSession.value?.title?.trim() || '企业 Code 能力与工程协作'
+})
 const composerAttachments = computed<UnifiedChatAttachment[]>(() =>
   pendingFiles.value.map((file, index) => ({
     id: index,
@@ -129,8 +134,13 @@ watch(
     if (id == null) delete query.session
     else query.session = String(id)
     router.replace({ path: '/code/system-assistant', query }).catch(() => {})
+    window.dispatchEvent(new CustomEvent('code-rail-refresh'))
   },
 )
+
+watch(sending, () => {
+  window.dispatchEvent(new CustomEvent('code-rail-refresh'))
+})
 
 function createSession() {
   newSession()
@@ -168,11 +178,6 @@ async function doSend() {
   }
 }
 
-function runRecommendation(action: SystemAssistantRecommendedAction) {
-  inputText.value = `请基于当前企业 Code 基线处理“${action.title}”。先核对真实工程和可用能力，再给出并执行当前最有价值的下一步。`
-  void doSend()
-}
-
 async function onStop() {
   try { await stop() } catch { /* run status will reconcile on reload */ }
 }
@@ -199,7 +204,18 @@ function openArtifact(artifact: any) {
   artifactDrawerVisible.value = true
 }
 
+function onSessionRenamed(event: Event) {
+  const detail = (event as CustomEvent<{ id?: number; title?: string }>).detail
+  const id = Number(detail?.id)
+  const title = String(detail?.title || '').trim()
+  if (!Number.isInteger(id) || !title) return
+  const session = sessions.value.find(item => item.id === id)
+  if (session) session.title = title
+  if (currentSession.value?.id === id) currentSession.value.title = title
+}
+
 onMounted(async () => {
+  window.addEventListener('system-assistant-session-renamed', onSessionRenamed)
   await Promise.all([
     loadBootstrap(),
     loadModels(),
@@ -207,6 +223,10 @@ onMounted(async () => {
     listSkills().then(value => { availableSkills.value = value }).catch(() => {}),
   ])
   await selectSession(querySessionId())
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('system-assistant-session-renamed', onSessionRenamed)
 })
 </script>
 
@@ -217,7 +237,7 @@ onMounted(async () => {
         <span class="system-assistant-logo"><AppIcon name="sparkles" :size="16" /></span>
         <div>
           <strong>系统助手</strong>
-          <span>企业 Code 能力与工程协作</span>
+          <span :title="currentSessionTitle">{{ currentSessionTitle }}</span>
         </div>
       </div>
       <div class="system-assistant-actions">
@@ -257,8 +277,6 @@ onMounted(async () => {
           v-if="bootstrap"
           :bootstrap="bootstrap"
           :compact="hasConversation"
-          :disabled="sending"
-          @run-recommendation="runRecommendation"
         />
       </template>
     </AgentConversation>
@@ -436,11 +454,35 @@ onMounted(async () => {
   flex: 1;
 }
 
+.system-assistant-conversation :deep(.ac-list) {
+  padding-inline: max(16px, calc((100% - 820px) / 2));
+}
+
 .system-assistant-composer {
   flex: 0 0 auto;
   padding: 10px max(16px, calc((100% - 820px) / 2)) 14px;
   border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
   background: var(--surface);
+}
+
+.system-assistant-composer :deep(.ucc-box),
+.system-assistant-composer :deep(.ucc-footer),
+.system-assistant-composer :deep(.ucc-footer-left) {
+  overflow: visible;
+}
+
+.system-assistant-composer :deep(.ucc-send) {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 2;
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
+}
+
+.system-assistant-composer :deep(.ucc-footer) {
+  padding-right: 52px;
 }
 
 @media (max-width: 720px) {
@@ -466,6 +508,10 @@ onMounted(async () => {
 
   .system-assistant-composer {
     padding: 8px 10px 10px;
+  }
+
+  .system-assistant-conversation :deep(.ac-list) {
+    padding-inline: 10px;
   }
 }
 </style>
