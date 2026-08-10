@@ -6,12 +6,18 @@ import os
 import re
 import time
 from pathlib import Path
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import FileResponse, Response
 from app.config import settings, APP_TITLE, APP_DESCRIPTION, APP_VERSION
+from app.builder_auth.product_guard import (
+    ProductDisabledError,
+    product_disabled_exception_handler,
+    require_builder_product,
+    require_code_product,
+)
 from app.database import init_db
 from app import runtime
 from app.routes.auth.settings import admin_router as auth_settings_admin_router
@@ -149,6 +155,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_exception_handler(ProductDisabledError, product_disabled_exception_handler)
 
 # 注册路由
 app.include_router(auth.router, prefix="/api")
@@ -161,19 +168,19 @@ app.include_router(ai_chat.router, prefix="/api")
 app.include_router(knowledge.router, prefix="/api")
 app.include_router(skills_routes.router, prefix="/api")
 app.include_router(agent_observability.router, prefix="/api")
-app.include_router(applications.router, prefix="/api")
-app.include_router(apaas.router, prefix="/api")
-app.include_router(generation_steps.router, prefix="/api")
-app.include_router(coding.router, prefix="/api")
-app.include_router(code_runtime.router, prefix="/api")
-app.include_router(code_runtime.proxy_router, prefix="/api")
+app.include_router(applications.router, prefix="/api", dependencies=[Depends(require_builder_product)])
+app.include_router(apaas.router, prefix="/api", dependencies=[Depends(require_builder_product)])
+app.include_router(generation_steps.router, prefix="/api", dependencies=[Depends(require_builder_product)])
+app.include_router(coding.router, prefix="/api", dependencies=[Depends(require_code_product)])
+app.include_router(code_runtime.router, prefix="/api", dependencies=[Depends(require_code_product)])
+app.include_router(code_runtime.proxy_router, prefix="/api", dependencies=[Depends(require_code_product)])
 app.include_router(projects.router, prefix="/api")
 app.include_router(templates.router, prefix="/api")
 app.include_router(platform_envs.router, prefix="/api")
 app.include_router(db_connections.router, prefix="/api")
 app.include_router(llm_configs.router, prefix="/api")
-app.include_router(browser.router, prefix="/api")
-app.include_router(harness.router, prefix="/api")
+app.include_router(browser.router, prefix="/api", dependencies=[Depends(require_code_product)])
+app.include_router(harness.router, prefix="/api", dependencies=[Depends(require_code_product)])
 app.include_router(spec.router, prefix="/api")
 app.include_router(sse.router, prefix="/api")
 app.include_router(system_assistant.router, prefix="/api")
@@ -184,12 +191,12 @@ app.include_router(preferences.router, prefix="/api")
 app.include_router(work_state.router, prefix="/api")
 app.include_router(help_assistant.router, prefix="/api")
 app.include_router(voice.router, prefix="/api")
-app.include_router(requirements.router, prefix="/api")
+app.include_router(requirements.router, prefix="/api", dependencies=[Depends(require_builder_product)])
 app.include_router(tenant_logs.router, prefix="/api")
-app.include_router(current_app.router, prefix="/api")
+app.include_router(current_app.router, prefix="/api", dependencies=[Depends(require_builder_product)])
 app.include_router(admin_mcp.router, prefix="/api")
 app.include_router(mcp_platform.router, prefix="/api")
-app.include_router(builder_mcp.router, prefix="/api")
+app.include_router(builder_mcp.router, prefix="/api", dependencies=[Depends(require_builder_product)])
 app.include_router(mcp_hub.router)
 # 自开发整页预览的运行态反向代理 (/app + /apaas, 根级无前缀) —— 复活自 e361c7bc
 # 误删的 platform_proxy 运行态部分。详见 app/routes/runtime_proxy.py 顶注。
