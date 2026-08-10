@@ -859,6 +859,21 @@ child = YAML.load_file(child_path)
 abort "missing build_release_image" unless config["build_release_image"]
 build = config.fetch("build_release_image")
 build_script = build.fetch("script").join("\n")
+ci_source = File.read(parent_path) + File.read(child_path)
+abort "legacy APAAS release variables remain" if ci_source.include?("APAAS_")
+%w[
+  BUILDER_REGISTRY_AUTH_FILE
+  BUILDER_REGISTRY_USERNAME
+  BUILDER_REGISTRY_PASSWORD
+  BUILDER_KUBECONFIG
+  BUILDER_KUBECONFIG_B64
+].each do |key|
+  abort "missing Builder release credential contract: #{key}" unless ci_source.include?(key)
+end
+abort "registry file credential must be validated" \
+  unless build_script.include?('test -s "${BUILDER_REGISTRY_AUTH_FILE}"')
+abort "registry file credential must populate BuildKit Docker config" \
+  unless build_script.include?('cp "${BUILDER_REGISTRY_AUTH_FILE}" "${DOCKER_CONFIG}/config.json"')
 abort "build job parses metadata directly" if build_script.include?("python3") || build_script.include?("jq")
 abort "build metadata artifact missing" unless Array(build.dig("artifacts", "paths")).include?("build/metadata.json")
 
@@ -1762,7 +1777,7 @@ assert_ci_recovery_contract() {
   (
     cd "$job_dir"
     PATH="${FAKE_BIN}:$PATH" \
-    APAAS_KUBECONFIG="${job_dir}/kubeconfig" \
+    BUILDER_KUBECONFIG="${job_dir}/kubeconfig" \
     BUILDER_IMAGE="registry.example/ai-builder@${TEST_DIGEST}" \
     DEPLOYED_REVISION="$TEST_REVISION" \
     BUILDER_K8S_NAMESPACE="release-ns" \
@@ -1795,7 +1810,7 @@ assert_ci_recovery_contract() {
       . build/release.env
       set +a
       export PATH="${FAKE_BIN}:$PATH"
-      export APAAS_KUBECONFIG="${job_dir}/kubeconfig"
+      export BUILDER_KUBECONFIG="${job_dir}/kubeconfig"
       export BUILDER_ORIGIN="https://builder.example"
       export KUBE_NAMESPACE="release-ns"
       export KUBE_STATEFULSET="ai-builder"
@@ -1839,7 +1854,7 @@ assert_ci_recovery_contract() {
   (
     cd "$job_dir"
     PATH="${FAKE_BIN}:$PATH" \
-    APAAS_KUBECONFIG="${job_dir}/kubeconfig" \
+    BUILDER_KUBECONFIG="${job_dir}/kubeconfig" \
     BUILDER_K8S_NAMESPACE="release-ns" \
     BUILDER_K8S_STATEFULSET="ai-builder" \
     BUILDER_K8S_BACKEND_CONTAINER="ai-builder" \
@@ -1874,7 +1889,7 @@ assert_ci_recovery_contract() {
   : >"$kube_log"
   output="$(
     PATH="${FAKE_BIN}:$PATH" \
-    APAAS_KUBECONFIG="${job_dir}/kubeconfig" \
+    BUILDER_KUBECONFIG="${job_dir}/kubeconfig" \
     BUILDER_K8S_NAMESPACE="release-ns" \
     BUILDER_K8S_STATEFULSET="ai-builder" \
     BUILDER_K8S_BACKEND_CONTAINER="ai-builder" \
@@ -1900,7 +1915,7 @@ assert_ci_recovery_contract() {
   (
     cd "$job_dir"
     PATH="${FAKE_BIN}:$PATH" \
-    APAAS_KUBECONFIG="${job_dir}/kubeconfig" \
+    BUILDER_KUBECONFIG="${job_dir}/kubeconfig" \
     BUILDER_IMAGE="registry.example/ai-builder@${TEST_DIGEST}" \
     DEPLOYED_REVISION="$TEST_REVISION" \
     BUILDER_K8S_NAMESPACE="release-ns" \
@@ -1917,7 +1932,7 @@ assert_ci_recovery_contract() {
     . build/release.env
     set +a
     export PATH="${FAKE_BIN}:$PATH"
-    export APAAS_KUBECONFIG="${job_dir}/kubeconfig"
+    export BUILDER_KUBECONFIG="${job_dir}/kubeconfig"
     export BUILDER_ORIGIN="https://builder.example"
     export KUBE_NAMESPACE="release-ns"
     export KUBE_STATEFULSET="ai-builder"
@@ -1948,7 +1963,7 @@ assert_ci_recovery_contract() {
   [ -z "$(state_file_value "$state_file" lock_owner)" ] || fail "browser success did not release its lock"
   output="$(
     PATH="${FAKE_BIN}:$PATH" \
-    APAAS_KUBECONFIG="${job_dir}/kubeconfig" \
+    BUILDER_KUBECONFIG="${job_dir}/kubeconfig" \
     BUILDER_K8S_NAMESPACE="release-ns" \
     BUILDER_K8S_STATEFULSET="ai-builder" \
     BUILDER_K8S_BACKEND_CONTAINER="ai-builder" \
@@ -1980,7 +1995,7 @@ assert_ci_recovery_contract() {
     "lock_sts_resource_version=1" >"$state_file"
   output="$(
     PATH="${FAKE_BIN}:$PATH" \
-    APAAS_KUBECONFIG="${job_dir}/kubeconfig" \
+    BUILDER_KUBECONFIG="${job_dir}/kubeconfig" \
     BUILDER_K8S_NAMESPACE="release-ns" \
     BUILDER_K8S_STATEFULSET="ai-builder" \
     BUILDER_K8S_BACKEND_CONTAINER="ai-builder" \
@@ -2016,7 +2031,7 @@ assert_ci_update_failure_and_lock_contract() {
     (
       cd "$job_dir"
       PATH="${FAKE_BIN}:$PATH" \
-      APAAS_KUBECONFIG="${job_dir}/kubeconfig" \
+      BUILDER_KUBECONFIG="${job_dir}/kubeconfig" \
       BUILDER_IMAGE="registry.example/ai-builder@${TEST_DIGEST}" \
       DEPLOYED_REVISION="$TEST_REVISION" \
       BUILDER_K8S_NAMESPACE="release-ns" \
@@ -2054,7 +2069,7 @@ assert_ci_update_failure_and_lock_contract() {
     (
       cd "$job_dir"
       PATH="${FAKE_BIN}:$PATH" \
-      APAAS_KUBECONFIG="${job_dir}/kubeconfig" \
+      BUILDER_KUBECONFIG="${job_dir}/kubeconfig" \
       BUILDER_IMAGE="registry.example/ai-builder@${TEST_DIGEST}" \
       DEPLOYED_REVISION="$TEST_REVISION" \
       BUILDER_K8S_NAMESPACE="release-ns" \
@@ -2082,7 +2097,7 @@ assert_ci_update_failure_and_lock_contract() {
     (
       cd "$job_dir"
       PATH="${FAKE_BIN}:$PATH" \
-      APAAS_KUBECONFIG="${job_dir}/kubeconfig" \
+      BUILDER_KUBECONFIG="${job_dir}/kubeconfig" \
       BUILDER_IMAGE="registry.example/ai-builder@${TEST_DIGEST}" \
       DEPLOYED_REVISION="$TEST_REVISION" \
       BUILDER_K8S_NAMESPACE="release-ns" \
@@ -2314,7 +2329,7 @@ assert_replacement_lock_cas_contract() {
     (
       cd "$job_dir"
       PATH="${FAKE_BIN}:$PATH" \
-      APAAS_KUBECONFIG="${job_dir}/kubeconfig" \
+      BUILDER_KUBECONFIG="${job_dir}/kubeconfig" \
       BUILDER_IMAGE="registry.example/ai-builder@${TEST_DIGEST}" \
       DEPLOYED_REVISION="$TEST_REVISION" \
       BUILDER_K8S_NAMESPACE="release-ns" \
@@ -2359,7 +2374,7 @@ assert_replacement_lock_cas_contract() {
     (
       cd "$job_dir"
       PATH="${FAKE_BIN}:$PATH" \
-      APAAS_KUBECONFIG="${job_dir}/kubeconfig" \
+      BUILDER_KUBECONFIG="${job_dir}/kubeconfig" \
       BUILDER_IMAGE="registry.example/ai-builder@${TEST_DIGEST}" \
       DEPLOYED_REVISION="$TEST_REVISION" \
       KUBE_NAMESPACE="release-ns" \
@@ -2413,7 +2428,7 @@ assert_replacement_lock_cas_contract() {
     (
       cd "$job_dir"
       PATH="${FAKE_BIN}:$PATH" \
-      APAAS_KUBECONFIG="${job_dir}/kubeconfig" \
+      BUILDER_KUBECONFIG="${job_dir}/kubeconfig" \
       BUILDER_K8S_NAMESPACE="release-ns" \
       BUILDER_K8S_STATEFULSET="ai-builder" \
       BUILDER_K8S_BACKEND_CONTAINER="ai-builder" \

@@ -23,12 +23,12 @@ release_and_update_server:
     - test -n "${BUILDER_SMOKE_PASSWORD:-}"
     - mkdir -p build
     - printf 'BUILDER_IMAGE=%s\nDEPLOYED_REVISION=%s\n' "${BUILDER_IMAGE}" "${DEPLOYED_REVISION}" > build/release.env
-    - test -n "${APAAS_KUBECONFIG_B64:-}${APAAS_KUBECONFIG:-}"
+    - test -n "${BUILDER_KUBECONFIG_B64:-}${BUILDER_KUBECONFIG:-}"
     - |
-      if [ -n "${APAAS_KUBECONFIG_B64:-}" ]; then
-        printf '%s' "${APAAS_KUBECONFIG_B64}" | base64 -d > /tmp/kubeconfig
+      if [ -n "${BUILDER_KUBECONFIG_B64:-}" ]; then
+        printf '%s' "${BUILDER_KUBECONFIG_B64}" | base64 -d > /tmp/kubeconfig
       else
-        cp "${APAAS_KUBECONFIG}" /tmp/kubeconfig
+        cp "${BUILDER_KUBECONFIG}" /tmp/kubeconfig
       fi
       chmod 600 /tmp/kubeconfig
       export KUBECONFIG=/tmp/kubeconfig
@@ -393,11 +393,11 @@ release_builder_browser_smoke:
     - npm ci
     - npm exec -- playwright install msedge
     - |
-      test -n "${APAAS_KUBECONFIG_B64:-}${APAAS_KUBECONFIG:-}"
-      if [ -n "${APAAS_KUBECONFIG_B64:-}" ]; then
-        printf '%s' "${APAAS_KUBECONFIG_B64}" | base64 -d > /tmp/kubeconfig
+      test -n "${BUILDER_KUBECONFIG_B64:-}${BUILDER_KUBECONFIG:-}"
+      if [ -n "${BUILDER_KUBECONFIG_B64:-}" ]; then
+        printf '%s' "${BUILDER_KUBECONFIG_B64}" | base64 -d > /tmp/kubeconfig
       else
-        cp "${APAAS_KUBECONFIG}" /tmp/kubeconfig
+        cp "${BUILDER_KUBECONFIG}" /tmp/kubeconfig
       fi
       chmod 600 /tmp/kubeconfig
       export KUBECONFIG=/tmp/kubeconfig
@@ -484,12 +484,12 @@ release_builder_recovery:
   rules:
     - when: always
   script:
-    - test -n "${APAAS_KUBECONFIG_B64:-}${APAAS_KUBECONFIG:-}"
+    - test -n "${BUILDER_KUBECONFIG_B64:-}${BUILDER_KUBECONFIG:-}"
     - |
-      if [ -n "${APAAS_KUBECONFIG_B64:-}" ]; then
-        printf '%s' "${APAAS_KUBECONFIG_B64}" | base64 -d > /tmp/kubeconfig
+      if [ -n "${BUILDER_KUBECONFIG_B64:-}" ]; then
+        printf '%s' "${BUILDER_KUBECONFIG_B64}" | base64 -d > /tmp/kubeconfig
       else
-        cp "${APAAS_KUBECONFIG}" /tmp/kubeconfig
+        cp "${BUILDER_KUBECONFIG}" /tmp/kubeconfig
       fi
       chmod 600 /tmp/kubeconfig
       export KUBECONFIG=/tmp/kubeconfig
