@@ -89,16 +89,22 @@ build_release_image:
       when: on_success
     - when: never
   script:
-    - test -n "${APAAS_DOCKER_USERNAME:-}"
-    - test -n "${APAAS_DOCKER_PASSWORD:-}"
     - export BUILDER_IMAGE_TAG="${BUILDER_IMAGE_TAG:-$(date +%Y.%m.%d)-${CI_COMMIT_SHORT_SHA}}"
     - export BUILDER_IMAGE="${BUILDER_IMAGE_REPOSITORY}:${BUILDER_IMAGE_TAG}"
     - export DOCKER_CONFIG="${CI_PROJECT_DIR}/.docker"
     - mkdir -p "${DOCKER_CONFIG}" build
     - |
-      registry="${BUILDER_IMAGE_REPOSITORY%%/*}"
-      registry_auth="$(printf '%s:%s' "${APAAS_DOCKER_USERNAME}" "${APAAS_DOCKER_PASSWORD}" | base64 | tr -d '\n')"
-      printf '{"auths":{"%s":{"auth":"%s"}}}' "${registry}" "${registry_auth}" > "${DOCKER_CONFIG}/config.json"
+      if [ -n "${BUILDER_REGISTRY_AUTH_FILE:-}" ]; then
+        test -s "${BUILDER_REGISTRY_AUTH_FILE}"
+        cp "${BUILDER_REGISTRY_AUTH_FILE}" "${DOCKER_CONFIG}/config.json"
+      else
+        test -n "${BUILDER_REGISTRY_USERNAME:-}"
+        test -n "${BUILDER_REGISTRY_PASSWORD:-}"
+        registry="${BUILDER_IMAGE_REPOSITORY%%/*}"
+        registry_auth="$(printf '%s:%s' "${BUILDER_REGISTRY_USERNAME}" "${BUILDER_REGISTRY_PASSWORD}" | base64 | tr -d '\n')"
+        printf '{"auths":{"%s":{"auth":"%s"}}}' "${registry}" "${registry_auth}" > "${DOCKER_CONFIG}/config.json"
+      fi
+      chmod 600 "${DOCKER_CONFIG}/config.json"
     - |
       buildctl-daemonless.sh build \
         --frontend dockerfile.v0 \
@@ -204,6 +210,23 @@ publish_release_metadata:
     reports:
       dotenv: build/release.env
 
+prepare_release_kubectl:
+  stage: build
+  image:
+    name: hub-mirror.dfy.definesys.cn/bitnami/kubectl:1.30.7
+    entrypoint: [""]
+  rules:
+    - if: '$RUN_RELEASE_AND_UPDATE_SERVER == "1" && $BUILDER_RELEASE_CONFIRM == "release-and-update-server"'
+      when: on_success
+    - when: never
+  script:
+    - bash scripts/prepare_release_kubectl.sh export
+    - build/tools/kubectl version --client
+  artifacts:
+    expire_in: 1 day
+    paths:
+      - build/tools/kubectl
+
 release_builder_preflight:
   stage: release
   image:
@@ -211,6 +234,8 @@ release_builder_preflight:
     entrypoint: [""]
   needs:
     - job: publish_release_metadata
+      artifacts: true
+    - job: prepare_release_kubectl
       artifacts: true
   variables:
     GIT_DEPTH: "0"
@@ -230,17 +255,16 @@ release_builder_preflight:
       when: on_success
     - when: never
   before_script:
-    - curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.30.7/bin/linux/amd64/kubectl
-    - chmod +x /usr/local/bin/kubectl
+    - bash scripts/prepare_release_kubectl.sh install
     - kubectl version --client
     - npm ci
     - npm exec -- playwright install msedge
     - |
-      test -n "${APAAS_KUBECONFIG_B64:-}${APAAS_KUBECONFIG:-}"
-      if [ -n "${APAAS_KUBECONFIG_B64:-}" ]; then
-        printf '%s' "${APAAS_KUBECONFIG_B64}" | base64 -d > /tmp/kubeconfig
+      test -n "${BUILDER_KUBECONFIG_B64:-}${BUILDER_KUBECONFIG:-}"
+      if [ -n "${BUILDER_KUBECONFIG_B64:-}" ]; then
+        printf '%s' "${BUILDER_KUBECONFIG_B64}" | base64 -d > /tmp/kubeconfig
       else
-        cp "${APAAS_KUBECONFIG}" /tmp/kubeconfig
+        cp "${BUILDER_KUBECONFIG}" /tmp/kubeconfig
       fi
       chmod 600 /tmp/kubeconfig
       export KUBECONFIG=/tmp/kubeconfig

@@ -252,8 +252,9 @@ kubectl delete ns apaas-builder
 仓库根目录 `.gitlab-ci.yml` 参考 `agent-runtime`，仅允许 Web、API 或 Trigger
 手动触发。GitLab 项目变量需配置：
 
-- `APAAS_DOCKER_USERNAME`、`APAAS_DOCKER_PASSWORD`
-- `APAAS_KUBECONFIG_B64`，或文件类型变量 `APAAS_KUBECONFIG`
+- 推荐使用文件类型变量 `BUILDER_REGISTRY_AUTH_FILE`（Docker `config.json`）；
+  也可使用 `BUILDER_REGISTRY_USERNAME`、`BUILDER_REGISTRY_PASSWORD`
+- `BUILDER_KUBECONFIG_B64`，或文件类型变量 `BUILDER_KUBECONFIG`
 - `RUN_RELEASE_AND_UPDATE_SERVER=1`
 - `BUILDER_RELEASE_CONFIRM=release-and-update-server`
 
