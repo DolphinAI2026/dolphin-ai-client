@@ -309,6 +309,22 @@ describe('tenant URL route mount gate', () => {
     expect(next).toHaveBeenCalledWith()
   })
 
+  it('keeps a trailing-slash legacy coding URL inside the Code product boundary', async () => {
+    installBootstrapState()
+    routerGuardState.productAvailability = { builder: false, code: true }
+    const routeMeta = router.getRoutes().find(route => route.path === '/coding')?.meta
+
+    const next = await runGuard({
+      path: '/coding/',
+      fullPath: `/coding/?tenantId=${currentUuid}`,
+      query: { tenantId: currentUuid },
+      hash: '',
+      meta: routeMeta,
+    })
+
+    expect(next).toHaveBeenCalledWith()
+  })
+
   it('redirects Builder-only access to the legacy coding route to Builder home', async () => {
     installBootstrapState()
     routerGuardState.productAvailability = { builder: true, code: false }

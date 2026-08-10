@@ -68,7 +68,10 @@ export function visibleModeNav(mode: AppMode, desktop: boolean): ModeNavItem[] {
 }
 
 export function isCodeRoutePath(path: string): boolean {
-  return path === '/coding' || path === '/code' || path.startsWith('/code/')
+  const normalizedPath = path.length > 1 ? path.replace(/\/+$/, '') : path
+  return normalizedPath === '/coding'
+    || normalizedPath === '/code'
+    || normalizedPath.startsWith('/code/')
 }
 
 export function modeForRoutePath(path: string): AppMode {

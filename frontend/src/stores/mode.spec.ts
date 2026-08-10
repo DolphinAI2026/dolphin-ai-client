@@ -30,8 +30,11 @@ describe('mode store metadata', () => {
     expect(isCodeRoutePath('/code/apps')).toBe(true)
     expect(isCodeRoutePath('/apps')).toBe(false)
     expect(isCodeRoutePath('/coding')).toBe(true)
+    expect(isCodeRoutePath('/coding/')).toBe(true)
+    expect(isCodeRoutePath('/coding-foo')).toBe(false)
     expect(modeForRoutePath('/code/apps')).toBe('code')
     expect(modeForRoutePath('/coding')).toBe('code')
+    expect(modeForRoutePath('/coding/')).toBe('code')
     expect(modeForRoutePath('/apps')).toBe('builder')
   })
 
