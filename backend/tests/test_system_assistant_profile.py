@@ -12,7 +12,11 @@ from app.agents.profile import (
     resolve_profile,
     ws_bind_view_context,
 )
-from app.ai_chat.agent import _apply_session_overrides, _is_system_assistant_intro_request
+from app.ai_chat.agent import (
+    _SYSTEM_ASSISTANT_INTRO_RESPONSE,
+    _apply_session_overrides,
+    _is_system_assistant_intro_request,
+)
 
 
 def test_system_assistant_profile_exposes_workspace_runtime_and_diagnostics_only():
@@ -25,6 +29,8 @@ def test_system_assistant_profile_exposes_workspace_runtime_and_diagnostics_only
     assert "write_workspace_files" in tools
     assert "run_workspace_command" in tools
     assert "list_dev_workspaces" in tools
+    assert "create_dev_workspace" in tools
+    assert "init_apaas_backend_workspace" in tools
     assert "doctor_apaas_backend_workspace" in tools
     assert "lint_apaas_backend_workspace" in tools
     assert {"use_skill", "read_knowledge", "search_knowledge"}.issubset(tools)
@@ -40,10 +46,43 @@ def test_system_assistant_profile_exposes_workspace_runtime_and_diagnostics_only
         "deploy_application",
         "publish_application",
         "publish_dev_workspace",
+        "upload_external_zip_to_apaas",
         "create_apaas_app_dict",
         "set_apaas_form_permissions",
+        "delete_config_skill",
+        "save_config_skill",
+        "create_skill",
+        "write_skill_file",
+        "update_skill_metadata",
     ):
         assert forbidden not in tools
+
+
+def test_system_assistant_prompt_describes_seed_workspace_and_bound_workspace_contract():
+    prompt = resolve_profile("system_assistant").system_prompt
+
+    assert "内置 dev scene/seed scaffold" in prompt
+    assert "create_dev_workspace" in prompt
+    assert "不是创建 Builder/aPaaS 应用" in prompt
+    assert "生成开发规格或工程草稿" in prompt
+    assert "初始化 aPaaS 后端骨架" in prompt
+    assert "doctor、lint 和验证" in prompt
+    assert "生成和迭代工作区内的 user Skill 草稿" in prompt
+    assert "不写共享 Skill 库" in prompt
+    assert "单工作区锁" in prompt
+    assert "数字员工能力" in prompt
+
+
+def test_system_assistant_intro_reports_four_compact_real_capability_directions():
+    numbered_directions = [
+        line for line in _SYSTEM_ASSISTANT_INTRO_RESPONSE.splitlines()
+        if line[:2] in {"1.", "2.", "3.", "4.", "5."}
+    ]
+
+    assert len(numbered_directions) == 4
+    assert "种子工程/工作区" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
+    assert "生成或迭代工作区 Skill 草稿" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
+    assert "平台配置、部署发布和数字员工能力暂不开放" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
 
 
 def test_system_assistant_profile_does_not_require_a_bound_workspace():
@@ -86,6 +125,7 @@ def test_system_assistant_code_session_locks_bound_workspace_and_context():
     assert prompt == profile.system_prompt
     assert tools == set(narrow_tools_for_locked_ws(profile.tool_names, "ws-system"))
     assert "list_dev_workspaces" not in tools
+    assert "create_dev_workspace" not in tools
     assert locked_ws_id == "ws-system"
     assert "ws-system" in (ws_bind_view_context(locked_ws_id) or "")
 
@@ -106,6 +146,7 @@ def test_system_assistant_code_session_without_workspace_can_discover_one():
 
     assert tools == set(profile.tool_names)
     assert "list_dev_workspaces" in tools
+    assert "create_dev_workspace" in tools
     assert locked_ws_id is None
     assert ws_bind_view_context(locked_ws_id) is None
 
