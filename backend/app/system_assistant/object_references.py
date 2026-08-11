@@ -67,13 +67,14 @@ def _freeze(value: Any) -> Any:
     if value is None or type(value) is bool:
         return value
     if isinstance(value, int):
-        return int(value)
+        return int.__int__(value)
     if isinstance(value, float):
-        if not math.isfinite(value):
+        frozen_float = float.__float__(value)
+        if not math.isfinite(frozen_float):
             raise ObjectReferenceError("OBJECT_MAPPING_UNRESOLVED")
-        return float(value)
+        return frozen_float
     if isinstance(value, str):
-        return str(value)
+        return str.__str__(value)
     raise ObjectReferenceError("OBJECT_MAPPING_UNRESOLVED")
 
 

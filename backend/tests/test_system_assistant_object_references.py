@@ -20,6 +20,26 @@ class MutableFloat(float):
     pass
 
 
+class DeceptiveInt(int):
+    def __int__(self):
+        return 999
+
+
+class DeceptiveStr(str):
+    def __str__(self):
+        return "poisoned"
+
+
+class DeceptiveFloat(float):
+    def __float__(self):
+        return float("inf")
+
+
+class DeceptiveInfiniteFloat(float):
+    def __float__(self):
+        return 1.5
+
+
 def _context(*, tenant_id=7, objects=None):
     return {
         "tenant_id": tenant_id,
@@ -126,6 +146,42 @@ def test_resolver_normalizes_mutable_metadata_scalar_subclasses(source_value, ex
     assert not hasattr(resolved.metadata["payload"], "mutable_state")
     source_value.mutable_state["status"] = "after"
     assert resolved.metadata_digest == original_digest
+
+
+@pytest.mark.parametrize(
+    ("source_value", "expected_value"),
+    [
+        (DeceptiveInt(7), 7),
+        (DeceptiveStr("ready"), "ready"),
+        (DeceptiveFloat(1.5), 1.5),
+    ],
+)
+def test_resolver_uses_scalar_subclass_base_values(source_value, expected_value):
+    context = _context()
+    context["object_catalog"]["workspace:ws-a"]["metadata"] = {"payload": source_value}
+    expected_context = _context()
+    expected_context["object_catalog"]["workspace:ws-a"]["metadata"] = {
+        "payload": expected_value
+    }
+
+    resolved = resolve_object_ref("workspace:ws-a", context)
+    expected = resolve_object_ref("workspace:ws-a", expected_context)
+
+    assert resolved.metadata["payload"] == expected_value
+    assert type(resolved.metadata["payload"]) is type(expected_value)
+    assert resolved.metadata_digest == expected.metadata_digest
+
+
+def test_resolver_rejects_nonfinite_float_subclass_from_base_value():
+    context = _context()
+    context["object_catalog"]["workspace:ws-a"]["metadata"] = {
+        "payload": DeceptiveInfiniteFloat(float("inf"))
+    }
+
+    with pytest.raises(ObjectReferenceError) as raised:
+        resolve_object_ref("workspace:ws-a", context)
+
+    assert raised.value.code == "OBJECT_MAPPING_UNRESOLVED"
 
 
 def test_ambiguous_or_revision_drift_object_refs_have_typed_errors():
