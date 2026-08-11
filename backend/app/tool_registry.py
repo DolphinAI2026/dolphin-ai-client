@@ -216,8 +216,12 @@ def _reload_locked() -> Mapping[str, Any]:
     _capability_projection.cache_clear()
     # Import lazily to avoid the service's normal ``from app.tool_registry`` cycle.
     from app.services.tool_contract_service import clear_cache as clear_contract_cache
+    from app.system_assistant.capability_projection import (
+        invalidate_projection_cache,
+    )
 
     clear_contract_cache()
+    invalidate_projection_cache()
     return _load()
 
 

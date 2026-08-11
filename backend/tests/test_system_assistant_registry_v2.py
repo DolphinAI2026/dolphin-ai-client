@@ -232,6 +232,24 @@ def test_reload_clears_loader_contract_and_projection_caches(_isolated_registry)
     }
 
 
+def test_reload_invalidates_system_assistant_projection_cache(
+    _isolated_registry, monkeypatch
+):
+    from app.system_assistant import capability_projection as projection
+
+    invalidations: list[str | None] = []
+    monkeypatch.setattr(
+        projection,
+        "invalidate_projection_cache",
+        lambda key=None: invalidations.append(key),
+    )
+    _write_registry(_isolated_registry, _v2_tool("governed_tool"))
+
+    registry.reload()
+
+    assert invalidations == [None]
+
+
 def test_reader_waiting_during_reload_observes_one_new_generation(
     _isolated_registry, monkeypatch
 ):
