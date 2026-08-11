@@ -124,7 +124,7 @@ def _derive_contract(name: str, meta: dict[str, Any]) -> dict[str, Any]:
             # read_only 不需要确认; 其余保守 False (单次细粒度写不强制)
             requires_confirmation = False
 
-    return {
+    contract = {
         "name": name,
         "category": cat,
         "read_only": read_only,
@@ -133,6 +133,20 @@ def _derive_contract(name: str, meta: dict[str, Any]) -> dict[str, Any]:
         "deploys_or_publishes": deploys_or_publishes,
         "requires_confirmation": requires_confirmation,
     }
+    governance_fields = (
+        "capability_code",
+        "contract_revision",
+        "object_type",
+        "action",
+        "risk_level",
+        "workspace_action",
+        "confirmation_policy",
+        "audit_policy",
+        "environment_scope",
+    )
+    if all(field in meta for field in governance_fields):
+        contract.update({field: meta[field] for field in governance_fields})
+    return contract
 
 
 @lru_cache(maxsize=1)

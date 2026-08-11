@@ -30,6 +30,81 @@ VALID_SECTIONS: frozenset[str] = frozenset(
 )
 VALID_AGENTS: frozenset[str] = frozenset({"builder", "coding", "config"})
 
+_SUPPORTED_VERSIONS = frozenset({1, 2})
+_BASE_TOOL_FIELDS = frozenset({
+    "sections",
+    "agents",
+    "category",
+    "description",
+    "search_hint",
+    "read_only",
+    "writes_workspace",
+    "writes_apaas",
+    "deploys_or_publishes",
+    "requires_confirmation",
+})
+_V2_GOVERNANCE_FIELDS = frozenset({
+    "capability_code",
+    "contract_revision",
+    "object_type",
+    "action",
+    "risk_level",
+    "workspace_action",
+    "confirmation_policy",
+    "audit_policy",
+    "environment_scope",
+})
+_V2_TOOL_FIELDS = _BASE_TOOL_FIELDS | _V2_GOVERNANCE_FIELDS
+
+
+def _has_complete_v2_contract(meta: Mapping[str, Any]) -> bool:
+    """Return whether a tool opts into the complete v2 governance contract."""
+    return _V2_GOVERNANCE_FIELDS.issubset(meta)
+
+
+def _validate_v2_contract(name: str, meta: Mapping[str, Any]) -> None:
+    """Validate one complete v2 contract without inferring missing metadata."""
+    unknown = set(meta) - _V2_TOOL_FIELDS
+    if unknown:
+        raise ValueError(f"{name} contains unknown v2 fields: {sorted(unknown)}")
+    for field in _V2_GOVERNANCE_FIELDS:
+        if not isinstance(meta[field], str) or not meta[field].strip():
+            raise ValueError(f"{name}.{field} must be a non-empty string")
+
+    risk_level = meta["risk_level"]
+    workspace_action = meta["workspace_action"]
+    confirmation_policy = meta["confirmation_policy"]
+    expected_confirmation = {
+        "L0": "none",
+        "L1": "same_operator",
+        "L2": "control_plane_approval",
+    }
+    if risk_level not in expected_confirmation:
+        raise ValueError(f"{name}.risk_level is invalid: {risk_level!r}")
+    if (
+        confirmation_policy != expected_confirmation[risk_level]
+        or (risk_level == "L0" and workspace_action != "read")
+    ):
+        raise ValueError(f"{name} has an invalid governance combination")
+
+
+def _validate_registry(registry: dict[str, Any]) -> None:
+    """Validate v2-only governance invariants while retaining legacy entries."""
+    if registry["version"] != 2:
+        return
+
+    capability_codes: set[str] = set()
+    for name, meta in registry["tools"].items():
+        if not isinstance(meta, dict):
+            raise ValueError(f"{name} metadata must be a dict")
+        if not _has_complete_v2_contract(meta):
+            continue
+        _validate_v2_contract(name, meta)
+        capability_code = meta["capability_code"]
+        if capability_code in capability_codes:
+            raise ValueError(f"duplicate capability_code: {capability_code}")
+        capability_codes.add(capability_code)
+
 
 def _freeze_registry(registry: dict[str, Any]) -> Mapping[str, Any]:
     """把 load 出来的 registry 包成 read-only view (递归 proxy tools 字典).
@@ -51,7 +126,7 @@ def _freeze_registry(registry: dict[str, Any]) -> Mapping[str, Any]:
 def load() -> Mapping[str, Any]:
     """读 tool_registry.yaml, 缓存 (LRU size=1).
 
-    返回 read-only Mapping: {"version": 1, "tools": {tool_name: meta_dict, ...}}
+    返回 read-only Mapping: {"version": 1|2, "tools": {tool_name: meta_dict, ...}}
     顶层 + tools 字典都是 MappingProxyType, 调用方写入会 raise TypeError.
 
     若 yaml 缺失 / 解析失败, 抛 FileNotFoundError / yaml.YAMLError —
@@ -61,18 +136,45 @@ def load() -> Mapping[str, Any]:
         registry = yaml.safe_load(f)
     if not isinstance(registry, dict):
         raise ValueError(f"tool_registry.yaml 顶层必须是 dict, 实际 {type(registry).__name__}")
-    if registry.get("version") != 1:
+    if registry.get("version") not in _SUPPORTED_VERSIONS:
         raise ValueError(f"tool_registry.yaml version 不支持: {registry.get('version')}")
     tools = registry.get("tools")
     if not isinstance(tools, dict) or not tools:
         raise ValueError("tool_registry.yaml tools 字段必须是非空 dict")
+    _validate_registry(registry)
     return _freeze_registry(registry)
 
 
 def reload() -> Mapping[str, Any]:
-    """显式清缓存重新 load (测试 / 热替场景用)."""
+    """Atomically invalidate registry-derived caches and re-read the registry."""
     load.cache_clear()
+    _capability_projection.cache_clear()
+    # Import lazily to avoid the service's normal ``from app.tool_registry`` cycle.
+    from app.services.tool_contract_service import clear_cache as clear_contract_cache
+
+    clear_contract_cache()
     return load()
+
+
+@lru_cache(maxsize=1)
+def _capability_projection() -> dict[str, dict[str, str]]:
+    """Build the cacheable v2 capability view used by projection consumers."""
+    projection: dict[str, dict[str, str]] = {}
+    for name, meta in load()["tools"].items():
+        if not _has_complete_v2_contract(meta) or meta.get("deploys_or_publishes"):
+            continue
+        projection[meta["capability_code"]] = {
+            "tool_name": name,
+            "contract_revision": meta["contract_revision"],
+            "object_type": meta["object_type"],
+            "action": meta["action"],
+        }
+    return projection
+
+
+def capability_projection() -> dict[str, dict[str, str]]:
+    """Return a copy of the v2 capability projection, excluding publish tools."""
+    return {code: dict(contract) for code, contract in _capability_projection().items()}
 
 
 def all_tool_names() -> set[str]:
