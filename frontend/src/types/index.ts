@@ -68,6 +68,11 @@ export interface LoginResponse {
   web_console_tenant_id?: string
 }
 
+export interface WebConsoleSessionResponse {
+  access_token: string
+  tenant_id: string
+}
+
 export interface Token {
   access_token: string
   token_type: string

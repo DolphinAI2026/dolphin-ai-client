@@ -7,6 +7,7 @@ import type {
   LoginResponse,
   TenantSelectRequest,
   TenantOption,
+  WebConsoleSessionResponse,
 } from '@/types'
 
 export interface TenantRoleOption {
@@ -138,6 +139,10 @@ export const authApi = {
 
   login(data: LoginRequest) {
     return request.post<any, LoginResponse>('/auth/login', data, { authPolicy: 'public' })
+  },
+
+  createWebConsoleSession() {
+    return request.post<any, WebConsoleSessionResponse>('/auth/web-console/session')
   },
 
   selectTenant(data: TenantSelectRequest, signal?: AbortSignal) {

@@ -21,11 +21,13 @@ import app.routes.auth.login  # noqa: E402
 import app.routes.auth.settings  # noqa: E402
 import app.routes.auth.tenants_admin  # noqa: E402
 import app.routes.auth.tenant_members  # noqa: E402
+import app.routes.auth.web_console_session  # noqa: E402
 
 _login_module = _sys.modules["app.routes.auth.login"]
 _settings_module = _sys.modules["app.routes.auth.settings"]
 _tenants_admin_module = _sys.modules["app.routes.auth.tenants_admin"]
 _tenant_members_module = _sys.modules["app.routes.auth.tenant_members"]
+_web_console_session_module = _sys.modules["app.routes.auth.web_console_session"]
 
 # ── re-exports: login 模块 ────────────────────────────────────────────────────
 # 端点函数
@@ -105,6 +107,7 @@ router = APIRouter(prefix="/auth", tags=["认证"])
 
 # 挂载顺序重要：保证最终路由表与拆分前完全一致。
 router.include_router(_login_module.router)
+router.include_router(_web_console_session_module.router)
 router.include_router(_settings_module.public_router)
 router.include_router(_tenants_admin_module.router)
 router.include_router(_tenant_members_module.router)

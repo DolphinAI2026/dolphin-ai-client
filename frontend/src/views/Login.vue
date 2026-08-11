@@ -159,6 +159,7 @@ import { authApi } from '@/api/auth'
 import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
 import ruijingWhaleMarkUrl from '@/assets/brand/ruijing-whale-mark.svg'
+import { recoverWebConsoleRedirect } from '@/auth/webConsoleSession'
 import { resolveExternalLoginRedirect, safeLoginRedirectPath } from '@/router/loginRedirect'
 import {
   defaultProductHome,
@@ -284,9 +285,22 @@ async function changeDesktopService() {
   }
 }
 
+const recoverExistingWebConsoleSession = async () => {
+  try {
+    const target = await recoverWebConsoleRedirect(
+      route.query.redirect,
+      Boolean(userStore.token),
+    )
+    if (target) window.location.replace(target)
+  } catch {
+    // Keep the login form available when the cached aPaaS session is no longer usable.
+  }
+}
+
 onMounted(() => {
   void probeCaptcha()
   void loadDesktopService()
+  void recoverExistingWebConsoleSession()
 })
 
 const handleLogin = async () => {

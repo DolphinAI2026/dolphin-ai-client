@@ -11,18 +11,21 @@ import {
 } from '@/router/loginRedirect'
 
 const loginHarness = vi.hoisted(() => ({
+  createWebConsoleSession: vi.fn(),
   error: vi.fn(),
   getCaptcha: vi.fn(),
   login: vi.fn(),
   logout: vi.fn(),
   push: vi.fn(),
+  routeQuery: {} as Record<string, unknown>,
   replace: vi.fn(),
+  token: null as string | null,
   toggleTheme: vi.fn(),
 }))
 
 vi.mock('vue-router', async importOriginal => ({
   ...await importOriginal<typeof import('vue-router')>(),
-  useRoute: () => ({ query: {} }),
+  useRoute: () => ({ query: loginHarness.routeQuery }),
   useRouter: () => ({
     push: loginHarness.push,
     replace: loginHarness.replace,
@@ -31,13 +34,17 @@ vi.mock('vue-router', async importOriginal => ({
 }))
 
 vi.mock('@/api/auth', () => ({
-  authApi: { getCaptcha: loginHarness.getCaptcha },
+  authApi: {
+    createWebConsoleSession: loginHarness.createWebConsoleSession,
+    getCaptcha: loginHarness.getCaptcha,
+  },
 }))
 
 vi.mock('@/stores/user', () => ({
   useUserStore: () => ({
     login: loginHarness.login,
     logout: loginHarness.logout,
+    token: loginHarness.token,
   }),
 }))
 
@@ -190,6 +197,9 @@ describe('Login page reuses web auth on desktop', () => {
 describe('Login captcha fallback', () => {
   afterEach(() => {
     vi.clearAllMocks()
+    loginHarness.routeQuery = {}
+    loginHarness.token = null
+    localStorage.clear()
     document.body.innerHTML = ''
   })
 
@@ -257,6 +267,34 @@ describe('Login captcha fallback', () => {
     expect(loginHarness.getCaptcha).toHaveBeenCalledTimes(2)
     expect(loginHarness.error).toHaveBeenCalledTimes(2)
     expect(container.querySelector('input[placeholder="验证码"]')).toBeNull()
+    app.unmount()
+  })
+})
+
+describe('standalone Web Console redirect recovery', () => {
+  afterEach(() => {
+    vi.clearAllMocks()
+    loginHarness.routeQuery = {}
+    loginHarness.token = null
+    localStorage.clear()
+    document.body.innerHTML = ''
+  })
+
+  it('restores a failed management-session handoff without asking for credentials again', async () => {
+    loginHarness.routeQuery = { redirect: '/web-console/' }
+    loginHarness.token = 'committed-builder-token'
+    loginHarness.getCaptcha.mockResolvedValue({ required: false })
+    loginHarness.createWebConsoleSession.mockResolvedValue({
+      access_token: 'web-console-token',
+      tenant_id: '840289793437859841',
+    })
+
+    const { app } = mountLogin()
+    await flushPromises()
+    await flushPromises()
+
+    expect(localStorage.getItem('access_token')).toBe('web-console-token')
+    expect(localStorage.getItem('tenant_id')).toBe('840289793437859841')
     app.unmount()
   })
 })
