@@ -27,24 +27,34 @@ def _utc_naive_now() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
+def _normalise_governance_json_key(key: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(key).lower())
+
+
 class GovernanceJSONMap(TypeDecorator):
     """A versioned audit map that excludes raw tool input and credentials."""
 
     impl = JSON
     cache_ok = True
 
-    _sensitive_key_parts = frozenset({
+    _sensitive_key_names = frozenset({
         "apikey", "args", "argument", "authorization", "connectionstring", "credential",
         "databaseurl", "environment", "filebody", "headers", "mcpheaders", "password",
         "payload", "rawcontent", "secret", "token", "toolargs",
     })
-    _allowed_keys = frozenset({
+    _sensitive_key_parts = frozenset(
+        _normalise_governance_json_key(key) for key in _sensitive_key_names
+    )
+    _allowed_key_names = frozenset({
         "at", "change", "changes", "code", "counts", "delivery_status", "digest", "error_code",
         "generation", "id", "items", "kind", "label", "metadata", "object_ref",
         "object_revision", "phase", "policy_revision", "reference", "references", "result",
         "result_status", "results", "retry_count", "schema_version", "state", "status", "summary",
         "timestamp", "type", "version", "warning", "warnings",
     })
+    _allowed_keys = frozenset(
+        _normalise_governance_json_key(key) for key in _allowed_key_names
+    )
     _connection_string = re.compile(
         r"(?:postgres(?:ql)?|mysql|sqlite|mariadb|mongodb|redis|amqp)://", re.IGNORECASE
     )
@@ -61,7 +71,7 @@ class GovernanceJSONMap(TypeDecorator):
 
     @classmethod
     def _normalise_key(cls, key: Any) -> str:
-        return re.sub(r"[^a-z0-9]", "", str(key).lower())
+        return _normalise_governance_json_key(key)
 
     @classmethod
     def _validate(cls, value: Any) -> None:

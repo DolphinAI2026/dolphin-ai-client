@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import inspect, text
@@ -129,6 +130,30 @@ async def test_migration_blocks_existing_governance_table_missing_status_constra
                 await migrate_system_assistant_governance(conn)
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_missing_named_checks_keep_raw_sql_expressions_for_additive_ddl(monkeypatch):
+    from app.models.system_assistant_governance import ActionRun
+    from app.system_assistant import schema_migration
+
+    statements = []
+
+    async def snapshot(_conn, _table_name):
+        return {"check_constraints": []}
+
+    class FakeConnection:
+        dialect = SimpleNamespace(name="postgresql")
+
+        async def execute(self, statement):
+            statements.append(str(statement))
+
+    monkeypatch.setattr(schema_migration, "_table_snapshot", snapshot)
+
+    await schema_migration._ensure_check_constraints(FakeConnection(), ActionRun.__table__)
+
+    assert any("CHECK (status IN (" in statement for statement in statements)
+    assert any("CHECK (audit_delivery_status IN (" in statement for statement in statements)
 
 
 @pytest.mark.asyncio

@@ -70,9 +70,12 @@ async def _table_snapshot(conn: AsyncConnection, table_name: str) -> dict[str, A
     return await conn.run_sync(inspect_table)
 
 
-def _expected_check_constraints(table) -> dict[str, str]:
+def _expected_check_constraints(table) -> dict[str, tuple[str, str]]:
     return {
-        constraint.name: _normalise_sql(constraint.sqltext)
+        constraint.name: (
+            str(constraint.sqltext),
+            _normalise_sql(constraint.sqltext),
+        )
         for constraint in table.constraints
         if isinstance(constraint, CheckConstraint) and constraint.name
     }
@@ -162,10 +165,10 @@ async def _ensure_check_constraints(conn: AsyncConnection, table) -> None:
         for constraint in state["check_constraints"]
         if constraint.get("name")
     }
-    for name, expected_sql in _expected_check_constraints(table).items():
+    for name, (expected_expression, expected_signature) in _expected_check_constraints(table).items():
         actual_sql = actual_by_name.get(name)
         if actual_sql is not None:
-            if actual_sql != expected_sql:
+            if actual_sql != expected_signature:
                 raise GovernanceSchemaMigrationError(
                     f"{table.name} check constraint definition mismatch: {name}"
                 )
@@ -176,7 +179,7 @@ async def _ensure_check_constraints(conn: AsyncConnection, table) -> None:
             )
         await conn.execute(text(
             f"ALTER TABLE {_identifier(table.name)} ADD CONSTRAINT {_identifier(name)} "
-            f"CHECK ({expected_sql})"
+            f"CHECK ({expected_expression})"
         ))
 
 

@@ -203,6 +203,16 @@ def test_versioned_json_maps_reject_sensitive_key_variants_and_nested_values(fie
         json_type.process_bind_param(value, None)
 
 
+@pytest.mark.parametrize("field_name, value", (
+    ("base_state", {"schema_version": "v1", "object_ref": "application:result"}),
+    ("change_manifest", {"delivery_status": "pending", "retry_count": 1}),
+    ("result_summary", {"result_status": "succeeded", "error_code": "none"}),
+))
+def test_versioned_json_maps_accept_allowed_snake_case_keys(field_name, value):
+    json_type = ActionRun.__table__.c[field_name].type
+    assert json_type.process_bind_param(value, None) == value
+
+
 def test_governance_tables_define_ticket_fk_set_null_and_lookup_indexes():
     ticket_fk = next(
         foreign_key
