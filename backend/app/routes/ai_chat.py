@@ -200,6 +200,21 @@ def _derive_session_title(
     return ""
 
 
+async def _derive_first_turn_title(
+    db: AsyncSession,
+    session: AIChatSession,
+    user_message: str,
+) -> Optional[str]:
+    """Choose a first-turn title without letting system-assistant intent drift."""
+    if not user_message.strip():
+        return None
+    if (
+        getattr(session, "assistant_profile", None) or DEFAULT_ASSISTANT_PROFILE
+    ) == "system_assistant":
+        return _derive_session_title(user_message=user_message) or None
+    return await generate_title(db, session, user_message)
+
+
 def _extract_generated_app_from_tool(t: AIChatToolCall) -> Optional[dict]:
     try:
         result = json.loads(t.result_text or "{}")
@@ -837,7 +852,9 @@ async def send_message(
                     if len(msg_count_res.scalars().all()) <= 1:
                         new_title = None
                         if body.message.strip():
-                            new_title = await generate_title(stream_db, stream_s, body.message)
+                            new_title = await _derive_first_turn_title(
+                                stream_db, stream_s, body.message
+                            )
                         if not new_title:
                             att_res = await stream_db.execute(
                                 select(AIChatAttachment).where(
