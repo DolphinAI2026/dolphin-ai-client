@@ -1,11 +1,22 @@
-"""Durable, payload-safe audit references for system-assistant actions."""
+"""B0 durable persistence contracts for governed system-assistant actions."""
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import re
 from typing import Any, Optional
 from uuid import uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, String, Text
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    JSON,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
 
@@ -16,64 +27,104 @@ def _utc_naive_now() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
-class GovernanceMetadataJSON(TypeDecorator):
-    """JSON map limited to audit references, never raw action input or secrets."""
+class GovernanceJSONMap(TypeDecorator):
+    """A versioned audit map that excludes raw tool input and credentials."""
 
     impl = JSON
     cache_ok = True
 
-    _sensitive_keys = frozenset({
-        "args", "arguments", "body", "content", "connection_string", "database_url",
-        "environment", "environment_variables", "file_body", "headers", "mcp_headers",
-        "password", "payload", "raw_content", "token",
+    _sensitive_key_parts = frozenset({
+        "apikey", "args", "argument", "authorization", "connectionstring", "credential",
+        "databaseurl", "environment", "filebody", "headers", "mcpheaders", "password",
+        "payload", "rawcontent", "secret", "token", "toolargs",
     })
+    _allowed_keys = frozenset({
+        "at", "change", "changes", "code", "counts", "delivery_status", "digest", "error_code",
+        "generation", "id", "items", "kind", "label", "metadata", "object_ref",
+        "object_revision", "phase", "policy_revision", "reference", "references", "result",
+        "result_status", "results", "retry_count", "schema_version", "state", "status", "summary",
+        "timestamp", "type", "version", "warning", "warnings",
+    })
+    _connection_string = re.compile(
+        r"(?:postgres(?:ql)?|mysql|sqlite|mariadb|mongodb|redis|amqp)://", re.IGNORECASE
+    )
+
+    def __init__(self, field_name: str) -> None:
+        self.field_name = field_name
+        super().__init__()
 
     def process_bind_param(self, value: Any, dialect: Any) -> Any:
-        if value is None:
-            return None
         if not isinstance(value, dict):
-            raise ValueError("governance metadata must be a JSON object")
-        self._assert_safe(value)
+            raise ValueError(f"{self.field_name} must be a JSON map")
+        self._validate(value)
         return value
 
     @classmethod
-    def _assert_safe(cls, value: dict[str, Any]) -> None:
-        for key, item in value.items():
-            if str(key).lower() in cls._sensitive_keys:
-                raise ValueError("sensitive values are not permitted in governance metadata")
-            if isinstance(item, dict):
-                cls._assert_safe(item)
-            elif isinstance(item, list):
-                for entry in item:
-                    if isinstance(entry, dict):
-                        cls._assert_safe(entry)
+    def _normalise_key(cls, key: Any) -> str:
+        return re.sub(r"[^a-z0-9]", "", str(key).lower())
+
+    @classmethod
+    def _validate(cls, value: Any) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                normalised = cls._normalise_key(key)
+                if (
+                    normalised in cls._sensitive_key_parts
+                    or normalised not in cls._allowed_keys
+                ):
+                    raise ValueError("sensitive or unsupported key in governance JSON map")
+                cls._validate(item)
+        elif isinstance(value, list):
+            for item in value:
+                cls._validate(item)
+        elif isinstance(value, str) and cls._connection_string.search(value):
+            raise ValueError("sensitive connection string in governance JSON map")
 
 
 class ActionTicket(Base):
-    """A tenant-scoped request to carry out one governed assistant action."""
+    """An expiring authorization ticket; reserve/consume behavior is downstream work."""
 
     __tablename__ = "system_assistant_action_tickets"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('pending', 'approved', 'rejected', 'cancelled', 'executing', 'completed', 'failed')",
+            "status IN ('issued', 'authorized', 'reserved', 'consumed', 'expired', 'revoked')",
             name="ck_system_assistant_action_tickets_status",
         ),
-        Index("ix_system_assistant_action_tickets_tenant_status", "tenant_id", "status"),
+        UniqueConstraint("ticket_id", "tenant_id", name="uq_system_assistant_action_tickets_ticket_tenant"),
         Index(
-            "uq_system_assistant_action_tickets_tenant_correlation",
+            "ix_system_assistant_action_tickets_tenant_user_status_expires",
             "tenant_id",
-            "correlation_id",
-            unique=True,
+            "user_id",
+            "status",
+            "expires_at",
+        ),
+        Index(
+            "ix_system_assistant_action_tickets_session_object_status",
+            "session_public_id",
+            "object_ref",
+            "status",
         ),
     )
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    tenant_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    action_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
-    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    metadata_json: Mapped[Optional[dict[str, Any]]] = mapped_column(GovernanceMetadataJSON(), nullable=True)
+    ticket_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    tenant_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    control_plane_tenant_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    session_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("ai_chat_sessions.id", ondelete="SET NULL", name="fk_system_assistant_action_tickets_session_id"),
+        nullable=True,
+    )
+    session_public_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    object_ref: Mapped[str] = mapped_column(String(500), nullable=False)
+    action_kind: Mapped[str] = mapped_column(String(120), nullable=False)
+    args_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    object_revision: Mapped[str] = mapped_column(String(160), nullable=False)
+    policy_revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    state_version: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utc_naive_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
@@ -84,35 +135,83 @@ class ActionTicket(Base):
 
 
 class ActionRun(Base):
-    """A durable execution attempt. Later B0 work owns state CAS and fencing."""
+    """A durable action attempt. CAS, leases and fences are not implemented here."""
 
     __tablename__ = "system_assistant_action_runs"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('queued', 'reserved', 'running', 'succeeded', 'failed', 'interrupted', 'cancelled')",
+            "status IN ('prepared', 'authorized', 'executing', 'succeeded', 'failed', "
+            "'partially_failed', 'recovered', 'recovery_blocked', 'outcome_unknown', 'aborted')",
             name="ck_system_assistant_action_runs_status",
         ),
-        Index("ix_system_assistant_action_runs_ticket_created", "ticket_id", "created_at"),
-        Index("ix_system_assistant_action_runs_tenant_correlation", "tenant_id", "correlation_id"),
+        CheckConstraint(
+            "audit_delivery_status IN ('not_required', 'pending', 'delivered', 'failed')",
+            name="ck_system_assistant_action_runs_audit_delivery_status",
+        ),
+        Index("ix_system_assistant_action_runs_status_updated", "status", "updated_at"),
+        Index("ix_system_assistant_action_runs_ticket_id", "ticket_id"),
+        Index("ix_system_assistant_action_runs_correlation_id", "correlation_id"),
+        Index("ix_system_assistant_action_runs_object_created", "object_ref", "created_at"),
+        Index(
+            "ix_system_assistant_action_runs_recovery_lease_status",
+            "recovery_lease_expires_at",
+            "status",
+        ),
     )
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    run_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     ticket_id: Mapped[Optional[str]] = mapped_column(
         String(36),
         ForeignKey(
-            "system_assistant_action_tickets.id",
+            "system_assistant_action_tickets.ticket_id",
             ondelete="SET NULL",
             name="fk_system_assistant_action_runs_ticket_id",
         ),
         nullable=True,
     )
-    tenant_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    tool_call_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey(
+            "ai_chat_tool_calls.id",
+            ondelete="SET NULL",
+            name="fk_system_assistant_action_runs_tool_call_id",
+        ),
+        nullable=True,
+    )
+    capability_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    action_kind: Mapped[str] = mapped_column(String(120), nullable=False)
+    object_ref: Mapped[str] = mapped_column(String(500), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    args_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    object_revision: Mapped[str] = mapped_column(String(160), nullable=False)
+    policy_revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    execution_generation: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    lease_owner: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    lease_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    cancel_requested_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    cancel_acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    recovery_owner: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    recovery_lease_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    base_state: Mapped[dict[str, Any]] = mapped_column(GovernanceJSONMap("base_state"), nullable=False, default=dict)
+    change_manifest: Mapped[dict[str, Any]] = mapped_column(
+        GovernanceJSONMap("change_manifest"), nullable=False, default=dict
+    )
+    result_summary: Mapped[dict[str, Any]] = mapped_column(
+        GovernanceJSONMap("result_summary"), nullable=False, default=dict
+    )
     result_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    snapshot_digest: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    metadata_json: Mapped[Optional[dict[str, Any]]] = mapped_column(GovernanceMetadataJSON(), nullable=True)
+    error_code: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    correlation_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    audit_delivery_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="not_required"
+    )
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    state_version: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utc_naive_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=_utc_naive_now,
+        onupdate=_utc_naive_now,
+    )

@@ -1,13 +1,17 @@
 """Strict, additive B0 schema migration checks."""
 from __future__ import annotations
 
+import re
+
 import pytest
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.schema import CreateTable
 
 from app.system_assistant.schema_migration import (
     CompatibilityColumn,
+    GovernanceSchemaMigrationError,
     migrate_system_assistant_governance,
 )
 
@@ -48,10 +52,10 @@ async def test_migration_adds_missing_compatibility_columns_and_new_tables(tmp_p
         }
         assert expected_compatibility <= tables["ai_chat_tool_calls"]
         assert expected_compatibility <= tables["agent_step"]
-        assert {"id", "tenant_id", "correlation_id", "status"} <= tables[
+        assert {"ticket_id", "tenant_id", "correlation_id", "status"} <= tables[
             "system_assistant_action_tickets"
         ]
-        assert {"id", "ticket_id", "result_status", "error_code"} <= tables[
+        assert {"run_id", "ticket_id", "result_status", "error_code"} <= tables[
             "system_assistant_action_runs"
         ]
     finally:
@@ -108,17 +112,106 @@ async def test_migration_propagates_actual_ddl_error(tmp_path):
 
 @pytest.mark.asyncio
 async def test_migration_blocks_existing_governance_table_missing_status_constraint(tmp_path):
+    from sqlalchemy.dialects.sqlite import dialect
+    from app.models.system_assistant_governance import ActionTicket
+
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'missing-check.sqlite3'}")
+    table_sql = str(CreateTable(ActionTicket.__table__).compile(dialect=dialect()))
+    table_sql = re.sub(
+        r",?\s*CONSTRAINT ck_system_assistant_action_tickets_status CHECK \(status IN \([^)]*\)\)",
+        "",
+        table_sql,
+    )
     try:
         async with engine.begin() as conn:
-            await conn.execute(text(
-                "CREATE TABLE system_assistant_action_tickets ("
-                "id VARCHAR(36) PRIMARY KEY, tenant_id INTEGER NOT NULL, "
-                "action_type VARCHAR(64) NOT NULL, correlation_id VARCHAR(64) NOT NULL, "
-                "status VARCHAR(20) NOT NULL, summary TEXT, metadata_json JSON, "
-                "created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)"
-            ))
+            await conn.execute(text(table_sql))
             with pytest.raises(Exception, match="check constraint"):
+                await migrate_system_assistant_governance(conn)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_blocks_same_name_index_with_wrong_definition(tmp_path):
+    from app.models.system_assistant_governance import ActionTicket
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'wrong-index.sqlite3'}")
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(ActionTicket.__table__.create)
+            await conn.execute(text("DROP INDEX ix_system_assistant_action_tickets_tenant_user_status_expires"))
+            await conn.execute(text(
+                "CREATE INDEX ix_system_assistant_action_tickets_tenant_user_status_expires "
+                "ON system_assistant_action_tickets(status)"
+            ))
+            with pytest.raises(Exception, match="index definition mismatch"):
+                await migrate_system_assistant_governance(conn)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_blocks_same_name_check_with_wrong_expression(tmp_path):
+    from sqlalchemy.dialects.sqlite import dialect
+    from app.models.system_assistant_governance import ActionTicket
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'wrong-check.sqlite3'}")
+    table_sql = str(CreateTable(ActionTicket.__table__).compile(dialect=dialect()))
+    table_sql = re.sub(
+        r"CHECK \(status IN \([^)]*\)\)",
+        "CHECK (status IN ('wrong'))",
+        table_sql,
+    )
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text(table_sql))
+            with pytest.raises(Exception, match="check constraint definition mismatch"):
+                await migrate_system_assistant_governance(conn)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_blocks_existing_column_type_drift(tmp_path):
+    from sqlalchemy.dialects.sqlite import dialect
+    from app.models.system_assistant_governance import ActionTicket
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'wrong-type.sqlite3'}")
+    table_sql = str(CreateTable(ActionTicket.__table__).compile(dialect=dialect()))
+    table_sql = table_sql.replace("tenant_id BIGINT", "tenant_id TEXT")
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text(table_sql))
+            with pytest.raises(Exception, match="column definition mismatch"):
+                await migrate_system_assistant_governance(conn)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_blocks_same_name_foreign_key_with_wrong_ondelete(tmp_path):
+    from sqlalchemy.dialects.sqlite import dialect
+    from app.models.system_assistant_governance import ActionRun, ActionTicket
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'wrong-foreign-key.sqlite3'}")
+    table_sql = str(CreateTable(ActionRun.__table__).compile(dialect=dialect()))
+    table_sql = table_sql.replace(
+        "CONSTRAINT fk_system_assistant_action_runs_ticket_id "
+        "FOREIGN KEY(ticket_id) REFERENCES system_assistant_action_tickets "
+        "(ticket_id) ON DELETE SET NULL",
+        "CONSTRAINT fk_system_assistant_action_runs_ticket_id "
+        "FOREIGN KEY(ticket_id) REFERENCES system_assistant_action_tickets "
+        "(ticket_id) ON DELETE CASCADE",
+    )
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("CREATE TABLE ai_chat_tool_calls (id INTEGER PRIMARY KEY)"))
+            await conn.run_sync(ActionTicket.__table__.create)
+            await conn.execute(text(table_sql))
+            with pytest.raises(
+                GovernanceSchemaMigrationError,
+                match="foreign key definition mismatch",
+            ):
                 await migrate_system_assistant_governance(conn)
     finally:
         await engine.dispose()
