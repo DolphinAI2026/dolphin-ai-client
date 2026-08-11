@@ -201,6 +201,12 @@ run_release_builder_prebuild_preflight() {
 }
 
 run_release_builder_preflight() {
+  log "verify target image frontend base and source revision"
+  CONTAINER_CLI="$CONTAINER_CLI" \
+    BUILDER_IMAGE="$IMAGE" \
+    EXPECTED_BASE_URL="$VITE_BASE_URL" \
+    EXPECTED_BUILD_SHA="$GIT_FULL_SHA" \
+    bash "$WORKDIR/scripts/verify_builder_image_frontend_base.sh"
   log "verify immutable image release preflight"
   helper_env env BUILDER_IMAGE="$IMAGE" \
     bash "$WORKDIR/scripts/verify_builder_tenant_url_smoke.sh" --online-preflight
