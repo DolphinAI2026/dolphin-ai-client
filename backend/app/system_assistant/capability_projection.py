@@ -247,14 +247,14 @@ async def load_capability_projection(
     from dataclasses import replace
 
     from app.config import validate_governance_policy
+    from app.tool_registry import governance_view as capture_governance_view
 
     mode = validate_governance_policy(policy, policy_revision=int(policy_revision))
     if mode == "legacy":
         return CapabilityProjection(status="not_needed", policy_revision=policy_revision)
     key = str(tenant_id)
+    captured_from_registry = governance_view is None
     if governance_view is None:
-        from app.tool_registry import governance_view as capture_governance_view
-
         governance_view = capture_governance_view()
     current_registry_digest = _registry_digest(governance_view)
     if client is None:
@@ -268,6 +268,17 @@ async def load_capability_projection(
             reason=loaded.reason or "control_plane_unavailable",
             policy_revision=policy_revision,
         )
+    # The registry reload coordinator may replace the generation while the
+    # remote request is suspended. Never publish a merge made from that stale
+    # view; the next read will capture the new generation and retry normally.
+    if captured_from_registry or governance_view.__class__.__name__ == "GovernanceRegistryView":
+        current_view = capture_governance_view()
+        if _registry_digest(current_view) != current_registry_digest:
+            return CapabilityProjection(
+                status="unavailable",
+                reason="registry_generation_changed",
+                policy_revision=policy_revision,
+            )
     result = build_capability_projection(
         loaded.items,
         governance_view=governance_view,

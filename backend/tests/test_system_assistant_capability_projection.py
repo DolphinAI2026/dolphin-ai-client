@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from asyncio import Event
 
 import pytest
 
@@ -169,3 +170,64 @@ async def test_fresh_local_projection_still_checks_remote_etag():
 
     assert first.status == second.status == "ready"
     assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_registry_reload_during_remote_load_drops_old_generation(monkeypatch):
+    from app.system_assistant.capability_projection import projection_cache
+    import app.tool_registry as registry
+
+    projection_cache.invalidate("tenant-race")
+    old_view = _view(("read_tool", "workspace.read", "L0", 1))
+    new_view = _view(("new_read_tool", "workspace.new_read", "L0", 2))
+    current = {"view": old_view}
+    monkeypatch.setattr(registry, "governance_view", lambda: current["view"])
+    entered = Event()
+    release = Event()
+
+    class BarrierClient:
+        async def load(self, **_kwargs):
+            entered.set()
+            await release.wait()
+            return type(
+                "Loaded",
+                (),
+                {
+                    "available": True,
+                    "items": [_remote()],
+                    "projection_revision": "rev-1",
+                    "etag": "rev-1",
+                },
+            )()
+
+    task = __import__("asyncio").create_task(load_capability_projection(
+        tenant_id="tenant-race", policy="shadow", policy_revision=1,
+        client=BarrierClient(),
+    ))
+    await entered.wait()
+    current["view"] = new_view
+    release.set()
+    result = await task
+
+    assert result.status == "unavailable"
+    assert projection_cache.get("tenant-race") is None
+
+    class ReadyClient:
+        async def load(self, **_kwargs):
+            return type(
+                "Loaded",
+                (),
+                {
+                    "available": True,
+                    "items": [_remote(code="workspace.new_read")],
+                    "projection_revision": "rev-2",
+                    "etag": "rev-2",
+                },
+            )()
+
+    next_result = await load_capability_projection(
+        tenant_id="tenant-race", policy="shadow", policy_revision=1,
+        client=ReadyClient(),
+    )
+    assert next_result.status == "ready"
+    assert next_result.items[0]["capability_code"] == "workspace.new_read"
