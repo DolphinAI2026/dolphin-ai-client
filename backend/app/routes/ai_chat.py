@@ -549,7 +549,8 @@ async def create_session(
             raise HTTPException(status_code=400, detail="所选模型不可用或不支持当前助手")
         selected_llm_config_id = cfg.id
     title = body.title or "新会话"
-    app_id = body.app_id
+    is_system_assistant = body.assistant_profile == "system_assistant"
+    app_id = None if is_system_assistant else body.app_id
     if body.mode == "code" and body.workspace_id:
         # 代码会话从「我的开发」/clone/本地夹各入口进来,单点派生两件事:
         #  ① 标题用工作区显示名(比通用「代码会话」有意义);查不到则回退前端传的标题。
@@ -560,7 +561,7 @@ async def create_session(
             ws_name = (info.get("display_name") or info.get("project_name") or "").strip()
             if ws_name:
                 title = ws_name
-            if app_id is None:
+            if app_id is None and not is_system_assistant:
                 ws_proj = info.get("project_id")
                 if ws_proj:
                     bound_app = (await db.execute(

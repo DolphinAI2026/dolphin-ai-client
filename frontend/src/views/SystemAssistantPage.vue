@@ -11,15 +11,10 @@ import type { AgentMessage } from '@/components/common/agent-conversation/types'
 import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
 import { aiChatApi } from '@/api/aiChat'
 import type { BuilderModelOption } from '@/api/llmConfig'
-import {
-  systemAssistantApi,
-  type SystemAssistantBootstrap,
-} from '@/api/systemAssistant'
-import { listSkills } from '@/api/skills'
+import { systemAssistantApi } from '@/api/systemAssistant'
 import { useAiChatSession } from '@/composables/useAiChatSession'
 import { isImageFile } from '@/utils/pasteImages'
 import ArtifactPanel from '@/views/workspace/panels/ArtifactPanel.vue'
-import SystemAssistantBaseline from './system-assistant/SystemAssistantBaseline.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -45,18 +40,13 @@ const {
   selectedLlmId,
 })
 
-const bootstrap = ref<SystemAssistantBootstrap | null>(null)
-const bootstrapLoading = ref(true)
-const bootstrapError = ref('')
 const inputText = ref('')
 const pendingFiles = ref<File[]>([])
-const availableSkills = ref<{ name: string; description: string }[]>([])
 const traceDrawerVisible = ref(false)
 const tracePreferRunId = ref<string | null>(null)
 const artifactDrawerVisible = ref(false)
 const activeArtifact = ref<any>(null)
 
-const hasConversation = computed(() => agentMessages.value.length > 0 || Boolean(currentSession.value))
 const currentSessionTitle = computed(() => {
   const id = currentSession.value?.id
   const latest = id == null ? null : sessions.value.find(session => session.id === id)
@@ -82,18 +72,6 @@ function syncSelectedLlmFromSession() {
   selectedLlmId.value = sessionLlm != null && ids.has(sessionLlm)
     ? sessionLlm
     : (llmOptions.value.find(option => option.is_default)?.id ?? null)
-}
-
-async function loadBootstrap() {
-  bootstrapLoading.value = true
-  bootstrapError.value = ''
-  try {
-    bootstrap.value = await systemAssistantApi.getBootstrap()
-  } catch (error: any) {
-    bootstrapError.value = error?.response?.data?.detail || error?.message || '企业 Code 基线暂时无法读取'
-  } finally {
-    bootstrapLoading.value = false
-  }
 }
 
 async function loadModels() {
@@ -157,11 +135,6 @@ function removePendingFile(_: UnifiedChatAttachment, index: number) {
   pendingFiles.value = pendingFiles.value.filter((_, itemIndex) => itemIndex !== index)
 }
 
-function onSkillPicked(name: string) {
-  const prefix = `请使用技能 ${name}：`
-  inputText.value = inputText.value ? `${prefix}${inputText.value}` : prefix
-}
-
 async function doSend() {
   const text = inputText.value.trim()
   if ((!text && pendingFiles.value.length === 0) || sending.value) return
@@ -217,10 +190,8 @@ function onSessionRenamed(event: Event) {
 onMounted(async () => {
   window.addEventListener('system-assistant-session-renamed', onSessionRenamed)
   await Promise.all([
-    loadBootstrap(),
     loadModels(),
     loadSessions(),
-    listSkills().then(value => { availableSkills.value = value }).catch(() => {}),
   ])
   await selectSession(querySessionId())
 })
@@ -241,9 +212,6 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="system-assistant-actions">
-        <button type="button" class="header-icon-button" title="刷新基线" @click="loadBootstrap">
-          <AppIcon name="refresh" :size="15" />
-        </button>
         <button v-if="currentSession" type="button" class="header-icon-button" title="查看执行记录" @click="openTrace()">
           <AppIcon name="flow" :size="15" />
         </button>
@@ -254,32 +222,19 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <div v-if="bootstrapError" class="baseline-error">
-      <span>{{ bootstrapError }}</span>
-      <button type="button" @click="loadBootstrap">重试</button>
-    </div>
-
     <AgentConversation
       class="system-assistant-conversation"
       :messages="agentMessages"
       :typing="typing"
       :typing-seconds="typingSeconds"
-      :loading="bootstrapLoading"
+      :loading="false"
       :tool-grouping="true"
       empty-title="系统助手"
-      empty-hint="描述你要诊断、建设或修改的工程与系统能力"
+      empty-hint="描述要分析、修改或验证的代码工程，也可以直接上传文件"
       @answer-ask="option => send(option)"
       @open-trace="openTrace"
       @open-artifact="openArtifact"
-    >
-      <template #list-prefix>
-        <SystemAssistantBaseline
-          v-if="bootstrap"
-          :bootstrap="bootstrap"
-          :compact="hasConversation"
-        />
-      </template>
-    </AgentConversation>
+    />
 
     <div class="system-assistant-composer">
       <UnifiedChatComposer
@@ -288,14 +243,12 @@ onBeforeUnmount(() => {
         :sending="sending"
         :send-disabled="!inputText.trim() && pendingFiles.length === 0"
         :multiple="true"
-        :skills="availableSkills"
-        placeholder="询问工程、环境、能力、知识或 Skill，也可以直接上传文件..."
+        placeholder="询问代码、构建、测试或运行问题，也可以直接上传文件..."
         hint=""
         sending-hint="任务运行中，可继续编辑下一条消息"
         @send="doSend"
         @stop="onStop"
         @files-picked="onComposerFilesPicked"
-        @skill-picked="onSkillPicked"
         @remove-attachment="removePendingFile"
       >
         <template #footer-left>

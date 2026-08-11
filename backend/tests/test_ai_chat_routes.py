@@ -149,6 +149,29 @@ async def test_system_assistant_detail_keeps_existing_attachment_shape(db_sessio
 
 
 @pytest.mark.asyncio
+async def test_system_assistant_session_drops_application_context(db_session):
+    tenant = Tenant(tenant_name="sa_code_only_t", tenant_code="sa_code_only_t")
+    db_session.add(tenant)
+    await db_session.flush()
+    user = User(username="sa_code_only_user", hashed_password="x")
+    db_session.add(user)
+    await db_session.flush()
+
+    created = await create_session(
+        CreateSessionRequest(
+            mode="code",
+            assistant_profile="system_assistant",
+            app_id=987,
+        ),
+        _ctx(user, tenant.id),
+        db_session,
+    )
+
+    assert created["assistant_profile"] == "system_assistant"
+    assert created["app_id"] is None
+
+
+@pytest.mark.asyncio
 async def test_list_sessions_can_filter_assistant_profile_without_changing_mode(db_session):
     tenant = Tenant(tenant_name="sa_filter_t", tenant_code="sa_filter_t")
     db_session.add(tenant)

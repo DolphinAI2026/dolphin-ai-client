@@ -677,6 +677,13 @@ async def _call_llm_stream_with_fallback(
 
 # ─────────────────────────── 构建 agent 输入 ───────────────────────────
 
+
+def _session_app_context_id(session: AIChatSession) -> int | None:
+    """System-assistant conversations never inherit product application context."""
+    if getattr(session, "assistant_profile", None) == "system_assistant":
+        return None
+    return getattr(session, "app_id", None)
+
 async def _build_initial_messages(
     db: AsyncSession, session: AIChatSession, current_user_message: str,
     section: Optional[str] = None,
@@ -699,7 +706,8 @@ async def _build_initial_messages(
         system_prompt = await _resolve_unified_system_prompt(
             db, getattr(session, "tenant_id", None),
         )
-    app_id = getattr(session, "app_id", None)
+    assistant_profile = getattr(session, "assistant_profile", None)
+    app_id = _session_app_context_id(session)
     if app_id:
         from app.ai_chat.app_context import build_app_context_block
         system_prompt = system_prompt + await build_app_context_block(
@@ -727,8 +735,15 @@ async def _build_initial_messages(
         .where(AIChatToolCall.session_id == session.id)
         .order_by(AIChatToolCall.id.asc())
     )
+    allowed_history_tools: set[str] | None = None
+    if assistant_profile == "system_assistant":
+        from app.agents.profile import resolve_overrides_for_session
+        _prompt, allowed_history_tools, _ws_id = resolve_overrides_for_session(session)
+
     tcs_by_msg: dict[int, list[AIChatToolCall]] = {}
     for tc in tc_res.scalars().all():
+        if allowed_history_tools is not None and tc.tool_name not in allowed_history_tools:
+            continue
         if tc.message_id is not None:
             tcs_by_msg.setdefault(tc.message_id, []).append(tc)
 
@@ -743,6 +758,12 @@ async def _build_initial_messages(
             ):
                 continue
             persisted_tool_calls = meta.get("tool_calls") if isinstance(meta, dict) else None
+            if persisted_tool_calls and allowed_history_tools is not None:
+                persisted_tool_calls = [
+                    tool_call
+                    for tool_call in persisted_tool_calls
+                    if (tool_call.get("function") or {}).get("name") in allowed_history_tools
+                ]
             if persisted_tool_calls:
                 # tool_use turn：拼回带 tool_calls 的 assistant + 紧跟 role:tool 配对
                 messages.append({
@@ -803,11 +824,11 @@ MAX_TURNS = 25  # 工具循环最大轮数（统一 config 的 25：app 配置/c
 
 _SYSTEM_ASSISTANT_INTRO_RESPONSE = (
     "你好，我是睿鲸 AI 的 Dolphin Code 系统助手。我可以协助四类工作：\n"
-    "1. 分析系统级工程问题并给出可执行的技术方案。\n"
-    "2. 读取上传的文件，整理、修改并生成会话产物。\n"
-    "3. 查询知识与 Skill，形成使用建议或内容草稿。\n"
-    "4. 在明确绑定的 Code 工作区内读写代码、运行命令并验证结果。\n"
-    "默认不会自动发现或切换旧工作区，也不会进入 Builder/aPaaS 应用管理流程。"
+    "1. 分析代码、构建、测试和运行问题。\n"
+    "2. 读取上传的代码或技术文件并生成会话产物。\n"
+    "3. 在明确绑定的 Code 工作区内读取和修改文件。\n"
+    "4. 运行命令并验证修改结果。\n"
+    "未绑定 Code 工作区时，我不会自动发现、创建或切换其他工程。"
 )
 
 
@@ -969,7 +990,7 @@ async def _run_agent_inner(
         tenant_id=getattr(session, "tenant_id", None),
         user_id=getattr(session, "user_id", None),
         session_id=session.id,
-        app_id=getattr(session, "app_id", None),
+        app_id=_session_app_context_id(session),
         model=cfg.model,
     )
     yield _sse("run_started", {"run_id": holder["run_id"]})
@@ -1014,10 +1035,11 @@ async def _run_agent_inner(
         messages[0]["content"] = (messages[0].get("content") or "") + _manifest
     elif _manifest:
         logger.warning("deferred manifest skipped: messages[0] is not a system message")
-    # 技能清单（桌面上传/平台预置）注入 system prompt，否则 use_skill 的描述指向不存在的「可用技能」段、
-    # 模型无从得知技能名 → use_skill 实际不可达。空集（云端/无 skill）no-op。
-    _append_skill_manifest(messages)
-    await _append_knowledge_manifest(messages, db)   # 平台知识库目录(渐进披露)
+    if getattr(session, "assistant_profile", None) != "system_assistant":
+        # 普通会话继续注入共享 Skill 与知识目录。系统助手保持纯 Code 上下文，
+        # 不自动加载共享资产，避免把其它产品域的材料带入代码会话。
+        _append_skill_manifest(messages)
+        await _append_knowledge_manifest(messages, db)
     active_tool_names: set[str] = await _reconstruct_active_tools(db, session)
 
     for turn in range(MAX_TURNS):

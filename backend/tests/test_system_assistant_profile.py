@@ -16,6 +16,7 @@ from app.ai_chat.agent import (
     _SYSTEM_ASSISTANT_INTRO_RESPONSE,
     _apply_session_overrides,
     _is_system_assistant_intro_request,
+    _session_app_context_id,
 )
 
 
@@ -24,9 +25,9 @@ def test_system_assistant_profile_exposes_only_code_workspace_and_session_capabi
     tools = set(profile.tool_names)
 
     assert profile.name == "system_assistant"
-    assert {"use_skill", "read_knowledge", "search_knowledge"}.issubset(tools)
     assert "read_attachment" in tools
     assert "write_artifact" in tools
+    assert "run_python" in tools
 
     for forbidden_local in ("write_file", "edit_file", "run_command", "start_serve"):
         assert forbidden_local not in tools
@@ -45,6 +46,12 @@ def test_system_assistant_profile_exposes_only_code_workspace_and_session_capabi
         "create_skill",
         "write_skill_file",
         "update_skill_metadata",
+        "use_skill",
+        "read_knowledge",
+        "search_knowledge",
+        "list_skills",
+        "read_skill_file",
+        "search_tools",
         "list_dev_workspaces",
         "create_dev_workspace",
         "init_apaas_backend_workspace",
@@ -74,17 +81,18 @@ def test_system_assistant_profile_exposes_only_code_workspace_and_session_capabi
         assert forbidden not in tools
 
 
-def test_system_assistant_prompt_has_no_default_workspace_or_apaas_context():
+def test_system_assistant_prompt_is_code_only():
     prompt = resolve_profile("system_assistant").system_prompt
+    normalized = prompt.lower()
 
-    assert "默认没有当前应用，也没有当前工作区" in prompt
-    assert "不要发现、枚举、猜测、绑定或创建工作区" in prompt
-    assert "form-page" in prompt
-    assert "apaas.json" in prompt
-    assert "旧上下文" in prompt
-    assert "明确绑定" in prompt
+    assert "只处理代码工程和软件开发任务" in prompt
+    assert "不发现、枚举、猜测、绑定或创建工作区" in prompt
+    assert "不沿用历史会话中的工程身份" in prompt
+    assert "构建、测试或运行验证" in prompt
     assert "Dolphin Code" in prompt
-    assert "Builder" in prompt
+    assert "apaas" not in normalized
+    assert "builder" not in normalized
+    assert "form-page" not in normalized
 
 
 def test_system_assistant_intro_reports_four_compact_real_capability_directions():
@@ -94,10 +102,11 @@ def test_system_assistant_intro_reports_four_compact_real_capability_directions(
     ]
 
     assert len(numbered_directions) == 4
-    assert "上传的文件" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
-    assert "知识与 Skill" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
+    assert "上传的代码或技术文件" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
     assert "明确绑定的 Code 工作区" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
-    assert "不会自动发现或切换旧工作区" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
+    assert "运行命令并验证修改结果" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
+    assert "apaas" not in _SYSTEM_ASSISTANT_INTRO_RESPONSE.lower()
+    assert "builder" not in _SYSTEM_ASSISTANT_INTRO_RESPONSE.lower()
 
 
 def test_system_assistant_profile_does_not_require_a_bound_workspace():
@@ -176,6 +185,18 @@ def test_system_assistant_code_session_without_workspace_stays_session_scoped():
     assert "create_dev_workspace" not in tools
     assert locked_ws_id is None
     assert ws_bind_view_context(locked_ws_id) is None
+
+
+def test_system_assistant_never_inherits_application_context():
+    session = SimpleNamespace(assistant_profile="system_assistant", app_id=99)
+
+    assert _session_app_context_id(session) is None
+
+
+def test_entry_agent_keeps_application_context():
+    session = SimpleNamespace(assistant_profile="entry_agent", app_id=99)
+
+    assert _session_app_context_id(session) == 99
 
 
 def test_entry_agent_code_mode_keeps_existing_dev_apaas_resolution():
