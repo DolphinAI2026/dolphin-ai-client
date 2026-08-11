@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from asyncio import Event
+import asyncio
+from threading import Event as ThreadEvent, Thread
 
 import pytest
 
@@ -231,3 +233,66 @@ async def test_registry_reload_during_remote_load_drops_old_generation(monkeypat
     )
     assert next_result.status == "ready"
     assert next_result.items[0]["capability_code"] == "workspace.new_read"
+
+
+def test_reload_cannot_clear_then_be_repopulated_after_final_check(monkeypatch):
+    from app.system_assistant import capability_projection as projection_module
+    import app.tool_registry as registry
+
+    projection_module.projection_cache.invalidate("tenant-final-race")
+    view = _view(("read_tool", "workspace.read", "L0", 1))
+    monkeypatch.setattr(registry, "governance_view", lambda: view)
+    swap_entered = ThreadEvent()
+    release_swap = ThreadEvent()
+    reload_requested = ThreadEvent()
+    reload_complete = ThreadEvent()
+    original_swap = projection_module.projection_cache.swap
+
+    def blocked_swap(key, value):
+        swap_entered.set()
+        assert release_swap.wait(timeout=2)
+        original_swap(key, value)
+
+    class ReadyClient:
+        async def load(self, **_kwargs):
+            return type(
+                "Loaded",
+                (),
+                {
+                    "available": True,
+                    "items": [_remote()],
+                    "projection_revision": "rev-1",
+                    "etag": "rev-1",
+                },
+            )()
+
+    def reload_registry():
+        reload_requested.set()
+        registry.reload()
+        reload_complete.set()
+
+    outcome = {}
+
+    def load_projection():
+        outcome["result"] = asyncio.run(load_capability_projection(
+            tenant_id="tenant-final-race", policy="shadow", policy_revision=1,
+            client=ReadyClient(),
+        ))
+
+    monkeypatch.setattr(projection_module.projection_cache, "swap", blocked_swap)
+    loader = Thread(target=load_projection)
+    loader.start()
+    assert swap_entered.wait(timeout=2)
+    reloader = Thread(target=reload_registry)
+    reloader.start()
+    assert reload_requested.wait(timeout=2)
+    assert not reload_complete.is_set()
+
+    release_swap.set()
+    loader.join(timeout=2)
+    reloader.join(timeout=2)
+
+    assert not loader.is_alive()
+    assert outcome["result"].status == "ready"
+    assert reload_complete.is_set()
+    assert projection_module.projection_cache.get("tenant-final-race") is None
