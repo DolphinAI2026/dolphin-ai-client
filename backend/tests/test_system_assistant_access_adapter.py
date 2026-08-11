@@ -19,6 +19,7 @@ def _snapshot(*, user_id=11, access_roles=(), projection_digest="projection-dige
         session_id=19,
         assistant_profile="system_assistant",
         object_refs=["workspace:ws-a"],
+        object_revisions={"workspace:ws-a": "rev-1"},
         access_roles=access_roles,
         allowed_capability_ids=["cap-read", "cap-write"],
         tool_contract_revisions={"read_tool": 1, "write_tool": 1},
@@ -29,7 +30,7 @@ def _snapshot(*, user_id=11, access_roles=(), projection_digest="projection-dige
     )
 
 
-def _context(*, owner_ref="user:11", project_source_status="ready"):
+def _context(*, owner_ref="user:11", project_source_status="ready", revision="rev-1"):
     return {
         "tenant_id": 7,
         "control_plane_tenant_id": "cp-tenant-7",
@@ -42,7 +43,7 @@ def _context(*, owner_ref="user:11", project_source_status="ready"):
                 "tenant_id": 7,
                 "control_plane_tenant_id": "cp-tenant-7",
                 "stable_id": "ws-a",
-                "revision": "rev-1",
+                "revision": revision,
                 "owner_ref": owner_ref,
                 "environment_ref": "runtime:dev",
                 "metadata": {"project_source_status": project_source_status},
@@ -254,3 +255,40 @@ def test_dispatcher_rejects_missing_subject_fields_and_stale_policy_revision():
     assert missing_subject.reason_code == "SNAPSHOT_SUBJECT_DRIFT"
     assert stale_policy.status == "deny"
     assert stale_policy.reason_code == "POLICY_REVISION_STALE"
+
+
+def test_dispatcher_rejects_catalog_revision_drift_without_raw_revision():
+    projection = type(
+        "Projection",
+        (),
+        {
+            "status": "ready",
+            "projection_digest": "projection-digest",
+            "items": [
+                {
+                    "capability_id": "cap-read",
+                    "tool_name": "read_tool",
+                    "tool_contract_revision": 1,
+                    "object_type": "workspace",
+                    "action": "read",
+                    "risk_level": "L0",
+                }
+            ],
+        },
+    )()
+    decision = evaluate_shadow_decision(
+        policy="shadow",
+        snapshot=_snapshot(),
+        raw_object_ref="workspace:ws-a",
+        auth_context=_context(revision="rev-2"),
+        action="read",
+        capability_id="cap-read",
+        projection=projection,
+        governance_view=object(),
+        runtime_binding=None,
+        legacy_decision="allow",
+        now=datetime(2026, 8, 11, 0, 1, tzinfo=UTC),
+    )
+
+    assert decision.status == "deny"
+    assert decision.reason_code == "OBJECT_REVISION_CONFLICT"

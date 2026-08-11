@@ -21,6 +21,7 @@ def _snapshot(**overrides):
         "session_id": 19,
         "assistant_profile": "system_assistant",
         "object_refs": {"workspace:ws-b", "workspace:ws-a", "workspace:ws-a"},
+        "object_revisions": {"workspace:ws-a": "rev-1", "workspace:ws-b": "rev-2"},
         "access_roles": {"workspace:edit", "tenant_admin", "workspace:edit"},
         "allowed_capability_ids": {"cap-b", "cap-a", "cap-a"},
         "tool_contract_revisions": {"tool-b": 2, "tool-a": 1},
@@ -87,4 +88,32 @@ def test_snapshot_context_rejects_subject_drift_and_expiry():
             session_id=19,
             assistant_profile="system_assistant",
             now=datetime(2026, 8, 11, 0, 16, tzinfo=UTC),
+        )
+
+
+def test_snapshot_captures_object_revisions_and_freezes_contract_revisions():
+    contract_revisions = {"tool-a": 1, "tool-b": 2}
+    snapshot = _snapshot(tool_contract_revisions=contract_revisions)
+    digest = snapshot.snapshot_digest
+
+    assert snapshot.object_revisions == {"workspace:ws-a": "rev-1", "workspace:ws-b": "rev-2"}
+    contract_revisions["tool-a"] = 99
+    assert snapshot.tool_contract_revisions["tool-a"] == 1
+    with pytest.raises(TypeError):
+        snapshot.tool_contract_revisions["tool-a"] = 99
+    assert snapshot.snapshot_digest == digest
+
+
+def test_snapshot_treats_expiry_boundary_as_expired():
+    snapshot = _snapshot()
+
+    with pytest.raises(SnapshotValidationError, match="SNAPSHOT_EXPIRED"):
+        validate_snapshot_context(
+            snapshot,
+            tenant_id=7,
+            control_plane_tenant_id="cp-tenant-7",
+            user_id=11,
+            session_id=19,
+            assistant_profile="system_assistant",
+            now=snapshot.expires_at,
         )

@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Mapping
 
 
@@ -51,6 +52,18 @@ def _metadata_digest(metadata: Mapping[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _freeze(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze(item) for item in value)
+    if isinstance(value, tuple):
+        return tuple(_freeze(item) for item in value)
+    if isinstance(value, set):
+        return frozenset(_freeze(item) for item in value)
+    return value
+
+
 def _not_found(candidate: Any, auth_context: Mapping[str, Any]) -> bool:
     if not isinstance(candidate, Mapping):
         return False
@@ -72,12 +85,16 @@ def resolve_object_ref(raw_ref: Any, auth_context: Mapping[str, Any]) -> Resolve
     candidate = catalog.get(f"{object_type}:{stable_id}")
     if candidate is None:
         raise ObjectReferenceError("OBJECT_NOT_FOUND")
-    if isinstance(candidate, list):
-        if len(candidate) != 1:
-            raise ObjectReferenceError("OBJECT_MAPPING_UNRESOLVED")
-        candidate = candidate[0]
-    if _not_found(candidate, auth_context):
+    candidates = candidate if isinstance(candidate, (list, tuple)) else [candidate]
+    authorized_candidates = [
+        item for item in candidates
+        if isinstance(item, Mapping) and not _not_found(item, auth_context)
+    ]
+    if not authorized_candidates:
         raise ObjectReferenceError("OBJECT_NOT_FOUND")
+    if len(authorized_candidates) != 1:
+        raise ObjectReferenceError("OBJECT_MAPPING_UNRESOLVED")
+    candidate = authorized_candidates[0]
     if not isinstance(candidate, Mapping):
         raise ObjectReferenceError("OBJECT_MAPPING_UNRESOLVED")
     required = ("object_type", "tenant_id", "stable_id", "revision", "owner_ref")
@@ -100,5 +117,5 @@ def resolve_object_ref(raw_ref: Any, auth_context: Mapping[str, Any]) -> Resolve
         environment_ref=(str(candidate["environment_ref"]) if candidate.get("environment_ref") else None),
         metadata_digest=_metadata_digest(metadata),
         stable_id_digest=hashlib.sha256(stable_id.encode("utf-8")).hexdigest(),
-        metadata=dict(metadata),
+        metadata=_freeze(metadata),
     )

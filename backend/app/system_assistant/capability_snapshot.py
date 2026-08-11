@@ -5,6 +5,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from types import MappingProxyType
 from typing import Any, Mapping
 
 
@@ -51,7 +52,8 @@ class CapabilitySnapshot:
     object_refs: tuple[str, ...]
     access_roles: tuple[str, ...]
     allowed_capability_ids: tuple[str, ...]
-    tool_contract_revisions: dict[str, int]
+    object_revisions: Mapping[str, str]
+    tool_contract_revisions: Mapping[str, int]
     projection_digest: str
     policy_revision: int
     issued_at: datetime
@@ -67,6 +69,7 @@ class CapabilitySnapshot:
             "session_id": self.session_id,
             "assistant_profile": self.assistant_profile,
             "object_refs": list(self.object_refs),
+            "object_revisions": dict(self.object_revisions),
             "access_roles": list(self.access_roles),
             "allowed_capability_ids": list(self.allowed_capability_ids),
             "tool_contract_revisions": dict(self.tool_contract_revisions),
@@ -86,6 +89,7 @@ def build_capability_snapshot(
     session_id: int | None,
     assistant_profile: str,
     object_refs: Any,
+    object_revisions: Mapping[str, Any],
     access_roles: Any,
     allowed_capability_ids: Any,
     tool_contract_revisions: Mapping[str, Any],
@@ -117,6 +121,8 @@ def build_capability_snapshot(
         raise SnapshotValidationError("SNAPSHOT_TTL_EXCEEDED")
     if not isinstance(tool_contract_revisions, Mapping):
         raise SnapshotValidationError("SNAPSHOT_CONTRACT_REVISIONS_INVALID")
+    if not isinstance(object_revisions, Mapping):
+        raise SnapshotValidationError("SNAPSHOT_OBJECT_REVISIONS_INVALID")
     revisions: dict[str, int] = {}
     for tool_name, revision in tool_contract_revisions.items():
         if (
@@ -128,13 +134,27 @@ def build_capability_snapshot(
         ):
             raise SnapshotValidationError("SNAPSHOT_CONTRACT_REVISIONS_INVALID")
         revisions[tool_name] = revision
+    refs = _sorted_unique(object_refs)
+    captured_revisions: dict[str, str] = {}
+    for object_ref, revision in object_revisions.items():
+        if (
+            not isinstance(object_ref, str)
+            or object_ref not in refs
+            or not isinstance(revision, str)
+            or not revision
+        ):
+            raise SnapshotValidationError("SNAPSHOT_OBJECT_REVISIONS_INVALID")
+        captured_revisions[object_ref] = revision
+    if set(captured_revisions) != set(refs):
+        raise SnapshotValidationError("SNAPSHOT_OBJECT_REVISIONS_INVALID")
     payload = {
         "tenant_id": tenant_id,
         "control_plane_tenant_id": control_plane_tenant_id,
         "user_id": user_id,
         "session_id": session_id,
         "assistant_profile": assistant_profile.strip(),
-        "object_refs": _sorted_unique(object_refs),
+        "object_refs": refs,
+        "object_revisions": dict(sorted(captured_revisions.items())),
         "access_roles": _sorted_unique(access_roles),
         "allowed_capability_ids": _sorted_unique(allowed_capability_ids),
         "tool_contract_revisions": dict(sorted(revisions.items())),
@@ -151,9 +171,10 @@ def build_capability_snapshot(
         session_id=session_id,
         assistant_profile=payload["assistant_profile"],
         object_refs=tuple(payload["object_refs"]),
+        object_revisions=MappingProxyType(payload["object_revisions"]),
         access_roles=tuple(payload["access_roles"]),
         allowed_capability_ids=tuple(payload["allowed_capability_ids"]),
-        tool_contract_revisions=payload["tool_contract_revisions"],
+        tool_contract_revisions=MappingProxyType(payload["tool_contract_revisions"]),
         projection_digest=projection_digest,
         policy_revision=policy_revision,
         issued_at=issued,
@@ -186,5 +207,5 @@ def validate_snapshot_context(
         raise SnapshotValidationError("SNAPSHOT_SUBJECT_DRIFT")
     if now.tzinfo is None:
         raise SnapshotValidationError("SNAPSHOT_TIME_INVALID")
-    if now.astimezone(UTC) > snapshot.expires_at:
+    if now.astimezone(UTC) >= snapshot.expires_at:
         raise SnapshotValidationError("SNAPSHOT_EXPIRED")

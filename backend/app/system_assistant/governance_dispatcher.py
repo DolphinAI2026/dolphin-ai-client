@@ -84,6 +84,8 @@ def evaluate_shadow_decision(
         return ShadowDecision("deny", error.code, snapshot.snapshot_digest)
     if resolved.canonical_ref not in snapshot.object_refs:
         return ShadowDecision("deny", "SNAPSHOT_OBJECT_REF_MISSING", snapshot.snapshot_digest)
+    if snapshot.object_revisions.get(resolved.canonical_ref) != resolved.revision:
+        return ShadowDecision("deny", "OBJECT_REVISION_CONFLICT", snapshot.snapshot_digest)
     item = _projection_item(projection, capability_id)
     if item is None or capability_id not in snapshot.allowed_capability_ids:
         return ShadowDecision("deny", "CAPABILITY_NOT_ALLOWED", snapshot.snapshot_digest)

@@ -58,6 +58,30 @@ def test_cross_tenant_object_is_indistinguishable_from_missing_object():
         assert str(raised.value) == "OBJECT_NOT_FOUND"
 
 
+def test_multiple_foreign_candidates_are_indistinguishable_from_missing_object():
+    foreign = {
+        **_context()["object_catalog"]["workspace:ws-a"],
+        "tenant_id": 8,
+        "control_plane_tenant_id": "cp-tenant-8",
+    }
+
+    with pytest.raises(ObjectReferenceError) as raised:
+        resolve_object_ref("workspace:ws-a", _context(objects={"workspace:ws-a": [foreign, foreign]}))
+
+    assert raised.value.code == "OBJECT_NOT_FOUND"
+
+
+def test_resolved_object_metadata_is_deeply_immutable():
+    context = _context()
+    context["object_catalog"]["workspace:ws-a"]["metadata"] = {"nested": {"state": "ready"}}
+    resolved = resolve_object_ref("workspace:ws-a", context)
+
+    with pytest.raises(TypeError):
+        resolved.metadata["nested"] = {}
+    with pytest.raises(TypeError):
+        resolved.metadata["nested"]["state"] = "stale"
+
+
 def test_ambiguous_or_revision_drift_object_refs_have_typed_errors():
     duplicate = [_context()["object_catalog"]["workspace:ws-a"]] * 2
 
