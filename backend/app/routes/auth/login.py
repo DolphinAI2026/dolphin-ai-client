@@ -960,12 +960,19 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
             local_tenants,
         )
         await db.commit()
-        web_console = await exchange_web_console_session(
-            user_id=str(user.apaas_user_id or user.id),
-            username=user.username,
-            apaas_access_token=str(user.apaas_token or backend_token or platform_token or ""),
-            apaas_tenant_id=str(selected.apaas_tenant_id_str or user.apaas_tenant_id or ""),
-        )
+        web_console = None
+        try:
+            web_console = await exchange_web_console_session(
+                user_id=str(user.apaas_user_id or user.id),
+                username=user.username,
+                apaas_access_token=str(user.apaas_token or backend_token or platform_token or ""),
+                apaas_tenant_id=str(selected.apaas_tenant_id_str or user.apaas_tenant_id or ""),
+            )
+        except HTTPException as exc:
+            logger.warning(
+                "Builder AI 管理会话创建失败，保留 aPaaS 登录结果: status=%s",
+                exc.status_code,
+            )
         return LoginResponse(
             access_token=access_token,
             tenants=tenant_options,
@@ -1435,6 +1442,13 @@ async def _try_apaas_provider_login_response(
     except SQLAlchemyError as exc:
         await db.rollback()
         logger.exception("aPaaS 登录同步本地数据库失败，已回滚")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="aPaaS 登录成功，但本地数据库同步失败，请稍后重试或联系管理员",
+        ) from exc
+    except (ConnectionError, TimeoutError) as exc:
+        await db.rollback()
+        logger.exception("aPaaS 登录同步本地数据库连接失败，已回滚")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="aPaaS 登录成功，但本地数据库同步失败，请稍后重试或联系管理员",

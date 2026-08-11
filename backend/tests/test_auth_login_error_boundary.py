@@ -13,6 +13,11 @@ from app.routes.auth import get_me, login
 from app.schemas import UserLogin
 
 
+@pytest.fixture(autouse=True)
+def use_apaas_auth_provider(monkeypatch):
+    monkeypatch.setattr(auth_routes.settings, "auth_provider", "apaas")
+
+
 @pytest.mark.asyncio
 async def test_login_converts_apaas_sync_integrity_error_to_conflict(db_session, monkeypatch):
     async def fail_sync(_user_data, _db):
@@ -41,6 +46,23 @@ async def test_login_converts_apaas_network_error_to_service_unavailable(db_sess
 
     assert exc.value.status_code == 503
     assert "aPaaS 登录链路暂不可用" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_login_converts_local_database_connection_failure_to_service_unavailable(
+    db_session,
+    monkeypatch,
+):
+    async def fail_sync(_user_data, _db):
+        raise ConnectionRefusedError("database connection refused")
+
+    monkeypatch.setattr(auth_routes, "_try_apaas_login_flow", fail_sync)
+
+    with pytest.raises(HTTPException) as exc:
+        await login(UserLogin(username="admin", password="secret"), db_session)
+
+    assert exc.value.status_code == 503
+    assert "本地数据库同步失败" in exc.value.detail
 
 
 @pytest.mark.asyncio
@@ -95,3 +117,43 @@ async def test_apaas_login_success_token_can_load_me(db_session, monkeypatch):
 
     assert me.username == "admin"
     assert me.tenant_name == "默认租户"
+
+
+@pytest.mark.asyncio
+async def test_apaas_login_succeeds_when_builder_ai_session_exchange_is_unavailable(
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr(auth_routes.settings, "apaas_base_url", "https://apaas-trial.definesys.cn/backend")
+
+    async def fake_platform_login(_username, _password):
+        return None, {"code": "error", "message": "not platform admin"}
+
+    async def fake_backend_login(_username, _password, _tenant_id=""):
+        return "backend.token.sig", {
+            "data": {
+                "token": "backend.token.sig",
+                "defaultTenantId": "tenant-1",
+                "user": {"id": "apaas-user-1", "username": "admin", "name": "Admin"},
+                "tenantInfos": [
+                    {"tenantId": "tenant-1", "tenantName": "默认租户", "tenantCode": "default"}
+                ],
+            }
+        }
+
+    async def fake_switchable_tenants(_backend_token, _default_tenant_id):
+        return []
+
+    async def unavailable_builder_ai_session(**_kwargs):
+        raise HTTPException(status_code=503, detail="Builder AI 管理服务暂不可用")
+
+    monkeypatch.setattr(auth_routes, "_apaas_platform_login", fake_platform_login)
+    monkeypatch.setattr(auth_routes, "_apaas_backend_login", fake_backend_login)
+    monkeypatch.setattr(auth_routes, "_apaas_switchable_tenants", fake_switchable_tenants)
+    monkeypatch.setattr(auth_routes, "exchange_web_console_session", unavailable_builder_ai_session)
+
+    response = await login(UserLogin(username="admin", password="secret"), db_session)
+
+    assert response.access_token
+    assert response.has_tenant_context is True
+    assert response.web_console_access_token is None
