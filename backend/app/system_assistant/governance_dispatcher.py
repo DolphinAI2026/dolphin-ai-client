@@ -13,6 +13,7 @@ from app.system_assistant.capability_snapshot import (
 )
 from app.system_assistant.governance_policy import projection_failure_reason, shadow_policy_status
 from app.system_assistant.object_references import ObjectReferenceError, resolve_object_ref
+from app.system_assistant.action_execution import ExecutionResult, execute_with_governance
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,11 @@ class ShadowDecision:
     snapshot_digest: str
     ticket_issued: bool = False
     access_compare: ShadowAccessComparison | None = None
+
+
+async def dispatch_shadow_action(**kwargs: Any) -> ExecutionResult:
+    """Narrow shadow execution adapter; the legacy dispatcher remains untouched."""
+    return await execute_with_governance(**kwargs)
 
 
 def _projection_item(projection: Any, capability_id: str) -> Mapping[str, Any] | None:
