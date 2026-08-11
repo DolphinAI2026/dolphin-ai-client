@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import Event, Thread
 
 import pytest
 
@@ -74,6 +75,17 @@ def test_v1_registry_remains_loadable_with_legacy_contracts(_isolated_registry):
     assert registry.tool_meta("legacy_tool")["description"] == "legacy tool"
 
 
+def test_v1_complete_governance_fields_remain_legacy(_isolated_registry):
+    _write_registry(_isolated_registry, _v2_tool("legacy_governed_tool"), version=1)
+
+    registry.reload()
+
+    assert registry.capability_projection() == {}
+    contract = tool_contract_service.tool_contract("legacy_governed_tool")
+    assert "capability_code" not in contract
+    assert "contract_revision" not in contract
+
+
 @pytest.mark.parametrize(
     ("risk_level", "workspace_action", "confirmation_policy"),
     [
@@ -123,6 +135,14 @@ def test_invalid_risk_governance_combination_is_rejected(_isolated_registry, ove
     _write_registry(_isolated_registry, _v2_tool("invalid_tool", **overrides))
 
     with pytest.raises(ValueError, match="governance"):
+        registry.reload()
+
+
+def test_l0_contract_with_derived_write_side_effect_is_rejected(_isolated_registry):
+    tool = _v2_tool("write_tool").replace("category: introspection", "category: update")
+    _write_registry(_isolated_registry, tool)
+
+    with pytest.raises(ValueError, match="L0.*side effect"):
         registry.reload()
 
 
@@ -209,4 +229,54 @@ def test_reload_clears_loader_contract_and_projection_caches(_isolated_registry)
             "object_type": "workspace",
             "action": "inspect",
         }
+    }
+
+
+def test_reader_waiting_during_reload_observes_one_new_generation(
+    _isolated_registry, monkeypatch
+):
+    _write_registry(_isolated_registry, _v2_tool("old_tool", capability_code="workspace.old"))
+    registry.reload()
+    tool_contract_service.tool_contract("old_tool")
+    registry.capability_projection()
+
+    _write_registry(_isolated_registry, _v2_tool("new_tool", capability_code="workspace.new"))
+    reload_entered = Event()
+    release_reload = Event()
+    reader_started = Event()
+    reader_finished = Event()
+    observed: dict[str, object] = {}
+    original_reload_locked = registry._reload_locked
+
+    def blocked_reload():
+        reload_entered.set()
+        assert release_reload.wait(timeout=2)
+        return original_reload_locked()
+
+    def read_all_layers():
+        assert reload_entered.wait(timeout=2)
+        reader_started.set()
+        observed["tool"] = registry.tool_meta("new_tool")["capability_code"]
+        observed["contract"] = tool_contract_service.tool_contract("new_tool")["capability_code"]
+        observed["projection"] = set(registry.capability_projection())
+        reader_finished.set()
+
+    monkeypatch.setattr(registry, "_reload_locked", blocked_reload)
+    reloader = Thread(target=registry.reload)
+    reader = Thread(target=read_all_layers)
+    reloader.start()
+    assert reload_entered.wait(timeout=2)
+    reader.start()
+    assert reader_started.wait(timeout=2)
+    release_reload.set()
+    reloader.join(timeout=2)
+    reader.join(timeout=2)
+
+    assert not reloader.is_alive()
+    assert not reader.is_alive()
+    assert reader_finished.is_set()
+    assert observed == {
+        "tool": "workspace.new",
+        "contract": "workspace.new",
+        "projection": {"workspace.new"},
     }

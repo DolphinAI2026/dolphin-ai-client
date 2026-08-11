@@ -20,7 +20,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Any
 
-from app.tool_registry import load, all_tool_names
+from app.tool_registry import all_tool_names, load, registry_read_lock
 
 # ---------------------------------------------------------------------------
 # category → 默认副作用 profile
@@ -155,13 +155,33 @@ def _all_contracts() -> dict[str, dict[str, Any]]:
 
     返回 {tool_name: contract_dict} 普通 dict (只读使用, 不暴露给外部 mutate).
     """
-    tools = load()["tools"]
-    return {name: _derive_contract(name, dict(meta)) for name, meta in tools.items()}
+    registry = load()
+    include_governance = registry["version"] == 2
+    contracts = {
+        name: _derive_contract(name, dict(meta))
+        for name, meta in registry["tools"].items()
+    }
+    if not include_governance:
+        for contract in contracts.values():
+            for field in (
+                "capability_code",
+                "contract_revision",
+                "object_type",
+                "action",
+                "risk_level",
+                "workspace_action",
+                "confirmation_policy",
+                "audit_policy",
+                "environment_scope",
+            ):
+                contract.pop(field, None)
+    return contracts
 
 
 def clear_cache() -> None:
     """清契约缓存 (测试 / 热替场景 — 对应 tool_registry.reload())."""
-    _all_contracts.cache_clear()
+    with registry_read_lock():
+        _all_contracts.cache_clear()
 
 
 def tool_contract(name: str) -> dict[str, Any]:
@@ -173,10 +193,11 @@ def tool_contract(name: str) -> dict[str, Any]:
 
     若工具名不存在, 抛 KeyError (与 tool_registry.tool_meta 行为一致).
     """
-    contracts = _all_contracts()
-    if name not in contracts:
-        raise KeyError(f"工具 {name!r} 不在 tool_registry.yaml 中")
-    return contracts[name]
+    with registry_read_lock():
+        contracts = _all_contracts()
+        if name not in contracts:
+            raise KeyError(f"工具 {name!r} 不在 tool_registry.yaml 中")
+        return contracts[name]
 
 
 def requires_confirmation(name: str) -> bool:
@@ -197,7 +218,8 @@ def all_contracts() -> dict[str, dict[str, Any]]:
 
     调用方不应 mutate 返回值 (dict 非只读 proxy, 但语义上只读).
     """
-    return dict(_all_contracts())
+    with registry_read_lock():
+        return dict(_all_contracts())
 
 
 def contracts_by_flag(
@@ -226,8 +248,9 @@ def contracts_by_flag(
     if requires_confirmation is not None:
         filters["requires_confirmation"] = requires_confirmation
 
-    result = []
-    for name, c in _all_contracts().items():
-        if all(c[k] == v for k, v in filters.items()):
-            result.append(name)
-    return sorted(result)
+    with registry_read_lock():
+        result = []
+        for name, c in _all_contracts().items():
+            if all(c[k] == v for k, v in filters.items()):
+                result.append(name)
+        return sorted(result)

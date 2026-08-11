@@ -15,8 +15,10 @@ SPEC v2 §5.1 / §5.2:
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
+from threading import RLock
 from types import MappingProxyType
 from typing import Any, Mapping
 
@@ -24,6 +26,7 @@ import yaml
 
 # yaml 文件位置 = backend/tool_registry.yaml (跟 app/ 平级)
 _YAML_PATH = Path(__file__).parent.parent / "tool_registry.yaml"
+_REGISTRY_LOCK = RLock()
 
 VALID_SECTIONS: frozenset[str] = frozenset(
     {"data", "ui", "logic", "permission", "extension", "global"}
@@ -86,6 +89,17 @@ def _validate_v2_contract(name: str, meta: Mapping[str, Any]) -> None:
         or (risk_level == "L0" and workspace_action != "read")
     ):
         raise ValueError(f"{name} has an invalid governance combination")
+    if risk_level == "L0":
+        # Use the execution contract's real side-effect derivation. Metadata must
+        # not be able to label a category-derived write as a read-only capability.
+        from app.services.tool_contract_service import _derive_contract
+
+        side_effects = _derive_contract(name, dict(meta))
+        if any(
+            side_effects[field]
+            for field in ("writes_workspace", "writes_apaas", "deploys_or_publishes")
+        ):
+            raise ValueError(f"{name} L0 contract has a write side effect")
 
 
 def _validate_registry(registry: dict[str, Any]) -> None:
@@ -122,8 +136,15 @@ def _freeze_registry(registry: dict[str, Any]) -> Mapping[str, Any]:
     return MappingProxyType({**registry, "tools": tools_proxy})
 
 
+@contextmanager
+def registry_read_lock():
+    """Protect a multi-layer registry read from an in-progress reload."""
+    with _REGISTRY_LOCK:
+        yield
+
+
 @lru_cache(maxsize=1)
-def load() -> Mapping[str, Any]:
+def _load() -> Mapping[str, Any]:
     """读 tool_registry.yaml, 缓存 (LRU size=1).
 
     返回 read-only Mapping: {"version": 1|2, "tools": {tool_name: meta_dict, ...}}
@@ -145,15 +166,36 @@ def load() -> Mapping[str, Any]:
     return _freeze_registry(registry)
 
 
-def reload() -> Mapping[str, Any]:
-    """Atomically invalidate registry-derived caches and re-read the registry."""
-    load.cache_clear()
+def load() -> Mapping[str, Any]:
+    """Read the current registry generation under the reload coordinator lock."""
+    with _REGISTRY_LOCK:
+        return _load()
+
+
+def _clear_load_cache() -> None:
+    with _REGISTRY_LOCK:
+        _load.cache_clear()
+
+
+# Preserve the pre-v2 cache control API used by tests and hot-reload callers.
+load.cache_clear = _clear_load_cache  # type: ignore[attr-defined]
+
+
+def _reload_locked() -> Mapping[str, Any]:
+    """Invalidate every registry-derived cache while holding the coordinator lock."""
+    _load.cache_clear()
     _capability_projection.cache_clear()
     # Import lazily to avoid the service's normal ``from app.tool_registry`` cycle.
     from app.services.tool_contract_service import clear_cache as clear_contract_cache
 
     clear_contract_cache()
-    return load()
+    return _load()
+
+
+def reload() -> Mapping[str, Any]:
+    """Atomically invalidate registry-derived caches and re-read the registry."""
+    with _REGISTRY_LOCK:
+        return _reload_locked()
 
 
 @lru_cache(maxsize=1)
@@ -174,7 +216,10 @@ def _capability_projection() -> dict[str, dict[str, str]]:
 
 def capability_projection() -> dict[str, dict[str, str]]:
     """Return a copy of the v2 capability projection, excluding publish tools."""
-    return {code: dict(contract) for code, contract in _capability_projection().items()}
+    with _REGISTRY_LOCK:
+        if load()["version"] != 2:
+            return {}
+        return {code: dict(contract) for code, contract in _capability_projection().items()}
 
 
 def all_tool_names() -> set[str]:
