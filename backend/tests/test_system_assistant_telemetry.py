@@ -35,13 +35,60 @@ def test_terminal_transition_is_idempotent_for_same_run_when_cas_wins_repeatedly
     from app.system_assistant.telemetry import GovernanceTelemetryRegistry
 
     telemetry = GovernanceTelemetryRegistry()
-    telemetry.record_run_transition("failed", "code.workspace.edit", run_id="run-1")
-    telemetry.record_run_transition("failed", "code.workspace.edit", run_id="run-1")
-    telemetry.record_run_transition("failed", "code.workspace.edit", run_id="run-2")
+    telemetry.record_run_transition(
+        "failed", "code.workspace.edit", run_id="run-1", cas_won=True
+    )
+    telemetry.record_run_transition(
+        "failed", "code.workspace.edit", run_id="run-1", cas_won=True
+    )
+    telemetry.record_run_transition(
+        "failed", "code.workspace.edit", run_id="run-2", cas_won=True
+    )
 
     assert telemetry.snapshot()[
         'system_assistant_run_transition_total{capability_id="code.workspace.edit",status="failed"}'
     ] == 2
+
+
+def test_terminal_transition_requires_explicit_winning_cas_and_stable_run_id():
+    from app.system_assistant.telemetry import GovernanceTelemetryRegistry
+
+    telemetry = GovernanceTelemetryRegistry()
+    telemetry.record_run_transition("succeeded", "code.workspace.edit")
+    telemetry.record_run_transition("succeeded", "code.workspace.edit", cas_won=True)
+    telemetry.record_run_transition(
+        "succeeded", "code.workspace.edit", run_id="run-1"
+    )
+    telemetry.record_run_transition(
+        "succeeded", "code.workspace.edit", run_id=" ", cas_won=True
+    )
+    telemetry.record_run_transition(
+        "succeeded", "code.workspace.edit", run_id="run-1", cas_won=False
+    )
+
+    assert telemetry.snapshot()[
+        'system_assistant_run_transition_total{capability_id="code.workspace.edit",status="succeeded"}'
+    ] == 0
+
+
+def test_terminal_transition_does_not_forget_a_prior_run_after_4096_other_runs():
+    from app.system_assistant.telemetry import GovernanceTelemetryRegistry
+
+    telemetry = GovernanceTelemetryRegistry()
+    telemetry.record_run_transition(
+        "succeeded", "code.workspace.edit", run_id="run-0", cas_won=True
+    )
+    for index in range(1, 4098):
+        telemetry.record_run_transition(
+            "succeeded", "code.workspace.edit", run_id=f"run-{index}", cas_won=True
+        )
+    telemetry.record_run_transition(
+        "succeeded", "code.workspace.edit", run_id="run-0", cas_won=True
+    )
+
+    assert telemetry.snapshot()[
+        'system_assistant_run_transition_total{capability_id="code.workspace.edit",status="succeeded"}'
+    ] == 4098
 
 
 def test_governance_metrics_can_be_registered_into_existing_sandbox_registry():

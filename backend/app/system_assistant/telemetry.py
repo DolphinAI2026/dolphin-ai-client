@@ -5,7 +5,6 @@ import json
 import logging
 import re
 import threading
-from collections import OrderedDict
 from collections.abc import Mapping
 from itertools import product
 from typing import Any
@@ -49,7 +48,6 @@ _RECOVERY_RESULTS = ("recovered", "blocked", "skipped", "failure")
 _LATE_COMPLETION_RESULTS = ("ignored", "recorded", "failure")
 _OBSERVABILITY_RESULTS = ("success", "failed")
 _SAFE_POLICY_REVISIONS = tuple(str(value) for value in range(10))
-_MAX_TERMINAL_RUN_KEYS = 4096
 _SENSITIVE_VALUE = re.compile(
     r"(?:token|secret|password|authorization|apikey|api[_-]?key|"
     r"postgres(?:ql)?|mysql|mongodb|redis|amqp)|"
@@ -104,7 +102,7 @@ class GovernanceTelemetryRegistry:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._counters: dict[str, float] = {}
-        self._terminal_runs: OrderedDict[str, None] = OrderedDict()
+        self._terminal_runs: set[str] = set()
         self._initialize()
 
     def _initialize(self) -> None:
@@ -172,19 +170,18 @@ class GovernanceTelemetryRegistry:
         capability_id: str,
         *,
         run_id: str | None = None,
-        cas_won: bool = True,
+        cas_won: bool | None = None,
     ) -> None:
         normalized_status = _label(status, _RUN_STATUSES, "failed")
         if normalized_status in _TERMINAL_STATUSES:
-            if not cas_won:
+            run_token = str(run_id or "").strip()
+            if cas_won is not True or not run_token:
                 return
-            if run_id:
-                with self._lock:
-                    if run_id in self._terminal_runs:
-                        return
-                    self._terminal_runs[run_id] = None
-                    if len(self._terminal_runs) > _MAX_TERMINAL_RUN_KEYS:
-                        self._terminal_runs.popitem(last=False)
+            with self._lock:
+                if run_token in self._terminal_runs:
+                    return
+                # A post-CAS run id is the unique terminal event token for this process.
+                self._terminal_runs.add(run_token)
         self._increment(
             "system_assistant_run_transition_total",
             status=normalized_status,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 
 class RaisingAuditPort:
     def __init__(self) -> None:
@@ -10,7 +11,12 @@ class RaisingAuditPort:
         raise RuntimeError("local audit unavailable")
 
 
-def test_best_effort_audit_failure_does_not_escape_and_increments_gap():
+class FalseAuditPort:
+    def record(self, event):
+        return False
+
+
+def test_best_effort_audit_failure_does_not_escape_and_only_increments_gap():
     from app.system_assistant.audit_adapter import BestEffortAuditAdapter
     from app.system_assistant.telemetry import GovernanceTelemetryRegistry
 
@@ -27,7 +33,29 @@ def test_best_effort_audit_failure_does_not_escape_and_increments_gap():
         execution_generation=2,
         error_code=None,
     ) is False
-    assert telemetry.snapshot()["system_assistant_audit_gap_total"] == 1
+    snapshot = telemetry.snapshot()
+    assert snapshot["system_assistant_audit_gap_total"] == 1
+    assert snapshot['system_assistant_observability_projection_total{result="failed"}'] == 0
+
+
+def test_false_audit_delivery_only_increments_gap_and_logs_allowlisted_fields(caplog):
+    from app.system_assistant.audit_adapter import BestEffortAuditAdapter
+    from app.system_assistant.telemetry import GovernanceTelemetryRegistry
+
+    telemetry = GovernanceTelemetryRegistry()
+    with caplog.at_level(logging.INFO, logger="system_assistant"):
+        assert BestEffortAuditAdapter(FalseAuditPort(), telemetry=telemetry).record(
+            "action_terminal",
+            correlation_id="corr-1",
+            token="SENSITIVE-CANARY-token-123",
+        ) is False
+
+    snapshot = telemetry.snapshot()
+    assert snapshot["system_assistant_audit_gap_total"] == 1
+    assert snapshot['system_assistant_observability_projection_total{result="failed"}'] == 0
+    message = "\n".join(record.getMessage() for record in caplog.records)
+    assert "corr-1" in message
+    assert "SENSITIVE-CANARY-token-123" not in message
 
 
 def test_local_fake_records_allowlisted_event_without_calling_remote_control_plane():

@@ -44,14 +44,18 @@ class BestEffortAuditAdapter:
         try:
             delivered = self._port.record(payload)
         except Exception:
-            self._telemetry.record_audit_gap()
-            self._telemetry.record_observability_projection("failed")
-            log_governance_event("local_audit_failed", error_code="AUDIT_DELIVERY_FAILED")
+            self._record_delivery_gap(fields)
             return False
         if delivered is False:
-            self._telemetry.record_audit_gap()
-            self._telemetry.record_observability_projection("failed")
+            self._record_delivery_gap(fields)
             return False
         return True
+
+    def _record_delivery_gap(self, fields: Mapping[str, Any]) -> None:
+        self._telemetry.record_audit_gap()
+        log_governance_event(
+            "local_audit_failed",
+            **{**fields, "error_code": "AUDIT_DELIVERY_FAILED"},
+        )
 
     record_event = record
