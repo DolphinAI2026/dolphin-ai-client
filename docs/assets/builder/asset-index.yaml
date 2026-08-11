@@ -2,7 +2,7 @@ kind: sandbox-builder-asset-index
 schema_version: v1
 current_phase_id: 2026-08-11-local-builder-image-verification
 source_spec_ref: docs/superpowers/specs/2026-08-11-local-builder-image-verification-design.md
-source_spec_hash: sha256:1e8a26ce33725281aee3e3f83fa3d8dca367cfbf847f0bfbdcb2e9712519d955
+source_spec_hash: sha256:8b760b70977ca147df38ef59e523abab8f76050a7073b10f04a1b059567b06f5
 generator:
   provider: agentic-coding
   version: v1
@@ -92,7 +92,7 @@ assets:
     change_type: added
     status: ready_for_review
     source_spec_ref: docs/superpowers/specs/2026-08-11-local-builder-image-verification-design.md
-    source_spec_hash: sha256:1e8a26ce33725281aee3e3f83fa3d8dca367cfbf847f0bfbdcb2e9712519d955
+    source_spec_hash: sha256:8b760b70977ca147df38ef59e523abab8f76050a7073b10f04a1b059567b06f5
     source_section_refs:
       - "实现操作矩阵"
       - "无副作用边界"
@@ -106,7 +106,7 @@ assets:
     change_type: added
     status: ready_for_review
     source_spec_ref: docs/superpowers/specs/2026-08-11-local-builder-image-verification-design.md
-    source_spec_hash: sha256:1e8a26ce33725281aee3e3f83fa3d8dca367cfbf847f0bfbdcb2e9712519d955
+    source_spec_hash: sha256:8b760b70977ca147df38ef59e523abab8f76050a7073b10f04a1b059567b06f5
     source_section_refs:
       - "Builder 本地镜像验证模式设计"
     summary: "登记只做本地构建与 inspect、禁止推送和 Kubernetes 访问的 source Spec。"

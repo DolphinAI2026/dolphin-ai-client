@@ -13,9 +13,9 @@ relations: []
 
 # Builder 本地镜像验证模式设计
 
-**Spec ID**：`2026-08-11-local-builder-image-verification`  
-**日期**：2026-08-11  
-**状态**：设计已确认，对抗评审已闭合，待用户评审  
+**Spec ID**：`2026-08-11-local-builder-image-verification`
+**日期**：2026-08-11
+**状态**：设计已确认，对抗评审已闭合，待用户评审
 **主仓库**：`apaas-builder-ai`
 
 ## 1. 背景与问题

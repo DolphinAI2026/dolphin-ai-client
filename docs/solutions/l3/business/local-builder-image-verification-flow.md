@@ -3,7 +3,7 @@ asset_kind: business-flow
 asset_id: business-flow.local-builder-image-verification
 knowledge_level: L3
 source_spec_ref: docs/superpowers/specs/2026-08-11-local-builder-image-verification-design.md
-source_spec_hash: sha256:1e8a26ce33725281aee3e3f83fa3d8dca367cfbf847f0bfbdcb2e9712519d955
+source_spec_hash: sha256:8b760b70977ca147df38ef59e523abab8f76050a7073b10f04a1b059567b06f5
 phase_id: 2026-08-11-local-builder-image-verification
 revision: 1
 status: ready_for_review
