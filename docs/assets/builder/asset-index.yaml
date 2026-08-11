@@ -1,8 +1,8 @@
 kind: sandbox-builder-asset-index
 schema_version: v1
-current_phase_id: 2026-07-20-builder-tenant-url-public-uuid
-source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-source_spec_hash: sha256:6acee24aea52edeece77b33dcc438eb3f1e1af00594a9bca69a8070d0e6878c4
+current_phase_id: 2026-08-11-local-builder-image-verification
+source_spec_ref: docs/superpowers/specs/2026-08-11-local-builder-image-verification-design.md
+source_spec_hash: sha256:1e8a26ce33725281aee3e3f83fa3d8dca367cfbf847f0bfbdcb2e9712519d955
 generator:
   provider: agentic-coding
   version: v1
@@ -84,3 +84,29 @@ assets:
     source_section_refs:
       - "Builder 租户 URL 公共 UUID 设计"
     summary: "登记当前 phase source Spec。"
+  - asset_id: business-flow.local-builder-image-verification
+    asset_kind: business-flow
+    knowledge_level: L3
+    path: docs/solutions/l3/business/local-builder-image-verification-flow.md
+    phase_id: 2026-08-11-local-builder-image-verification
+    change_type: added
+    status: ready_for_review
+    source_spec_ref: docs/superpowers/specs/2026-08-11-local-builder-image-verification-design.md
+    source_spec_hash: sha256:1e8a26ce33725281aee3e3f83fa3d8dca367cfbf847f0bfbdcb2e9712519d955
+    source_section_refs:
+      - "实现操作矩阵"
+      - "无副作用边界"
+      - "验收标准"
+    summary: "把 source Spec 第 12 节五项 CLI 操作投影为无远程副作用的 typed flow。"
+  - asset_id: spec.2026-08-11-local-builder-image-verification
+    asset_kind: spec
+    knowledge_level: L1
+    path: docs/superpowers/specs/2026-08-11-local-builder-image-verification-design.md
+    phase_id: 2026-08-11-local-builder-image-verification
+    change_type: added
+    status: ready_for_review
+    source_spec_ref: docs/superpowers/specs/2026-08-11-local-builder-image-verification-design.md
+    source_spec_hash: sha256:1e8a26ce33725281aee3e3f83fa3d8dca367cfbf847f0bfbdcb2e9712519d955
+    source_section_refs:
+      - "Builder 本地镜像验证模式设计"
+    summary: "登记只做本地构建与 inspect、禁止推送和 Kubernetes 访问的 source Spec。"

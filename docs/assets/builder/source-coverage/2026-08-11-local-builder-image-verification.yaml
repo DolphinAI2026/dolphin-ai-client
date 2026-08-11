@@ -1,0 +1,112 @@
+kind: source-coverage-ledger
+schema_version: v1
+phase_id: 2026-08-11-local-builder-image-verification
+source_ref: docs/superpowers/specs/2026-08-11-local-builder-image-verification-design.md
+source_hash: sha256:1e8a26ce33725281aee3e3f83fa3d8dca367cfbf847f0bfbdcb2e9712519d955
+source_profile:
+  long_document_mode: false
+  rationale: "单一 CLI 验证入口，没有页面、表单或业务对象；第 12 节已集中闭合全部操作合同。"
+coverage:
+  applicability:
+    pages:
+      status: not_applicable
+      reason: "本 phase 不新增或修改 UI Surface。"
+    forms:
+      status: not_applicable
+      reason: "本 phase 没有用户表单。"
+    business_flows:
+      status: typed_operation_container
+      reason: "仅生成一个承载五项 CLI operation contract 的 typed flow，不增加用户业务语义。"
+  expected_pages: []
+  expected_forms: []
+  expected_flows:
+    - flow_id: local-builder-image-verification
+      source_chunks:
+        - 2026-08-11-local-builder-image-verification-summary
+      fact_packet_ids:
+        - flow.local-builder-image-verification
+      mapped_to_specs:
+        - docs/superpowers/specs/2026-08-11-local-builder-image-verification-design.md
+      mapped_to_assets:
+        - business-flow.local-builder-image-verification
+      mapped_to_operations:
+        - local-verify.validate-input
+        - local-verify.build-head
+        - local-verify.inspect-image
+        - local-verify.write-result
+        - local-verify.preserve-worktree
+      coverage_status: covered
+      status: covered
+      exemption_reason: ""
+  expected_operations:
+    - operation_code: local-verify.validate-input
+      flow_model_ref: business-flow.local-builder-image-verification
+      page_ref: not-applicable.cli-only
+      source_chunks:
+        - 2026-08-11-local-builder-image-verification-summary
+      fact_packet_ids:
+        - operation.local-verify.validate-input
+      mapped_to_specs:
+        - docs/superpowers/specs/2026-08-11-local-builder-image-verification-design.md
+      mapped_to_assets:
+        - business-flow.local-builder-image-verification
+      coverage_status: covered
+      status: covered
+      exemption_reason: "页面不适用；操作合同由 typed flow 和 source Spec 共同覆盖。"
+    - operation_code: local-verify.build-head
+      flow_model_ref: business-flow.local-builder-image-verification
+      page_ref: not-applicable.cli-only
+      source_chunks:
+        - 2026-08-11-local-builder-image-verification-summary
+      fact_packet_ids:
+        - operation.local-verify.build-head
+      mapped_to_specs:
+        - docs/superpowers/specs/2026-08-11-local-builder-image-verification-design.md
+      mapped_to_assets:
+        - business-flow.local-builder-image-verification
+      coverage_status: covered
+      status: covered
+      exemption_reason: "页面不适用；操作合同由 typed flow 和 source Spec 共同覆盖。"
+    - operation_code: local-verify.inspect-image
+      flow_model_ref: business-flow.local-builder-image-verification
+      page_ref: not-applicable.cli-only
+      source_chunks:
+        - 2026-08-11-local-builder-image-verification-summary
+      fact_packet_ids:
+        - operation.local-verify.inspect-image
+      mapped_to_specs:
+        - docs/superpowers/specs/2026-08-11-local-builder-image-verification-design.md
+      mapped_to_assets:
+        - business-flow.local-builder-image-verification
+      coverage_status: covered
+      status: covered
+      exemption_reason: "页面不适用；操作合同由 typed flow 和 source Spec 共同覆盖。"
+    - operation_code: local-verify.write-result
+      flow_model_ref: business-flow.local-builder-image-verification
+      page_ref: not-applicable.cli-only
+      source_chunks:
+        - 2026-08-11-local-builder-image-verification-summary
+      fact_packet_ids:
+        - operation.local-verify.write-result
+      mapped_to_specs:
+        - docs/superpowers/specs/2026-08-11-local-builder-image-verification-design.md
+      mapped_to_assets:
+        - business-flow.local-builder-image-verification
+      coverage_status: covered
+      status: covered
+      exemption_reason: "页面不适用；操作合同由 typed flow 和 source Spec 共同覆盖。"
+    - operation_code: local-verify.preserve-worktree
+      flow_model_ref: business-flow.local-builder-image-verification
+      page_ref: not-applicable.cli-only
+      source_chunks:
+        - 2026-08-11-local-builder-image-verification-summary
+      fact_packet_ids:
+        - operation.local-verify.preserve-worktree
+      mapped_to_specs:
+        - docs/superpowers/specs/2026-08-11-local-builder-image-verification-design.md
+      mapped_to_assets:
+        - business-flow.local-builder-image-verification
+      coverage_status: covered
+      status: covered
+      exemption_reason: "页面不适用；操作合同由 typed flow 和 source Spec 共同覆盖。"
+  open_items: []

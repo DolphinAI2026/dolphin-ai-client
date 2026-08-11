@@ -10,3 +10,9 @@ phases:
     depends_on: []
     spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
     phase_metadata_ref: docs/assets/builder/phases/2026-07-20-builder-tenant-url-public-uuid.yaml
+  - phase_id: 2026-08-11-local-builder-image-verification
+    title: Builder 本地镜像验证模式
+    status: ready_for_review
+    depends_on: []
+    spec_ref: docs/superpowers/specs/2026-08-11-local-builder-image-verification-design.md
+    phase_metadata_ref: docs/assets/builder/phases/2026-08-11-local-builder-image-verification.yaml

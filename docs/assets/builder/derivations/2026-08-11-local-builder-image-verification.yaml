@@ -1,0 +1,78 @@
+kind: agentic-spec-to-knowledge-derivation
+schema_version: v1
+phase_id: 2026-08-11-local-builder-image-verification
+source_spec_ref: docs/superpowers/specs/2026-08-11-local-builder-image-verification-design.md
+source_spec_hash: sha256:1e8a26ce33725281aee3e3f83fa3d8dca367cfbf847f0bfbdcb2e9712519d955
+asset_index_ref: docs/assets/builder/asset-index.yaml
+status: ready_for_review
+generator:
+  provider: agentic-coding
+  mode: spec-to-knowledge
+  version: v1
+changes:
+  - asset_id: business-flow.local-builder-image-verification
+    asset_kind: business-flow
+    knowledge_level: L3
+    path: docs/solutions/l3/business/local-builder-image-verification-flow.md
+    phase_id: 2026-08-11-local-builder-image-verification
+    change_type: added
+    status: ready_for_review
+    source_spec_ref: docs/superpowers/specs/2026-08-11-local-builder-image-verification-design.md
+    source_spec_hash: sha256:1e8a26ce33725281aee3e3f83fa3d8dca367cfbf847f0bfbdcb2e9712519d955
+    source_section_refs:
+      - "实现操作矩阵"
+      - "无副作用边界"
+      - "验收标准"
+    summary: "把 source Spec 第 12 节五项 CLI 操作投影为无远程副作用的 typed flow。"
+  - asset_id: spec.2026-08-11-local-builder-image-verification
+    asset_kind: spec
+    knowledge_level: L1
+    path: docs/superpowers/specs/2026-08-11-local-builder-image-verification-design.md
+    phase_id: 2026-08-11-local-builder-image-verification
+    change_type: added
+    status: ready_for_review
+    source_spec_ref: docs/superpowers/specs/2026-08-11-local-builder-image-verification-design.md
+    source_spec_hash: sha256:1e8a26ce33725281aee3e3f83fa3d8dca367cfbf847f0bfbdcb2e9712519d955
+    source_section_refs:
+      - "Builder 本地镜像验证模式设计"
+    summary: "登记只做本地构建与 inspect、禁止推送和 Kubernetes 访问的 source Spec。"
+diagnostics:
+  lint_status: passed
+  repair_attempted: false
+  blocking_conditions: []
+  messages:
+    - severity: info
+      code: cli_only_projection
+      message: "本 phase 只有本地 CLI 操作合同，正式投影只登记 source Spec，并用 coverage ledger 映射五项操作。"
+    - severity: info
+      code: short_document_mode_selected
+      message: "虽然 Spec 章节较多，但第 12 节已集中闭合单一 CLI 流程；没有页面、表单、业务对象或跨业务流事实，因此不启用 long_document_mode。"
+    - severity: info
+      code: deterministic_lint_passed
+      message: "source Spec、typed flow、coverage ledger 与 asset index 的确定性 derivation lint 已通过。"
+source_chunk_index_ref: docs/assets/builder/source-coverage/2026-08-11-local-builder-image-verification.chunks.yaml
+source_chunk_index_hash: sha256:4b5285b7917096cc42acf53854fadce8c839ee1d52eea676b9d160dd72cd4955
+source_coverage_ledger_ref: docs/assets/builder/source-coverage/2026-08-11-local-builder-image-verification.yaml
+source_coverage_ledger_hash: sha256:c980a9d4483abef6d84851d91b2136c4ce1f961739a2948a8c2a697057167631
+typed_assets:
+  - asset_id: business-flow.local-builder-image-verification
+    asset_kind: business-flow
+    path: docs/solutions/l3/business/local-builder-image-verification-flow.md
+    schema_version: flow-model/v1
+    source_spec_ref: docs/superpowers/specs/2026-08-11-local-builder-image-verification-design.md
+    source_spec_hash: sha256:1e8a26ce33725281aee3e3f83fa3d8dca367cfbf847f0bfbdcb2e9712519d955
+    structured_block_hash: sha256:960b44e76bc9bc63b164aac67369ef63c704ff1794ffd6d56c28a083f47a35ee
+    fact_packet_refs:
+      - flow.local-builder-image-verification
+    status: ready
+    blocking_codes: []
+    source_coverage_ledger_ref: docs/assets/builder/source-coverage/2026-08-11-local-builder-image-verification.yaml
+    source_coverage_ledger_hash: sha256:c980a9d4483abef6d84851d91b2136c4ce1f961739a2948a8c2a697057167631
+    source_chunk_index_ref: docs/assets/builder/source-coverage/2026-08-11-local-builder-image-verification.chunks.yaml
+    source_chunk_index_hash: sha256:4b5285b7917096cc42acf53854fadce8c839ee1d52eea676b9d160dd72cd4955
+source_asset_refs:
+  - asset_id: business-flow.local-builder-image-verification
+    asset_kind: business-flow
+    path: docs/solutions/l3/business/local-builder-image-verification-flow.md
+    hash: sha256:11f3adc0b1c6f234b4baea331facbdf30b45e29508055addf97649f4c4246e1b
+    section_ref: '#flow_model'
