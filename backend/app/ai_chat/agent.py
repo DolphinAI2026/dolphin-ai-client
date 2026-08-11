@@ -823,12 +823,13 @@ async def _build_initial_messages(
 MAX_TURNS = 25  # 工具循环最大轮数（统一 config 的 25：app 配置/codegen 多步任务需要）
 
 _SYSTEM_ASSISTANT_INTRO_RESPONSE = (
-    "你好，我是睿鲸 AI 的 Dolphin Code 系统助手。我可以协助四类工作：\n"
-    "1. 分析代码、构建、测试和运行问题。\n"
-    "2. 读取上传的代码或技术文件并生成会话产物。\n"
-    "3. 在明确绑定的 Code 工作区内读取和修改文件。\n"
-    "4. 运行命令并验证修改结果。\n"
-    "未绑定 Code 工作区时，我不会自动发现、创建或切换其他工程。"
+    "你好，我是睿鲸 AI 的 Dolphin Code 系统助手，负责企业 Code 的系统级资产和标准能力建设。\n"
+    "我可以协助四类工作：\n"
+    "1. 盘点企业 Code 能力现状，给出种子工程、环境、工程规范和能力建设顺序。\n"
+    "2. 查询和使用知识与 Skill，结合上传文件整理系统规范或资产草稿。\n"
+    "3. 设计、检查和完善种子工程及其开发、测试、构建方案。\n"
+    "4. 在明确绑定的系统资产工作区内修改文件并完成受控验证。\n"
+    "具体应用工程中的修 bug、写接口、改页面和日常功能开发，请进入对应应用的 Code 会话。"
 )
 
 
@@ -1035,11 +1036,10 @@ async def _run_agent_inner(
         messages[0]["content"] = (messages[0].get("content") or "") + _manifest
     elif _manifest:
         logger.warning("deferred manifest skipped: messages[0] is not a system message")
-    if getattr(session, "assistant_profile", None) != "system_assistant":
-        # 普通会话继续注入共享 Skill 与知识目录。系统助手保持纯 Code 上下文，
-        # 不自动加载共享资产，避免把其它产品域的材料带入代码会话。
-        _append_skill_manifest(messages)
-        await _append_knowledge_manifest(messages, db)
+    # Skill 与知识是系统助手要治理和使用的系统级 Code 资产。目录只注入当前
+    # 平台真实可见内容，不会带入应用上下文或自动绑定历史工作区。
+    _append_skill_manifest(messages)
+    await _append_knowledge_manifest(messages, db)
     active_tool_names: set[str] = await _reconstruct_active_tools(db, session)
 
     for turn in range(MAX_TURNS):

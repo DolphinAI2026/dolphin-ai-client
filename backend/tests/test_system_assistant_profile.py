@@ -20,7 +20,7 @@ from app.ai_chat.agent import (
 )
 
 
-def test_system_assistant_profile_exposes_only_code_workspace_and_session_capabilities():
+def test_system_assistant_profile_exposes_system_asset_read_and_use_capabilities():
     profile = resolve_profile("system_assistant")
     tools = set(profile.tool_names)
 
@@ -28,6 +28,14 @@ def test_system_assistant_profile_exposes_only_code_workspace_and_session_capabi
     assert "read_attachment" in tools
     assert "write_artifact" in tools
     assert "run_python" in tools
+    assert {
+        "search_tools",
+        "use_skill",
+        "read_knowledge",
+        "search_knowledge",
+        "list_skills",
+        "read_skill_file",
+    }.issubset(tools)
 
     for forbidden_local in ("write_file", "edit_file", "run_command", "start_serve"):
         assert forbidden_local not in tools
@@ -46,12 +54,6 @@ def test_system_assistant_profile_exposes_only_code_workspace_and_session_capabi
         "create_skill",
         "write_skill_file",
         "update_skill_metadata",
-        "use_skill",
-        "read_knowledge",
-        "search_knowledge",
-        "list_skills",
-        "read_skill_file",
-        "search_tools",
         "list_dev_workspaces",
         "create_dev_workspace",
         "init_apaas_backend_workspace",
@@ -81,14 +83,18 @@ def test_system_assistant_profile_exposes_only_code_workspace_and_session_capabi
         assert forbidden not in tools
 
 
-def test_system_assistant_prompt_is_code_only():
+def test_system_assistant_prompt_targets_system_level_code_assets():
     prompt = resolve_profile("system_assistant").system_prompt
     normalized = prompt.lower()
 
-    assert "只处理代码工程和软件开发任务" in prompt
+    assert "系统级资产、标准与能力基线" in prompt
+    assert "种子工程" in prompt
+    assert "知识和 Skill" in prompt
+    assert "具体应用工程里的日常开发助手" in prompt
+    assert "修复某个应用的 bug" in prompt
+    assert "对应应用的 Code 会话" in prompt
     assert "不发现、枚举、猜测、绑定或创建工作区" in prompt
     assert "不沿用历史会话中的工程身份" in prompt
-    assert "构建、测试或运行验证" in prompt
     assert "Dolphin Code" in prompt
     assert "apaas" not in normalized
     assert "builder" not in normalized
@@ -102,9 +108,12 @@ def test_system_assistant_intro_reports_four_compact_real_capability_directions(
     ]
 
     assert len(numbered_directions) == 4
-    assert "上传的代码或技术文件" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
-    assert "明确绑定的 Code 工作区" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
-    assert "运行命令并验证修改结果" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
+    assert "系统级资产和标准能力建设" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
+    assert "种子工程" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
+    assert "知识与 Skill" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
+    assert "系统资产工作区" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
+    assert "对应应用的 Code 会话" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
+    assert "修 bug、写接口、改页面" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
     assert "apaas" not in _SYSTEM_ASSISTANT_INTRO_RESPONSE.lower()
     assert "builder" not in _SYSTEM_ASSISTANT_INTRO_RESPONSE.lower()
 
@@ -118,6 +127,8 @@ def test_system_assistant_profile_does_not_require_a_bound_workspace():
     assert tools
     assert "read_attachment" in tools
     assert "write_artifact" in tools
+    assert "use_skill" in tools
+    assert "search_knowledge" in tools
     assert "read_workspace_file" not in tools
     assert "write_workspace_files" not in tools
     assert "run_workspace_command" not in tools
