@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import FileResponse, Response
-from app.config import settings, APP_TITLE, APP_DESCRIPTION, APP_VERSION
+from app.config import settings, APP_TITLE, APP_DESCRIPTION, APP_VERSION, validate_governance_policy
 from app.builder_auth.product_guard import (
     ProductDisabledError,
     product_disabled_exception_handler,
@@ -71,7 +71,6 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from app.system_assistant.policy import validate_governance_policy
     validate_governance_policy(
         settings.system_assistant_governance_policy,
         policy_revision=settings.system_assistant_policy_revision,

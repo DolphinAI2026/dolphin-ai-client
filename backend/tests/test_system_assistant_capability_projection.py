@@ -65,6 +65,10 @@ def test_merge_joins_by_exact_capability_code_and_publishes_digest():
             "object_type": "workspace",
             "action": "read",
             "risk_level": "L0",
+            "workspace_action": "read",
+            "confirmation_policy": "none",
+            "audit_policy": "record",
+            "environment_scope": "workspace",
         }
     ]
 
@@ -87,6 +91,21 @@ def test_invalid_or_unmatched_entries_are_excluded(remote, local):
     )
 
     assert result.status == "ready"
+    assert result.items == []
+
+
+def test_merge_mixed_remote_id_types_make_the_batch_unavailable():
+    invalid = _remote()
+    invalid["capabilityId"] = 7
+
+    result = build_capability_projection(
+        [invalid],
+        governance_view=_view(("read_tool", "workspace.read", "L0", 1)),
+        control_plane_revision="rev-1",
+        etag="rev-1",
+    )
+
+    assert result.status == "unavailable"
     assert result.items == []
 
 
@@ -115,3 +134,38 @@ async def test_legacy_never_loads_remote_projection():
     )
 
     assert result.status == "not_needed"
+
+
+@pytest.mark.asyncio
+async def test_fresh_local_projection_still_checks_remote_etag():
+    from app.system_assistant.capability_projection import projection_cache
+
+    projection_cache.invalidate("tenant-etag")
+    calls = []
+
+    class Client:
+        async def load(self, **_kwargs):
+            calls.append(True)
+            return type(
+                "Loaded",
+                (),
+                {
+                    "available": True,
+                    "items": [_remote()],
+                    "projection_revision": "rev-1",
+                    "etag": "rev-1",
+                },
+            )()
+
+    view = _view(("read_tool", "workspace.read", "L0", 1))
+    first = await load_capability_projection(
+        tenant_id="tenant-etag", policy="shadow", policy_revision=1,
+        client=Client(), governance_view=view,
+    )
+    second = await load_capability_projection(
+        tenant_id="tenant-etag", policy="shadow", policy_revision=1,
+        client=Client(), governance_view=view,
+    )
+
+    assert first.status == second.status == "ready"
+    assert len(calls) == 2

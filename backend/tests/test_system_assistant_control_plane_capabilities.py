@@ -82,6 +82,18 @@ async def test_duplicate_capability_id_or_code_is_unavailable():
 
 
 @pytest.mark.asyncio
+async def test_capability_id_and_code_must_be_strings():
+    async def get_page(_page_number, _headers):
+        item = _capability(1)
+        item["capabilityId"] = 1
+        return _page([item], total=1)
+
+    result = await ControlPlaneCapabilityClient(get_page=get_page).load()
+
+    assert result.status == "unavailable"
+
+
+@pytest.mark.asyncio
 async def test_304_reuses_only_fresh_complete_cache_and_missing_cache_is_unavailable():
     calls = []
 
@@ -103,6 +115,22 @@ async def test_304_reuses_only_fresh_complete_cache_and_missing_cache_is_unavail
 
     uncached = ControlPlaneCapabilityClient(get_page=not_modified, cache=ProjectionCache())
     assert (await uncached.load()).status == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_explicit_etag_without_fresh_complete_cache_is_not_sent():
+    calls = []
+
+    async def get_page(page, headers):
+        calls.append((page, headers))
+        return _page([_capability(1)], total=1)
+
+    result = await ControlPlaneCapabilityClient(get_page=get_page, cache=ProjectionCache()).load(
+        etag="stale-etag"
+    )
+
+    assert result.status == "ready"
+    assert calls[0][1] == {}
 
 
 @pytest.mark.asyncio

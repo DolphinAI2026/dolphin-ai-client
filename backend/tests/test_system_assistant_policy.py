@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.system_assistant.policy import validate_governance_policy
+from app.config import validate_governance_policy
 
 
 @pytest.mark.parametrize("policy", ["legacy", "shadow"])

@@ -151,7 +151,9 @@ class ControlPlaneCapabilityClient:
     async def load(self, *, tenant_id: str | int | None = None, etag: str | None = None) -> ProjectionLoadResult:
         key = str(self.tenant_id if tenant_id is None else tenant_id)
         cached = self.cache.get_entry(key)
-        requested_etag = etag or (cached.etag if cached else None)
+        # Only a fresh, complete cache may seed conditional GET. A caller-provided
+        # stale ETag is intentionally ignored rather than treated as a revision.
+        requested_etag = cached.etag if cached and self.cache.is_fresh(key) else None
         headers = {"If-None-Match": requested_etag} if requested_etag else {}
         deadline = time.monotonic() + self.timeout_seconds
         calls: list[dict[str, Any]] = []
@@ -226,10 +228,17 @@ class ControlPlaneCapabilityClient:
                 raise ProjectionUnavailable("capability item is not an object")
             capability_id = _field(item, "capabilityId", "capability_id")
             code = _field(item, "code", "capabilityCode", "capability_code")
-            if not capability_id or not code or str(capability_id) in ids or str(code) in codes:
+            if (
+                not isinstance(capability_id, str)
+                or not isinstance(code, str)
+                or not capability_id.strip()
+                or not code.strip()
+                or capability_id in ids
+                or code in codes
+            ):
                 raise ProjectionUnavailable("duplicate or missing capability id/code")
-            ids.add(str(capability_id))
-            codes.add(str(code))
+            ids.add(capability_id)
+            codes.add(code)
 
 
 async def load_projection(**kwargs: Any) -> ProjectionLoadResult:
@@ -242,7 +251,7 @@ fetch_capability_projection = load_projection
 
 async def load_projection_if_enabled(policy: str, **kwargs: Any) -> ProjectionLoadResult | None:
     """Legacy keeps the phase-A path and never contacts Control Plane."""
-    from .policy import validate_governance_policy
+    from app.config import validate_governance_policy
 
     mode = validate_governance_policy(policy)
     if mode == "legacy":

@@ -95,6 +95,9 @@ def invalidate_projection_cache(key: str | None = None) -> None:
     projection_cache.invalidate(key)
 
 
+clear_cache = invalidate_projection_cache
+
+
 def _value(item: Mapping[str, Any], *names: str, default: Any = None) -> Any:
     for name in names:
         if name in item:
@@ -123,7 +126,11 @@ def _local_contracts(view: Any) -> dict[str, dict[str, Any]]:
         if not isinstance(metadata, Mapping):
             continue
         code = metadata.get("capability_code")
-        required = ("contract_revision", "object_type", "action", "risk_level", "workspace_action", "confirmation_policy")
+        required = (
+            "contract_revision", "object_type", "action", "risk_level",
+            "workspace_action", "confirmation_policy", "audit_policy",
+            "environment_scope",
+        )
         if not code or any(key not in metadata for key in required):
             continue
         if code in contracts:
@@ -143,6 +150,13 @@ def build_capability_projection(
     registry_digest: str | None = None,
 ) -> CapabilityProjection:
     """Merge remote capabilities with one immutable local registry generation."""
+    for remote in remote_items:
+        if not isinstance(remote, Mapping):
+            return CapabilityProjection(status="unavailable", reason="invalid_remote_capability")
+        remote_id = _value(remote, "capabilityId", "capability_id")
+        remote_code = _value(remote, "code", "capabilityCode", "capability_code")
+        if not isinstance(remote_id, str) or not isinstance(remote_code, str):
+            return CapabilityProjection(status="unavailable", reason="invalid_remote_capability")
     contracts = _local_contracts(governance_view)
     remote_by_code: dict[str, Mapping[str, Any]] = {}
     duplicate_codes: set[str] = set()
@@ -200,6 +214,10 @@ def build_capability_projection(
             "object_type": contract["object_type"],
             "action": contract["action"],
             "risk_level": risk,
+            "workspace_action": contract["workspace_action"],
+            "confirmation_policy": contract["confirmation_policy"],
+            "audit_policy": contract.get("audit_policy"),
+            "environment_scope": contract.get("environment_scope"),
         })
     merged.sort(key=lambda item: (item["capability_code"], item["capability_id"]))
     return CapabilityProjection(
@@ -228,7 +246,7 @@ async def load_capability_projection(
     """Load then merge a tenant projection without exposing partial data."""
     from dataclasses import replace
 
-    from .policy import validate_governance_policy
+    from app.config import validate_governance_policy
 
     mode = validate_governance_policy(policy, policy_revision=int(policy_revision))
     if mode == "legacy":
@@ -239,13 +257,6 @@ async def load_capability_projection(
 
         governance_view = capture_governance_view()
     current_registry_digest = _registry_digest(governance_view)
-    cached = projection_cache.get_entry(key)
-    if (
-        isinstance(cached, CapabilityProjection)
-        and cached.policy_revision == policy_revision
-        and cached.registry_digest == current_registry_digest
-    ):
-        return cached
     if client is None:
         from .control_plane_capabilities import ControlPlaneCapabilityClient
 
@@ -272,7 +283,7 @@ async def load_capability_projection(
 
 def projection_status_for_policy(policy: str, load_result: Any | None) -> str:
     """Expose shadow diagnostics without changing legacy tool visibility."""
-    from .policy import validate_governance_policy
+    from app.config import validate_governance_policy
 
     mode = validate_governance_policy(policy)
     if mode == "legacy":
