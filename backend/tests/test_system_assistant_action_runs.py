@@ -75,3 +75,28 @@ async def test_recovery_takeover_requires_expired_lease_and_bumps_state_version(
             await session.rollback()
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_recovery_cannot_take_over_executing_run_with_valid_execution_lease(tmp_path):
+    engine, session_factory = await _make_store(tmp_path / "run-recovery-valid.sqlite3")
+    try:
+        await _seed(session_factory)
+        async with session_factory() as session:
+            run = await session.get(ActionRun, "run-006")
+            run.status = "executing"
+            run.lease_owner = "runner-a"
+            run.lease_expires_at = _now() + timedelta(minutes=5)
+            await session.commit()
+            assert not await claim_recovery(
+                session,
+                run_id="run-006",
+                owner="recovery-a",
+                now=_now(),
+                expected_state_version=0,
+            )
+            await session.rollback()
+            run = await session.get(ActionRun, "run-006")
+            assert run.recovery_owner is None
+    finally:
+        await engine.dispose()

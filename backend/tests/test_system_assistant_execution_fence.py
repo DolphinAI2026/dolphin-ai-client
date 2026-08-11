@@ -212,6 +212,49 @@ async def test_commit_outcome_re_read_uses_governed_once_when_rows_are_durable(t
 
 
 @pytest.mark.asyncio
+async def test_commit_outcome_re_read_rejects_foreign_owner_same_generation(tmp_path):
+    engine, session_factory = await _make_store(tmp_path / "foreign-owner.sqlite3")
+    try:
+        await _seed(session_factory)
+        calls: list[str] = []
+
+        async def governed(_fence):
+            calls.append("governed")
+
+        async def legacy():
+            calls.append("legacy")
+
+        async with session_factory() as session:
+            async def commit_then_foreign_owner(current: AsyncSession):
+                await current.commit()
+                async with session_factory() as foreign:
+                    run = await foreign.get(ActionRun, "run-006")
+                    run.lease_owner = "owner-B"
+                    await foreign.commit()
+                raise RuntimeError("commit acknowledgement lost")
+
+            result = await execute_with_governance(
+                session,
+                ticket_id="ticket-006",
+                run_id="run-006",
+                governed_handler=governed,
+                legacy_handler=legacy,
+                expected_ticket_state_version=1,
+                expected_run_state_version=0,
+                lease_owner="owner-A",
+                commit_fault=commit_then_foreign_owner,
+                independent_session_factory=session_factory,
+            )
+
+        assert result.outcome == "commit_outcome_unknown"
+        assert result.governed_called is False
+        assert result.legacy_called is False
+        assert calls == []
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_execution_fence_rejects_old_generation_expired_lease_and_takeover(tmp_path):
     engine, session_factory = await _make_store(tmp_path / "fence.sqlite3")
     try:
@@ -251,6 +294,76 @@ async def test_execution_fence_rejects_old_generation_expired_lease_and_takeover
             await assert_execution_fence(
                 session_factory, ExecutionFence("run-006", 1), now=_now()
             )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_missing_rows_cas_conflict_never_falls_back_to_legacy(tmp_path):
+    engine, session_factory = await _make_store(tmp_path / "missing-cas.sqlite3")
+    try:
+        calls: list[str] = []
+
+        async def governed(_fence):
+            calls.append("governed")
+
+        async def legacy():
+            calls.append("legacy")
+
+        async with session_factory() as session:
+            result = await execute_with_governance(
+                session,
+                ticket_id="missing-ticket",
+                run_id="missing-run",
+                governed_handler=governed,
+                legacy_handler=legacy,
+                expected_ticket_state_version=0,
+                expected_run_state_version=0,
+                independent_session_factory=session_factory,
+            )
+
+        assert result.outcome == "cas_conflict"
+        assert result.governed_called is False
+        assert result.legacy_called is False
+        assert calls == []
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_immutable_ticket_and_run_contract_mismatch_rejects_without_handler(tmp_path):
+    engine, session_factory = await _make_store(tmp_path / "immutable-mismatch.sqlite3")
+    try:
+        await _seed(session_factory)
+        async with session_factory() as session:
+            run = await session.get(ActionRun, "run-006")
+            run.args_digest = "b" * 64
+            await session.commit()
+
+        calls: list[str] = []
+
+        async def governed(_fence):
+            calls.append("governed")
+
+        async def legacy():
+            calls.append("legacy")
+
+        async with session_factory() as session:
+            result = await execute_with_governance(
+                session,
+                ticket_id="ticket-006",
+                run_id="run-006",
+                governed_handler=governed,
+                legacy_handler=legacy,
+                expected_ticket_state_version=1,
+                expected_run_state_version=0,
+                independent_session_factory=session_factory,
+            )
+
+        assert result.outcome == "cas_conflict"
+        assert result.governed_called is False
+        assert result.legacy_called is False
+        assert calls == []
     finally:
         await engine.dispose()
 

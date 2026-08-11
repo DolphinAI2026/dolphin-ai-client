@@ -95,13 +95,14 @@ def _matches_attempt(
     state: DurableReservation | None,
     *,
     expected_generation: int = 1,
+    expected_lease_owner: str | None = None,
 ) -> bool:
     return bool(
         state
         and state.ticket_status == "reserved"
         and state.run_status == "executing"
         and state.execution_generation == expected_generation
-        and state.lease_owner
+        and state.lease_owner == expected_lease_owner
     )
 
 
@@ -151,6 +152,9 @@ async def execute_with_governance(
     legacy_handler: Callable[..., Any] | None,
     expected_ticket_state_version: int | None = None,
     expected_run_state_version: int | None = None,
+    args_digest: str | None = None,
+    object_revision: str | None = None,
+    correlation_id: str | None = None,
     lease_owner: str | None = None,
     lease_expires_at: datetime | None = None,
     lease_seconds: int = 60,
@@ -180,6 +184,9 @@ async def execute_with_governance(
             run_id=run_id,
             expected_ticket_state_version=expected_ticket_state_version,
             expected_run_state_version=expected_run_state_version,
+            args_digest=args_digest,
+            object_revision=object_revision,
+            correlation_id=correlation_id,
             lease_owner=lease_owner,
             lease_expires_at=lease_expires_at,
             lease_seconds=lease_seconds,
@@ -200,8 +207,6 @@ async def execute_with_governance(
             run_id=run_id,
         )
         await record_reserve_conflict(state, ticket_id=ticket_id, run_id=run_id)
-        if state is not None and state.ticket_status is None and state.run_status is None:
-            return await _call_legacy(legacy_handler, outcome="rollback_confirmed")
         return ExecutionResult(error=CAS_CONFLICT_ERROR, outcome="cas_conflict")
     except Exception:
         await _rollback_quietly(session)
@@ -213,6 +218,7 @@ async def execute_with_governance(
         if _matches_attempt(
             state,
             expected_generation=(reservation.execution_generation if reservation else 1),
+            expected_lease_owner=(reservation.lease_owner if reservation else lease_owner),
         ):
             fence = ExecutionFence(run_id, int(state.execution_generation))
             try:

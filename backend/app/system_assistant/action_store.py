@@ -25,6 +25,10 @@ class ActionCASConflict(RuntimeError):
     """The expected owner/state no longer exists; callers must not retry."""
 
 
+class ImmutableContractMismatch(ActionCASConflict):
+    """Ticket/run immutable identity does not describe the same action."""
+
+
 @dataclass(frozen=True)
 class RunReservation:
     ticket_id: str
@@ -181,6 +185,32 @@ async def reserve_ticket_and_run(
         "authorized_to_reserved", "success"
     )
 
+    ticket_identity = await session.execute(
+        select(
+            ActionTicket.args_digest,
+            ActionTicket.object_revision,
+            ActionTicket.correlation_id,
+        ).where(ActionTicket.ticket_id == ticket_id)
+    )
+    run_identity = await session.execute(
+        select(
+            ActionRun.args_digest,
+            ActionRun.object_revision,
+            ActionRun.correlation_id,
+        ).where(ActionRun.run_id == run_id)
+    )
+    ticket_values = ticket_identity.one_or_none()
+    run_values = run_identity.one_or_none()
+    if ticket_values is None or run_values is None or tuple(ticket_values) != tuple(run_values):
+        raise ImmutableContractMismatch("ticket/run immutable contract mismatch")
+    if any(
+        expected is not None and expected != actual
+        for expected, actual in zip(
+            (args_digest, object_revision, correlation_id), tuple(ticket_values)
+        )
+    ):
+        raise ImmutableContractMismatch("request immutable contract mismatch")
+
     predicates = [
         ActionRun.run_id == run_id,
         ActionRun.ticket_id == ticket_id,
@@ -261,6 +291,10 @@ async def claim_recovery(
     predicates = [
         ActionRun.run_id == run_id,
         ActionRun.status.in_(("executing", "partially_failed", "outcome_unknown")),
+        or_(
+            ActionRun.status != "executing",
+            ActionRun.lease_expires_at <= now,
+        ),
         or_(
             ActionRun.recovery_owner.is_(None),
             ActionRun.recovery_lease_expires_at <= now,
