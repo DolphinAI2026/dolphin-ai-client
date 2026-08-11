@@ -16,6 +16,7 @@ SPEC v2 §5.1 / §5.2:
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from threading import RLock
@@ -58,6 +59,34 @@ _V2_GOVERNANCE_FIELDS = frozenset({
     "environment_scope",
 })
 _V2_TOOL_FIELDS = _BASE_TOOL_FIELDS | _V2_GOVERNANCE_FIELDS
+
+
+def _freeze_snapshot(value: Any) -> Any:
+    """Copy mutable cache data into an immutable governance-view value."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze_snapshot(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze_snapshot(item) for item in value)
+    if isinstance(value, tuple):
+        return tuple(_freeze_snapshot(item) for item in value)
+    return value
+
+
+@dataclass(frozen=True)
+class GovernanceRegistryView:
+    """One immutable v2 registry generation for governance consumers."""
+
+    registry: Mapping[str, Any]
+    tool_contracts: Mapping[str, Mapping[str, Any]]
+    capability_projection: Mapping[str, Mapping[str, str]]
+
+    def tool_meta(self, name: str) -> Mapping[str, Any]:
+        """Return this generation's tool metadata or raise ``KeyError``."""
+        return self.registry["tools"][name]
+
+    def tool_contract(self, name: str) -> Mapping[str, Any]:
+        """Return this generation's derived tool contract or raise ``KeyError``."""
+        return self.tool_contracts[name]
 
 
 def _has_complete_v2_contract(meta: Mapping[str, Any]) -> bool:
@@ -220,6 +249,25 @@ def capability_projection() -> dict[str, dict[str, str]]:
         if load()["version"] != 2:
             return {}
         return {code: dict(contract) for code, contract in _capability_projection().items()}
+
+
+def governance_view() -> GovernanceRegistryView:
+    """Capture registry, contracts and projection from one immutable v2 generation.
+
+    Consumers that combine tool metadata, derived contracts and projection data
+    must use this API instead of composing the legacy single-layer functions.
+    """
+    with _REGISTRY_LOCK:
+        current_registry = load()
+        if current_registry["version"] != 2:
+            raise ValueError("governance_view requires a version 2 registry")
+        from app.services.tool_contract_service import all_contracts
+
+        return GovernanceRegistryView(
+            registry=_freeze_snapshot(current_registry),
+            tool_contracts=_freeze_snapshot(all_contracts()),
+            capability_projection=_freeze_snapshot(_capability_projection()),
+        )
 
 
 def all_tool_names() -> set[str]:

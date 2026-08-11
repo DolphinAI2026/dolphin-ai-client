@@ -280,3 +280,50 @@ def test_reader_waiting_during_reload_observes_one_new_generation(
         "contract": "workspace.new",
         "projection": {"workspace.new"},
     }
+
+
+def test_governance_view_keeps_one_generation_across_reload(_isolated_registry):
+    _write_registry(_isolated_registry, _v2_tool("old_tool", capability_code="workspace.old"))
+    registry.reload()
+    view_captured = Event()
+    release_reader = Event()
+    reload_completed = Event()
+    reader_finished = Event()
+    observed: dict[str, object] = {}
+
+    def read_captured_view():
+        view = registry.governance_view()
+        observed["registry"] = view.registry["version"]
+        observed["tool"] = view.tool_meta("old_tool")["capability_code"]
+        view_captured.set()
+        assert release_reader.wait(timeout=2)
+        observed["contract"] = view.tool_contract("old_tool")["capability_code"]
+        observed["projection"] = set(view.capability_projection)
+        reader_finished.set()
+
+    reader = Thread(target=read_captured_view)
+    reader.start()
+    assert view_captured.wait(timeout=2)
+
+    _write_registry(_isolated_registry, _v2_tool("new_tool", capability_code="workspace.new"))
+    registry.reload()
+    reload_completed.set()
+    release_reader.set()
+    reader.join(timeout=2)
+
+    assert reload_completed.is_set()
+    assert not reader.is_alive()
+    assert reader_finished.is_set()
+    assert observed == {
+        "registry": 2,
+        "tool": "workspace.old",
+        "contract": "workspace.old",
+        "projection": {"workspace.old"},
+    }
+
+    next_view = registry.governance_view()
+    assert next_view.tool_meta("new_tool")["capability_code"] == "workspace.new"
+    assert next_view.tool_contract("new_tool")["capability_code"] == "workspace.new"
+    assert set(next_view.capability_projection) == {"workspace.new"}
+    with pytest.raises(TypeError):
+        next_view.capability_projection["workspace.new"] = {}  # type: ignore[index]
