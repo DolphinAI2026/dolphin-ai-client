@@ -20,11 +20,18 @@ def _stub_service_runtime_bootstrap(monkeypatch):
     from app.code_runtime import service
     from app.code_runtime.sandbox_auth import RuntimeBootstrap, split_entry_token
 
-    async def fake_bootstrap(builder_url: str):
+    async def fake_bootstrap(
+        builder_url: str,
+        *,
+        runtime_base_url: str | None = None,
+    ):
         clean_builder_url, _entry_token = split_entry_token(builder_url)
         return RuntimeBootstrap(
             clean_builder_url=clean_builder_url,
-            runtime_base_url=service.derive_runtime_base_url(clean_builder_url),
+            runtime_base_url=(
+                runtime_base_url
+                or service.derive_runtime_base_url(clean_builder_url)
+            ),
             runtime_cookie="test-runtime-cookie",
             runtime_cookie_hash="c" * 64,
             expires_at=None,
@@ -1827,6 +1834,79 @@ async def test_bootstrap_runtime_session_uses_entry_token_only_upstream_and_retu
 
 
 @pytest.mark.asyncio
+async def test_bootstrap_runtime_session_uses_control_plane_internal_runtime_url():
+    import httpx
+
+    from app.code_runtime.sandbox_auth import bootstrap_runtime_session
+
+    requested_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        return httpx.Response(
+            200,
+            headers={"set-cookie": "apaas_sandbox_token=runtime-cookie; Path=/"},
+        )
+
+    bootstrap = await bootstrap_runtime_session(
+        "https://public.example.test/workspaces/ws-1/builder?token=entry-secret",
+        runtime_base_url="http://runtime-1.dolphin-code.svc.cluster.local:8080",
+        client_factory=lambda: httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ),
+    )
+
+    assert requested_urls == [
+        "http://runtime-1.dolphin-code.svc.cluster.local:8080/api/status?token=entry-secret"
+    ]
+    assert bootstrap.clean_builder_url == (
+        "https://public.example.test/workspaces/ws-1/builder"
+    )
+    assert bootstrap.runtime_base_url == (
+        "http://runtime-1.dolphin-code.svc.cluster.local:8080"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_runtime_base_url",
+    [
+        "ftp://runtime.internal:8080",
+        "http://user:password@runtime.internal:8080",
+        "http://runtime.internal:8080?token=secret",
+        "http://runtime.internal:8080#fragment",
+    ],
+)
+async def test_bootstrap_runtime_session_falls_back_from_invalid_internal_url(
+    invalid_runtime_base_url,
+):
+    import httpx
+
+    from app.code_runtime.sandbox_auth import bootstrap_runtime_session
+
+    requested_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        return httpx.Response(
+            200,
+            headers={"set-cookie": "apaas_sandbox_token=runtime-cookie; Path=/"},
+        )
+
+    await bootstrap_runtime_session(
+        "https://public.example.test/workspaces/ws-1/builder?token=entry-secret",
+        runtime_base_url=invalid_runtime_base_url,
+        client_factory=lambda: httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ),
+    )
+
+    assert requested_urls == [
+        "https://public.example.test/workspaces/ws-1/api/status?token=entry-secret"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_bootstrap_runtime_session_rejects_success_without_runtime_cookie():
     import httpx
     from fastapi import HTTPException
@@ -1969,6 +2049,7 @@ async def test_open_code_session_upserts_runtime_binding(db_session):
             "sandboxInstanceId": "sandbox-93001",
             "conversationId": "conversation-93001",
             "specReviewUrl": "https://sandbox.example.com/workspaces/93001/builder?token=entry-token",
+            "runtimeBaseUrl": "http://om-agent-runtime-93001.dolphin-code.svc.cluster.local:8080",
             "handoff": {"handoffId": handoff_id or "handoff-1", "status": "accepted"},
         }
 
@@ -1995,7 +2076,12 @@ async def test_open_code_session_upserts_runtime_binding(db_session):
     assert binding.external_application_id == "91001"
     assert binding.workspace_id == "93001"
     assert binding.sandbox_instance_id == "sandbox-93001"
-    assert binding.runtime_base_url == "https://sandbox.example.com/workspaces/93001"
+    assert binding.runtime_base_url == (
+        "http://om-agent-runtime-93001.dolphin-code.svc.cluster.local:8080"
+    )
+    assert "runtimeBaseUrl" not in result
+    assert "svc.cluster.local" not in repr(result)
+    assert "entry-token" not in repr(result)
 
 
 @pytest.mark.asyncio

@@ -276,3 +276,27 @@ Control Plane 运行环境需要同时配置：
 ```text
 CONTROL_PLANE_AUTH_FULL_WORKSPACE_BASE_URL=https://dolphin.dfy.definesys.cn
 ```
+
+## Code 工作台 Runtime 内网路由
+
+浏览器始终通过公网 ai-builder 访问
+`/api/code-runtime/{session}/...`。Control Plane 的 `workspace/open` 同时返回：
+
+- `specReviewUrl`：浏览器工作台公网地址，可包含一次性启动 Token；
+- `runtimeBaseUrl`：ai-builder 后端访问 Runtime 的集群内地址，例如
+  `http://om-agent-runtime-93001.orcamatrix-demo.svc.cluster.local:8080`。
+
+ai-builder 只把清理启动 Token 后的公网 Builder URL 交给浏览器，内部地址和 Runtime Cookie
+只保存在服务端 binding 中。非法内部地址会记录告警并回退现有公网地址推导，不会直接阻断工作台。
+
+发布和验收顺序：
+
+1. 先发布 Control Plane，验证 `workspace/open` 的公网、内网两类 URL。
+2. 再发布 ai-builder；老 Control Plane 缺少新字段时保持兼容。
+3. 测试环境设置 `BUILDER_SSE_PADDING_BYTES=16384`。默认 `0` 完全关闭，允许范围 `0-65536`，只对 `/api/builder/events` 添加 SSE 注释首包。
+4. 新建工作区，确认 2 秒内建立 SSE，页面不持续显示“重新连接中”。
+5. 等待一次 Runtime Cookie 续期，确认 binding 继续使用内网地址且会话不中断。
+6. 检查 Builder JS/CSS，无 gzip 解码错误；检查 ai-builder 日志不再请求公网 Runtime 域名。
+
+该改造不要求调整公网网关、负载均衡或 Ingress。ai-builder Pod 必须能够解析并访问
+Runtime 所在命名空间的 `*.svc.cluster.local` Service。

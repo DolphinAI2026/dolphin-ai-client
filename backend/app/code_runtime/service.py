@@ -1155,7 +1155,15 @@ async def open_code_session(
     else:
         for bootstrap_attempt in range(2):
             try:
-                bootstrap = await bootstrap_runtime_session(builder_url)
+                bootstrap_kwargs = (
+                    {"runtime_base_url": opened.get("runtimeBaseUrl")}
+                    if "runtimeBaseUrl" in opened
+                    else {}
+                )
+                bootstrap = await bootstrap_runtime_session(
+                    builder_url,
+                    **bootstrap_kwargs,
+                )
                 break
             except HTTPException as exc:
                 auth_error = str(

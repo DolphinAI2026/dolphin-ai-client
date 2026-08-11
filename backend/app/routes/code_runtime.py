@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import hashlib
 import json
+import logging
 import time
+import zlib
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Annotated, Any, Literal, Optional
@@ -79,6 +82,7 @@ from app.models.ai_chat import (
 
 router = APIRouter(prefix="/code", tags=["code-runtime"])
 proxy_router = APIRouter(prefix="/code-runtime", tags=["code-runtime-proxy"])
+logger = logging.getLogger(__name__)
 
 
 class CreateCodeSessionRequest(BaseModel):
@@ -2308,14 +2312,30 @@ def _rewrite_runtime_dev_asset_paths(
 ) -> bytes:
     prefix = _public_proxy_prefix(session_id, forwarded_prefix).encode("utf-8")
     rewritten = content
-    for root in (b"@vite/", b"@react-refresh", b"src/", b"node_modules/", b"@id/", b"@fs/"):
+    for root in (
+        b"@vite/",
+        b"@react-refresh",
+        b"src/",
+        b"node_modules/",
+        b"@id/",
+        b"@fs/",
+        b"builder/assets/",
+    ):
         rewritten = rewritten.replace(b'"/' + root, b'"' + prefix + b"/" + root)
         rewritten = rewritten.replace(b"'/" + root, b"'" + prefix + b"/" + root)
         rewritten = rewritten.replace(b"url(/" + root, b"url(" + prefix + b"/" + root)
     return rewritten
 
 
-_DEV_ASSET_PREFIXES = ("src/", "@vite/", "@react-refresh", "node_modules/", "@id/", "@fs/")
+_DEV_ASSET_PREFIXES = (
+    "src/",
+    "@vite/",
+    "@react-refresh",
+    "node_modules/",
+    "@id/",
+    "@fs/",
+    "builder/assets/",
+)
 
 
 def _should_buffer_dev_asset_path(path: str) -> bool:
@@ -2330,6 +2350,24 @@ def _should_rewrite_buffered_response(path: str, content_type: str) -> bool:
         return True
     # Vite can serve TypeScript/TSX modules as text/plain in some dev-server paths.
     return _should_buffer_dev_asset_path(path)
+
+
+def _maybe_decompress_gzip_asset(content: bytes, path: str) -> bytes:
+    if not content.startswith(b"\x1f\x8b"):
+        return content
+    try:
+        return gzip.decompress(content)
+    except (gzip.BadGzipFile, EOFError, OSError, zlib.error) as exc:
+        logger.warning("Failed to decompress proxied Builder asset path=%s: %s", path, exc)
+        return content
+
+
+async def _stream_runtime_response(upstream: httpx.Response, path: str):
+    padding_size = int(settings.builder_sse_padding_bytes)
+    if path.strip("/") == "api/builder/events" and padding_size >= 3:
+        yield b":" + b" " * (padding_size - 3) + b"\n\n"
+    async for chunk in upstream.aiter_bytes():
+        yield chunk
 
 
 @dataclass(frozen=True)
@@ -3295,7 +3333,11 @@ async def proxy_code_runtime(
     if is_builder_html or is_buffered_dev_asset:
         try:
             content_type = upstream.headers.get("content-type", "")
-            content = await upstream.aread()
+            if is_buffered_dev_asset:
+                content = b"".join([chunk async for chunk in upstream.aiter_raw()])
+                content = _maybe_decompress_gzip_asset(content, path)
+            else:
+                content = await upstream.aread()
             if is_builder_html and "text/html" in content_type:
                 content = _inject_shell_config(
                     content,
@@ -3344,7 +3386,7 @@ async def proxy_code_runtime(
             await _close_upstream_attempt(attempt)
 
     response = StreamingResponse(
-        upstream.aiter_raw(),
+        _stream_runtime_response(upstream, path),
         status_code=upstream.status_code,
         headers=_copyable_response_headers(upstream.headers, binding, session_id, forwarded_prefix),
         background=BackgroundTask(_close_upstream, upstream, attempt.client),

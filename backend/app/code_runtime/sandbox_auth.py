@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -31,6 +32,7 @@ _LAUNCH_AUTH_ERRORS = {
 }
 _SESSION_CAPACITY_ERROR = "sandbox_session_capacity_exceeded"
 _PROXY_COOKIE_TOKEN_TYPE = "code_runtime_proxy"
+logger = logging.getLogger(__name__)
 
 
 def runtime_session_expiry_for_storage(value: datetime | None) -> datetime | None:
@@ -221,8 +223,13 @@ async def _renew_browser_runtime_session(
                         "workspace_temporarily_unavailable"
                     )
                 try:
+                    bootstrap_kwargs = (
+                        {"runtime_base_url": opened.get("runtimeBaseUrl")}
+                        if "runtimeBaseUrl" in opened
+                        else {}
+                    )
                     runtime_bootstrap = await asyncio.wait_for(
-                        bootstrap(builder_url),
+                        bootstrap(builder_url, **bootstrap_kwargs),
                         timeout=10.0,
                     )
                     break
@@ -439,6 +446,35 @@ def _derive_runtime_base_url(builder_url: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, base_path.rstrip("/"), "", ""))
 
 
+def _validated_runtime_base_url(value: str | None) -> str | None:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return None
+    try:
+        parsed = urlsplit(candidate)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError("unsupported scheme")
+        if not parsed.hostname:
+            raise ValueError("hostname is missing")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("userinfo is forbidden")
+        if parsed.query or parsed.fragment:
+            raise ValueError("query and fragment are forbidden")
+        parsed.port
+    except ValueError as exc:
+        logger.warning("Ignoring invalid Control Plane runtimeBaseUrl: %s", exc)
+        return None
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path.rstrip("/"),
+            "",
+            "",
+        )
+    )
+
+
 def _runtime_cookie(response: httpx.Response) -> tuple[str, datetime | None]:
     value = response.cookies.get(RUNTIME_COOKIE_NAME)
     expires_at: datetime | None = None
@@ -475,6 +511,7 @@ def _runtime_cookie(response: httpx.Response) -> tuple[str, datetime | None]:
 async def bootstrap_runtime_session(
     builder_url: str,
     *,
+    runtime_base_url: str | None = None,
     client_factory: Callable[[], httpx.AsyncClient] | None = None,
 ) -> RuntimeBootstrap:
     try:
@@ -483,8 +520,11 @@ async def bootstrap_runtime_session(
         sandbox_auth_metrics.record_builder_url_cleanup("failure")
         raise
     sandbox_auth_metrics.record_builder_url_cleanup("success")
-    runtime_base_url = _derive_runtime_base_url(clean_builder_url)
-    request_url = f"{runtime_base_url}/api/status?token={quote(entry_token, safe='')}"
+    resolved_runtime_base_url = (
+        _validated_runtime_base_url(runtime_base_url)
+        or _derive_runtime_base_url(clean_builder_url)
+    )
+    request_url = f"{resolved_runtime_base_url}/api/status?token={quote(entry_token, safe='')}"
     factory = client_factory or (lambda: httpx.AsyncClient(timeout=10.0))
     try:
         async with factory() as client:
@@ -516,7 +556,7 @@ async def bootstrap_runtime_session(
     runtime_cookie, expires_at = _runtime_cookie(response)
     return RuntimeBootstrap(
         clean_builder_url=clean_builder_url,
-        runtime_base_url=runtime_base_url,
+        runtime_base_url=resolved_runtime_base_url,
         runtime_cookie=runtime_cookie,
         runtime_cookie_hash=hashlib.sha256(runtime_cookie.encode("utf-8")).hexdigest(),
         expires_at=expires_at,

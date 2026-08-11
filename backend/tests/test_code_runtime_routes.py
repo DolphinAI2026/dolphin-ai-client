@@ -717,6 +717,8 @@ def test_code_runtime_proxy_rewrites_unicode_content_disposition_header():
     copied = _copyable_response_headers({
         "content-disposition": 'inline; filename="项目启动文档.md"',
         "content-type": "text/markdown",
+        "content-encoding": "gzip",
+        "content-length": "1024",
     })
 
     value = copied["content-disposition"]
@@ -724,6 +726,8 @@ def test_code_runtime_proxy_rewrites_unicode_content_disposition_header():
     assert 'filename="download.md"' in value
     assert "filename*=UTF-8''%E9%A1%B9%E7%9B%AE%E5%90%AF%E5%8A%A8%E6%96%87%E6%A1%A3.md" in value
     assert copied["content-type"] == "text/markdown"
+    assert "content-encoding" not in copied
+    assert "content-length" not in copied
 
 
 def test_code_runtime_proxy_rewrites_vite_dev_asset_paths():
@@ -753,6 +757,7 @@ def test_code_runtime_proxy_only_buffers_vite_dev_asset_paths():
     assert _should_buffer_dev_asset_path("src/main.tsx")
     assert _should_buffer_dev_asset_path("@vite/client")
     assert _should_buffer_dev_asset_path("node_modules/.vite/deps/react.js")
+    assert _should_buffer_dev_asset_path("builder/assets/index.js")
     assert not _should_buffer_dev_asset_path("api/builder/events")
     assert not _should_buffer_dev_asset_path("api/agent/sessions/current")
 
@@ -763,6 +768,80 @@ def test_code_runtime_proxy_does_not_special_case_runtime_relative_document_path
     assert not _should_buffer_dev_asset_path("docs/demo.md")
     assert not _should_buffer_dev_asset_path("builder/docs/demo.md")
     assert not _should_buffer_dev_asset_path("README.md")
+
+
+def test_code_runtime_proxy_decompresses_gzip_asset_before_path_rewrite():
+    import gzip
+
+    from app.routes.code_runtime import (
+        _maybe_decompress_gzip_asset,
+        _rewrite_runtime_dev_asset_paths,
+    )
+
+    compressed = gzip.compress(b'import App from "/src/App.tsx";')
+    content = _maybe_decompress_gzip_asset(compressed, "builder/assets/index.js")
+    rewritten = _rewrite_runtime_dev_asset_paths(content, "s1")
+
+    assert not rewritten.startswith(b"\x1f\x8b")
+    assert b'from "/api/code-runtime/s1/src/App.tsx"' in rewritten
+
+
+@pytest.mark.asyncio
+async def test_code_runtime_sse_padding_defaults_to_disabled(monkeypatch):
+    from app.config import settings
+    from app.routes.code_runtime import _stream_runtime_response
+
+    class Upstream:
+        async def aiter_bytes(self):
+            yield b"data: ready\n\n"
+
+    monkeypatch.setattr(settings, "builder_sse_padding_bytes", 0)
+    chunks = [chunk async for chunk in _stream_runtime_response(
+        Upstream(),
+        "api/builder/events",
+    )]
+
+    assert chunks == [b"data: ready\n\n"]
+
+
+@pytest.mark.asyncio
+async def test_code_runtime_sse_padding_uses_exact_comment_frame(monkeypatch):
+    from app.config import settings
+    from app.routes.code_runtime import _stream_runtime_response
+
+    class Upstream:
+        async def aiter_bytes(self):
+            yield b"data: ready\n\n"
+
+    monkeypatch.setattr(settings, "builder_sse_padding_bytes", 16384)
+    chunks = [chunk async for chunk in _stream_runtime_response(
+        Upstream(),
+        "/api/builder/events/",
+    )]
+
+    assert len(chunks[0]) == 16384
+    assert chunks[0].startswith(b":")
+    assert chunks[0].endswith(b"\n\n")
+    assert b"data:" not in chunks[0]
+    assert chunks[1] == b"data: ready\n\n"
+
+
+@pytest.mark.asyncio
+async def test_code_runtime_sse_padding_does_not_touch_other_streams(monkeypatch):
+    from app.config import settings
+    from app.routes.code_runtime import _stream_runtime_response
+
+    class Upstream:
+        async def aiter_bytes(self):
+            yield b"payload"
+
+    monkeypatch.setattr(settings, "builder_sse_padding_bytes", 16384)
+    chunks = [chunk async for chunk in _stream_runtime_response(
+        Upstream(),
+        "api/agent/sessions/current",
+    )]
+
+    assert chunks == [b"payload"]
 
 
 def test_runtime_request_headers_strip_browser_auth_cookies_and_inject_server_cookie():
@@ -4991,17 +5070,21 @@ async def test_concurrent_browser_renewal_singleflight_joins_new_generation(
         await asyncio.wait_for(release_open.wait(), timeout=5)
         return {
             "specReviewUrl": "https://runtime.test/workspaces/crm/builder?token=launch",
+            "runtimeBaseUrl": "http://runtime-crm.dolphin-code.svc.cluster.local:8080",
             "workspaceId": "workspace-1",
             "sandboxInstanceId": "sandbox-1",
         }
 
-    async def bootstrap(builder_url):
+    async def bootstrap(builder_url, *, runtime_base_url=None):
         nonlocal bootstrap_calls
         assert builder_url.endswith("?token=launch")
+        assert runtime_base_url == (
+            "http://runtime-crm.dolphin-code.svc.cluster.local:8080"
+        )
         bootstrap_calls += 1
         return RuntimeBootstrap(
             clean_builder_url="https://runtime.test/workspaces/crm/builder",
-            runtime_base_url="https://runtime.test/workspaces/crm",
+            runtime_base_url=runtime_base_url,
             runtime_cookie="renewed-cookie",
             runtime_cookie_hash=hashlib.sha256(b"renewed-cookie").hexdigest(),
             expires_at=None,
@@ -5039,7 +5122,11 @@ async def test_concurrent_browser_renewal_singleflight_joins_new_generation(
     assert snapshot["sandbox_auth_singleflight_join_total"] == 5
     async with Session() as db:
         row = (await db.execute(select(CodeRuntimeBrowserSession))).scalar_one()
+        renewed_binding = (await db.execute(select(CodeRuntimeBinding))).scalar_one()
         assert row.generation == 8
+        assert renewed_binding.runtime_base_url == (
+            "http://runtime-crm.dolphin-code.svc.cluster.local:8080"
+        )
     await engine.dispose()
 
 

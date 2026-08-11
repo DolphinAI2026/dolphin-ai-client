@@ -50,6 +50,7 @@ PUBLIC_URL="${PUBLIC_URL:-https://${DEV_HOST}/ai-builder/login}"
 APAAS_BASE_URL="${APAAS_BASE_URL:-}"
 DEV_DATABASE_NAME="${DEV_DATABASE_NAME:-apaas_builder_dev}"
 DEV_MCP_API_KEYS="${DEV_MCP_API_KEYS:-dev-mcp-api-key-local}"
+BUILDER_SSE_PADDING_BYTES="${BUILDER_SSE_PADDING_BYTES:-0}"
 
 SOURCE_NGINX_CM="${SOURCE_NGINX_CM:-${PROD_APP_NAME}-nginx}"
 NGINX_CM="${NGINX_CM:-${APP_NAME}-nginx}"
@@ -154,15 +155,16 @@ clone_backend_secret() {
   kubectl -n "$NAMESPACE" get secret "$SOURCE_BACKEND_SECRET" -o jsonpath='{.data.backend\.env}' \
     | python3 -c 'import base64,sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))' \
     > /tmp/apaas-builder-backend.env
-  python3 - "$APAAS_BASE_URL" "$DEV_DATABASE_NAME" /tmp/apaas-builder-backend.env <<'PY'
+  python3 - "$APAAS_BASE_URL" "$DEV_DATABASE_NAME" "$BUILDER_SSE_PADDING_BYTES" /tmp/apaas-builder-backend.env <<'PY'
 from pathlib import Path
 import sys
 from urllib.parse import urlsplit, urlunsplit
 
-base_url, dev_db, path = sys.argv[1:4]
+base_url, dev_db, sse_padding_bytes, path = sys.argv[1:5]
 env_path = Path(path)
 values = {
     "APAAS_BASE_URL": base_url,
+    "BUILDER_SSE_PADDING_BYTES": sse_padding_bytes,
 }
 seen = set()
 lines = []

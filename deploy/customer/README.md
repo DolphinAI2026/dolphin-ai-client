@@ -35,6 +35,26 @@ Control Plane 运行环境必须同时配置
 
 少数脚本级覆盖仍可用：`APAAS_BUILDER_DATA_DIR`（决定首次生成配置的位置，默认 `/data/apaas`）、`ADMIN_USERNAME`、`ADMIN_PASSWORD`。
 
+## Code 工作台连接
+
+客户以 Kubernetes 方式同时部署 Control Plane、ai-builder 和 Agent Runtime 时，
+`workspace/open` 会返回两类地址：`specReviewUrl` 供浏览器通过公网 ai-builder 打开工作台，
+`runtimeBaseUrl` 供 ai-builder 后端通过集群内 Service 访问 Runtime。ai-builder 不会把
+`runtimeBaseUrl`、Runtime Cookie 或启动 Token 返回浏览器。
+
+现场发布顺序固定为：
+
+1. 先发布 Control Plane，确认 `workspace/open` 同时返回公网 `specReviewUrl` 和形如
+   `http://<service>.<namespace>.svc.cluster.local:8080` 的 `runtimeBaseUrl`。
+2. 再发布 ai-builder。老版本 Control Plane 没有 `runtimeBaseUrl` 时仍能运行，但会继续走公网 Runtime fallback。
+3. 公网 L7 会缓冲小 SSE 首包时，在 `backend.env` 配置
+   `BUILDER_SSE_PADDING_BYTES=16384`；无该问题的环境保持默认 `0`。
+4. 新建工作区验证首次连接，再等待一次 Runtime 凭证续期，确认页面不中断且 ai-builder 日志不再访问公网 Runtime 域名。
+5. 验证 Builder JS/CSS 无 gzip 解码错误。
+
+该方案不需要修改公网网关、负载均衡或 Ingress。前提是 ai-builder Pod 能解析并访问
+Control Plane 返回的集群内 Service DNS；单机 Docker Compose 不具备该网络条件时会自动使用现有公网地址 fallback。
+
 ## ⚠️ 重要
 
 - 本脚本能做**配置层加固**（随机密钥、最小化 backend.env），但**改不了代码/编排层的红线**。
