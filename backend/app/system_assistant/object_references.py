@@ -64,10 +64,16 @@ def _freeze(value: Any) -> Any:
         return tuple(_freeze(item) for item in value)
     if isinstance(value, (set, frozenset, bytes, bytearray, memoryview)):
         raise ObjectReferenceError("OBJECT_MAPPING_UNRESOLVED")
-    if isinstance(value, float) and not math.isfinite(value):
-        raise ObjectReferenceError("OBJECT_MAPPING_UNRESOLVED")
-    if value is None or isinstance(value, (bool, int, float, str)):
+    if value is None or type(value) is bool:
         return value
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ObjectReferenceError("OBJECT_MAPPING_UNRESOLVED")
+        return float(value)
+    if isinstance(value, str):
+        return str(value)
     raise ObjectReferenceError("OBJECT_MAPPING_UNRESOLVED")
 
 

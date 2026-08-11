@@ -8,6 +8,18 @@ from app.system_assistant.object_references import (
 )
 
 
+class MutableInt(int):
+    pass
+
+
+class MutableStr(str):
+    pass
+
+
+class MutableFloat(float):
+    pass
+
+
 def _context(*, tenant_id=7, objects=None):
     return {
         "tenant_id": tenant_id,
@@ -92,6 +104,28 @@ def test_resolver_rejects_mutable_metadata_leaves_before_publishing_a_digest():
         resolve_object_ref("workspace:ws-a", context)
 
     assert raised.value.code == "OBJECT_MAPPING_UNRESOLVED"
+
+
+@pytest.mark.parametrize(
+    ("source_value", "expected_type"),
+    [
+        (MutableInt(7), int),
+        (MutableStr("ready"), str),
+        (MutableFloat(1.5), float),
+    ],
+)
+def test_resolver_normalizes_mutable_metadata_scalar_subclasses(source_value, expected_type):
+    source_value.mutable_state = {"status": "before"}
+    context = _context()
+    context["object_catalog"]["workspace:ws-a"]["metadata"] = {"payload": source_value}
+
+    resolved = resolve_object_ref("workspace:ws-a", context)
+    original_digest = resolved.metadata_digest
+
+    assert type(resolved.metadata["payload"]) is expected_type
+    assert not hasattr(resolved.metadata["payload"], "mutable_state")
+    source_value.mutable_state["status"] = "after"
+    assert resolved.metadata_digest == original_digest
 
 
 def test_ambiguous_or_revision_drift_object_refs_have_typed_errors():
