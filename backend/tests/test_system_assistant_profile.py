@@ -19,20 +19,11 @@ from app.ai_chat.agent import (
 )
 
 
-def test_system_assistant_profile_exposes_workspace_runtime_and_diagnostics_only():
+def test_system_assistant_profile_exposes_only_code_workspace_and_session_capabilities():
     profile = resolve_profile("system_assistant")
     tools = set(profile.tool_names)
 
     assert profile.name == "system_assistant"
-    assert "先诊断" in profile.system_prompt
-    assert "read_workspace_file" in tools
-    assert "write_workspace_files" in tools
-    assert "run_workspace_command" in tools
-    assert "list_dev_workspaces" in tools
-    assert "create_dev_workspace" in tools
-    assert "init_apaas_backend_workspace" in tools
-    assert "doctor_apaas_backend_workspace" in tools
-    assert "lint_apaas_backend_workspace" in tools
     assert {"use_skill", "read_knowledge", "search_knowledge"}.issubset(tools)
     assert "read_attachment" in tools
     assert "write_artifact" in tools
@@ -54,23 +45,46 @@ def test_system_assistant_profile_exposes_workspace_runtime_and_diagnostics_only
         "create_skill",
         "write_skill_file",
         "update_skill_metadata",
+        "list_dev_workspaces",
+        "create_dev_workspace",
+        "init_apaas_backend_workspace",
+        "doctor_apaas_backend_workspace",
+        "lint_apaas_backend_workspace",
+        "list_dev_scenes",
+        "get_dev_scene_spec",
+        "get_dev_scene_full_workflow",
+        "get_application",
+        "list_my_applications",
+        "list_platform_envs",
+        "get_apaas_app_overview",
+        "list_apaas_apps_in_env",
+        "list_apaas_app_models",
+        "list_apaas_app_menus",
+        "list_apaas_app_roles",
+        "list_apaas_form_permissions",
+        "compute_app_health",
+        "read_workspace_file",
+        "write_workspace_files",
+        "edit_workspace_files",
+        "run_workspace_command",
+        "glob_workspace",
+        "grep_workspace",
+        "get_dev_workspace_status",
     ):
         assert forbidden not in tools
 
 
-def test_system_assistant_prompt_describes_seed_workspace_and_bound_workspace_contract():
+def test_system_assistant_prompt_has_no_default_workspace_or_apaas_context():
     prompt = resolve_profile("system_assistant").system_prompt
 
-    assert "内置 dev scene/seed scaffold" in prompt
-    assert "create_dev_workspace" in prompt
-    assert "不是创建 Builder/aPaaS 应用" in prompt
-    assert "生成开发规格或工程草稿" in prompt
-    assert "初始化 aPaaS 后端骨架" in prompt
-    assert "doctor、lint 和验证" in prompt
-    assert "生成和迭代工作区内的 user Skill 草稿" in prompt
-    assert "不写共享 Skill 库" in prompt
-    assert "单工作区锁" in prompt
-    assert "数字员工能力" in prompt
+    assert "默认没有当前应用，也没有当前工作区" in prompt
+    assert "不要发现、枚举、猜测、绑定或创建工作区" in prompt
+    assert "form-page" in prompt
+    assert "apaas.json" in prompt
+    assert "旧上下文" in prompt
+    assert "明确绑定" in prompt
+    assert "Dolphin Code" in prompt
+    assert "Builder" in prompt
 
 
 def test_system_assistant_intro_reports_four_compact_real_capability_directions():
@@ -80,9 +94,10 @@ def test_system_assistant_intro_reports_four_compact_real_capability_directions(
     ]
 
     assert len(numbered_directions) == 4
-    assert "种子工程/工作区" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
-    assert "生成或迭代工作区 Skill 草稿" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
-    assert "平台配置、部署发布和数字员工能力暂不开放" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
+    assert "上传的文件" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
+    assert "知识与 Skill" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
+    assert "明确绑定的 Code 工作区" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
+    assert "不会自动发现或切换旧工作区" in _SYSTEM_ASSISTANT_INTRO_RESPONSE
 
 
 def test_system_assistant_profile_does_not_require_a_bound_workspace():
@@ -92,6 +107,13 @@ def test_system_assistant_profile_does_not_require_a_bound_workspace():
 
     assert prompt == resolve_profile("system_assistant").system_prompt
     assert tools
+    assert "read_attachment" in tools
+    assert "write_artifact" in tools
+    assert "read_workspace_file" not in tools
+    assert "write_workspace_files" not in tools
+    assert "run_workspace_command" not in tools
+    assert "list_dev_workspaces" not in tools
+    assert "create_dev_workspace" not in tools
     assert locked_ws_id is None
 
 
@@ -123,9 +145,12 @@ def test_system_assistant_code_session_locks_bound_workspace_and_context():
     profile = resolve_profile("system_assistant")
 
     assert prompt == profile.system_prompt
-    assert tools == set(narrow_tools_for_locked_ws(profile.tool_names, "ws-system"))
+    assert set(profile.tool_names).issubset(tools)
     assert "list_dev_workspaces" not in tools
     assert "create_dev_workspace" not in tools
+    assert "read_workspace_file" in tools
+    assert "write_workspace_files" in tools
+    assert "run_workspace_command" in tools
     assert locked_ws_id == "ws-system"
     assert "ws-system" in (ws_bind_view_context(locked_ws_id) or "")
 
@@ -136,17 +161,19 @@ def test_system_assistant_code_session_locks_bound_workspace_and_context():
     assert "ws-system" in (view_context or "")
 
 
-def test_system_assistant_code_session_without_workspace_can_discover_one():
+def test_system_assistant_code_session_without_workspace_stays_session_scoped():
     session = SimpleNamespace(
         mode="code", assistant_profile="system_assistant", workspace_id=None
     )
 
     _prompt, tools, locked_ws_id = resolve_overrides_for_session(session)
-    profile = resolve_profile("system_assistant")
-
-    assert tools == set(profile.tool_names)
-    assert "list_dev_workspaces" in tools
-    assert "create_dev_workspace" in tools
+    assert "read_attachment" in tools
+    assert "write_artifact" in tools
+    assert "read_workspace_file" not in tools
+    assert "write_workspace_files" not in tools
+    assert "run_workspace_command" not in tools
+    assert "list_dev_workspaces" not in tools
+    assert "create_dev_workspace" not in tools
     assert locked_ws_id is None
     assert ws_bind_view_context(locked_ws_id) is None
 

@@ -93,54 +93,52 @@ _DEV_APAAS_SYSTEM_PROMPT = """你是睿鲸 AI 的代码开发助手,在一个【
 记住:你的价值是把需求**落成代码**,不是反复确认和聊天。"""
 
 
-_SYSTEM_ASSISTANT_SYSTEM_PROMPT = """你是睿鲸 AI 的 Code 系统助手，主要为 Dolphin Code 的工程工作区和系统能力提供协助。
-你不负责 Builder 的应用搭建流程，也不是平台管理后台；回答必须以当前实际提供的工具和真实数据为准。
+_SYSTEM_ASSISTANT_SYSTEM_PROMPT = """你是睿鲸 AI 的 Dolphin Code 系统助手，面向系统级工程、知识、Skill 和文件处理任务。
+你不是 Builder 应用搭建助手，也不是 aPaaS 应用或平台管理助手。
 
-工作顺序必须是：先诊断并读取现状，再根据证据执行受控动作，最后验证并报告结果。
-- 未绑定工作区时，可以使用内置 dev scene/seed scaffold 选择场景，并调用 create_dev_workspace 创建本地 Code 自开发种子工程/工作区；这不是创建 Builder/aPaaS 应用。
-- 已绑定工作区时继续遵守单工作区锁：可以读取、写入和编辑工程文件，生成开发规格或工程草稿，初始化 aPaaS 后端骨架，运行构建或受控命令，以及 doctor、lint 和验证。
-- 可以查询知识、Skill 和系统基线，也可以用工作区文件工具生成和迭代工作区内的 user Skill 草稿；模板或文档只是可选参考来源。
-- Skill 草稿默认写入当前工作区，不写共享 Skill 库；不进入 Builder 的 create_new 或 doc_pipeline 流程，不写入平台配置，不上传产物，不部署或发布；数字员工能力也不开放。
-- 当前不要主动声称支持应用健康检查、应用详情、模型/表单/权限查询等平台管理能力，除非本轮确实提供了对应工具并成功取得真实结果。
-- 没有绑定 ws_id 时先发现已有工作区；只有用户要求新建本地自开发工程时才创建种子工作区，不要猜测、切换到无关工作区或扩大操作范围。
-- 修改前说明依据和影响，修改后运行必要验证；遇到权限、环境或目标不明确时停止并说明阻断原因。
+当前短期边界：
+- 默认没有当前应用，也没有当前工作区。没有明确绑定 ws_id 时，不要发现、枚举、猜测、绑定或创建工作区。
+- 不要主动查询或介绍 aPaaS 应用、模型、表单、菜单、权限、环境、健康状态或旧自开发资产。
+- 历史消息里出现的 form-page、apaas.json、未绑定候选工作区等内容属于旧上下文；除非用户本轮明确指定，否则不得继续沿用或据此判断当前工程。
+- 未绑定工作区时，只处理用户本轮问题、上传的文件、会话产物、知识和 Skill；需要真实工程才能完成时，直接说明当前会话尚未明确绑定 Code 工作区。
+- 只有会话已经明确绑定唯一 Code 工作区时，才读取、修改、运行和验证该工作区；不得枚举、切换或创建其他工作区。
+- 不进入 Builder 的应用生成流程，不修改平台配置，不部署或发布，不虚构尚未开放的系统资产管理能力。
 
-当用户只是问候或询问“你能做什么”时，使用简短的自然语言说明，最多覆盖四个真实方向，不使用 emoji、长能力清单或虚构功能。
-用户提出具体任务后不要重复介绍能力，直接进入诊断和处理。
+回答以本轮请求和真实工具结果为准。具体任务直接处理；缺少必要输入时只说明真正的阻断，不用旧工作区列表填充答案。
 """
 
 
+_SYSTEM_ASSISTANT_SESSION_TOOLS: tuple[str, ...] = (
+    "read_attachment",
+    "run_python",
+    "write_artifact",
+    "read_artifact",
+    "edit_artifact",
+    "create_artifact_from_attachment",
+    "ask_clarifying_question",
+    "search_tools",
+    "save_binary_artifact",
+    "use_skill",
+    "read_knowledge",
+    "search_knowledge",
+    "list_skills",
+    "read_skill_file",
+)
+
+_SYSTEM_ASSISTANT_BOUND_WORKSPACE_TOOLS: tuple[str, ...] = (
+    "get_dev_workspace_status",
+    "glob_workspace",
+    "grep_workspace",
+    "read_workspace_file",
+    "edit_workspace_files",
+    "write_workspace_files",
+    "run_workspace_command",
+)
+
+
 def _system_assistant_tool_names() -> tuple[str, ...]:
-    """Return the non-destructive system/runtime boundary from the registry."""
-    reg = _load_registry()
-    allowed_categories = {"dev_workspace", "dev_scene", "introspection"}
-    allowed_skill_reads = {
-        "get_config_skill", "list_config_skills", "list_skills", "read_skill_file",
-    }
-    allow = {
-        name for name, meta in reg["tools"].items()
-        if (
-            (meta.get("category") in allowed_categories or name in allowed_skill_reads)
-            and not meta.get("writes_apaas")
-            and not meta.get("deploys_or_publishes")
-        )
-    }
-    allow -= _paused_tool_names()
-    session_tools = [
-        "read_attachment",
-        "run_python",
-        "write_artifact",
-        "read_artifact",
-        "edit_artifact",
-        "create_artifact_from_attachment",
-        "ask_clarifying_question",
-        "search_tools",
-        "save_binary_artifact",
-        "use_skill",
-        "read_knowledge",
-        "search_knowledge",
-    ]
-    return tuple(session_tools + sorted(allow - set(session_tools)))
+    """Return the default session-scoped system-assistant tools."""
+    return _SYSTEM_ASSISTANT_SESSION_TOOLS
 
 
 _PROFILE_BUILDERS = {
@@ -265,7 +263,10 @@ def resolve_overrides_for_session(session) -> tuple[str | None, set[str] | None,
     if assistant_profile == "system_assistant":
         profile = resolve_profile("system_assistant")
         ws_id = getattr(session, "workspace_id", None)
-        tool_names = set(narrow_tools_for_locked_ws(profile.tool_names, ws_id))
+        tool_names = set(profile.tool_names)
+        if ws_id:
+            tool_names.update(_SYSTEM_ASSISTANT_BOUND_WORKSPACE_TOOLS)
+            tool_names = set(narrow_tools_for_locked_ws(tool_names, ws_id))
         return (profile.system_prompt, tool_names, ws_id or None)
     if assistant_profile != "entry_agent":
         raise ValueError(f"未知 assistant_profile: {assistant_profile!r}")
