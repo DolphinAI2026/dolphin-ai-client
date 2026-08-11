@@ -71,6 +71,14 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from app.system_assistant.policy import validate_governance_policy
+    validate_governance_policy(
+        settings.system_assistant_governance_policy,
+        policy_revision=settings.system_assistant_policy_revision,
+        min_policy_revision=settings.system_assistant_min_policy_revision,
+        projection_cache_seconds=settings.system_assistant_projection_cache_seconds,
+    )
+
     # 安全门(deploy-readiness 阻断项): ENCRYPTION_KEY 不许用仓库里的默认值跑——
     # 否则所有 aPaaS 密码都用一把公开的 key 加密。本地开发/历史数据要继续用默认 key,
     # 必须显式 ALLOW_DEFAULT_ENCRYPTION_KEY=1 表态。
