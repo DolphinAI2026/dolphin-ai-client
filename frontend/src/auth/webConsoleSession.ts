@@ -9,16 +9,17 @@ export async function recoverWebConsoleRedirect(
   const target = resolveExternalLoginRedirect(redirect, baseUrl)
   if (!target || !hasBuilderSession) return null
 
-  if (!localStorage.getItem('access_token')?.trim()) {
-    const session = await authApi.createWebConsoleSession()
-    const accessToken = String(session.access_token || '').trim()
-    const tenantId = String(session.tenant_id || '').trim()
-    if (!accessToken || !tenantId) {
-      throw new Error('Web Console session response is incomplete')
-    }
-    localStorage.setItem('access_token', accessToken)
-    localStorage.setItem('tenant_id', tenantId)
+  localStorage.removeItem('access_token')
+  localStorage.removeItem('tenant_id')
+
+  const session = await authApi.createWebConsoleSession()
+  const accessToken = String(session.access_token || '').trim()
+  const tenantId = String(session.tenant_id || '').trim()
+  if (!accessToken || !tenantId) {
+    throw new Error('Web Console session response is incomplete')
   }
+  localStorage.setItem('access_token', accessToken)
+  localStorage.setItem('tenant_id', tenantId)
 
   return target
 }

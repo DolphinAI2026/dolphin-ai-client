@@ -36,6 +36,41 @@ describe('standalone Web Console session recovery', () => {
     expect(localStorage.getItem('tenant_id')).toBe('840289793437859841')
   })
 
+  it('replaces a stale Web Console session before redirecting', async () => {
+    localStorage.setItem('access_token', 'stale-web-console-token')
+    localStorage.setItem('tenant_id', 'stale-tenant')
+    authMocks.createWebConsoleSession.mockResolvedValue({
+      access_token: 'fresh-web-console-token',
+      tenant_id: '840289793437859841',
+    })
+
+    const target = await recoverWebConsoleRedirect(
+      '/web-console/',
+      true,
+      '/builder-standalone/',
+    )
+
+    expect(target).toBe('/builder-standalone/web-console/')
+    expect(authMocks.createWebConsoleSession).toHaveBeenCalledOnce()
+    expect(localStorage.getItem('access_token')).toBe('fresh-web-console-token')
+    expect(localStorage.getItem('tenant_id')).toBe('840289793437859841')
+  })
+
+  it('removes a stale Web Console session when exchange fails', async () => {
+    localStorage.setItem('access_token', 'stale-web-console-token')
+    localStorage.setItem('tenant_id', 'stale-tenant')
+    authMocks.createWebConsoleSession.mockRejectedValue(new Error('identity expired'))
+
+    await expect(recoverWebConsoleRedirect(
+      '/web-console/',
+      true,
+      '/builder-standalone/',
+    )).rejects.toThrow('identity expired')
+
+    expect(localStorage.getItem('access_token')).toBeNull()
+    expect(localStorage.getItem('tenant_id')).toBeNull()
+  })
+
   it('does not create a management session before Builder authentication succeeds', async () => {
     const target = await recoverWebConsoleRedirect(
       '/web-console/',
