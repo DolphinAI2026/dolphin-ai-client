@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import logging
 import uuid
 from datetime import datetime
 from typing import Any, Optional
@@ -16,9 +15,7 @@ from sqlalchemy import case, func, select
 
 from app.database import AsyncSessionLocal
 from app.models.agent_observability import AgentRun, AgentStep
-
-logger = logging.getLogger(__name__)
-
+from app.system_assistant.telemetry import governance_telemetry, log_governance_event
 
 async def start_run(
     *,
@@ -52,7 +49,8 @@ async def start_run(
             )
             await db.commit()
     except Exception:
-        logger.warning("[observability] start_run failed", exc_info=True)
+        governance_telemetry.record_observability_projection("failed")
+        log_governance_event("observability_projection_failed", error_code="RECORDER_START_FAILED")
     return run_id
 
 
@@ -89,7 +87,8 @@ async def record_step(
             )
             await db.commit()
     except Exception:
-        logger.warning("[observability] record_step failed run_id=%s", run_id, exc_info=True)
+        governance_telemetry.record_observability_projection("failed")
+        log_governance_event("observability_projection_failed", error_code="RECORDER_STEP_FAILED")
 
 
 async def end_run(run_id: str, *, status: str, error: Optional[str] = None) -> None:
@@ -125,4 +124,5 @@ async def end_run(run_id: str, *, status: str, error: Optional[str] = None) -> N
             run.turn_count = int(agg[2] or 0)
             await db.commit()
     except Exception:
-        logger.warning("[observability] end_run failed run_id=%s", run_id, exc_info=True)
+        governance_telemetry.record_observability_projection("failed")
+        log_governance_event("observability_projection_failed", error_code="RECORDER_END_FAILED")
