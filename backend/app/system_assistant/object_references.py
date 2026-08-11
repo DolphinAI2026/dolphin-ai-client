@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -48,19 +49,33 @@ def _parse_ref(raw_ref: Any) -> tuple[str, str, str | None]:
 
 
 def _metadata_digest(metadata: Mapping[str, Any]) -> str:
-    payload = json.dumps(metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    payload = json.dumps(_json_value(metadata), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _freeze(value: Any) -> Any:
     if isinstance(value, Mapping):
+        if any(not isinstance(key, str) for key in value):
+            raise ObjectReferenceError("OBJECT_MAPPING_UNRESOLVED")
         return MappingProxyType({key: _freeze(item) for key, item in value.items()})
     if isinstance(value, list):
         return tuple(_freeze(item) for item in value)
     if isinstance(value, tuple):
         return tuple(_freeze(item) for item in value)
-    if isinstance(value, set):
-        return frozenset(_freeze(item) for item in value)
+    if isinstance(value, (set, frozenset, bytes, bytearray, memoryview)):
+        raise ObjectReferenceError("OBJECT_MAPPING_UNRESOLVED")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ObjectReferenceError("OBJECT_MAPPING_UNRESOLVED")
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    raise ObjectReferenceError("OBJECT_MAPPING_UNRESOLVED")
+
+
+def _json_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _json_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_json_value(item) for item in value]
     return value
 
 
@@ -108,6 +123,7 @@ def resolve_object_ref(raw_ref: Any, auth_context: Mapping[str, Any]) -> Resolve
     metadata = candidate.get("metadata") or {}
     if not isinstance(metadata, Mapping):
         raise ObjectReferenceError("OBJECT_MAPPING_UNRESOLVED")
+    frozen_metadata = _freeze(metadata)
     return ResolvedObjectRef(
         object_type=object_type,
         tenant_id=int(candidate["tenant_id"]),
@@ -115,7 +131,7 @@ def resolve_object_ref(raw_ref: Any, auth_context: Mapping[str, Any]) -> Resolve
         revision=revision,
         owner_ref=str(candidate["owner_ref"]),
         environment_ref=(str(candidate["environment_ref"]) if candidate.get("environment_ref") else None),
-        metadata_digest=_metadata_digest(metadata),
+        metadata_digest=_metadata_digest(frozen_metadata),
         stable_id_digest=hashlib.sha256(stable_id.encode("utf-8")).hexdigest(),
-        metadata=_freeze(metadata),
+        metadata=frozen_metadata,
     )

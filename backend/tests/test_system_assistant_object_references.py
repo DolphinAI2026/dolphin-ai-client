@@ -82,6 +82,18 @@ def test_resolved_object_metadata_is_deeply_immutable():
         resolved.metadata["nested"]["state"] = "stale"
 
 
+def test_resolver_rejects_mutable_metadata_leaves_before_publishing_a_digest():
+    context = _context()
+    context["object_catalog"]["workspace:ws-a"]["metadata"] = {
+        "payload": bytearray(b"ready")
+    }
+
+    with pytest.raises(ObjectReferenceError) as raised:
+        resolve_object_ref("workspace:ws-a", context)
+
+    assert raised.value.code == "OBJECT_MAPPING_UNRESOLVED"
+
+
 def test_ambiguous_or_revision_drift_object_refs_have_typed_errors():
     duplicate = [_context()["object_catalog"]["workspace:ws-a"]] * 2
 
