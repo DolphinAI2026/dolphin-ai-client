@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Callable
 
-from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.system_assistant_governance import ActionRun
@@ -329,45 +328,21 @@ async def complete_action_run(
     telemetry: GovernanceTelemetryRegistry = governance_telemetry,
     now: datetime | None = None,
 ) -> bool:
-    """Write one terminal state using status+generation CAS; late writes lose."""
-    now = now or utc_now()
-    terminal = {
-        "succeeded", "failed", "partially_failed", "recovered",
-        "recovery_blocked", "outcome_unknown", "aborted",
-    }
-    if status not in terminal:
-        raise ValueError(f"unsupported terminal status: {status}")
-    result = await session.execute(
-        update(ActionRun)
-        .where(
-            ActionRun.run_id == fence.run_id,
-            ActionRun.status == "executing",
-            ActionRun.execution_generation == fence.execution_generation,
-            ActionRun.lease_expires_at > now,
-            ActionRun.recovery_owner.is_(None),
-        )
-        .values(
-            status=status,
-            result_status=result_status,
-            result_summary=result_summary or {},
-            error_code=error_code,
-            finished_at=now,
-            state_version=ActionRun.state_version + 1,
-            updated_at=now,
-        )
+    """Delegate terminal writes to the canonical lifecycle CAS boundary."""
+    from app.system_assistant.session_lifecycle import (
+        complete_action_run as complete_action_run_canonical,
     )
-    won = result.rowcount == 1
-    await session.commit()
-    run = await session.get(ActionRun, fence.run_id)
-    telemetry.record_run_transition(
-        status,
-        getattr(run, "capability_id", "other"),
-        run_id=fence.run_id,
-        cas_won=won,
+
+    return await complete_action_run_canonical(
+        session,
+        fence,
+        status=status,
+        result_status=result_status,
+        result_summary=result_summary,
+        error_code=error_code,
+        telemetry=telemetry,
+        now=now,
     )
-    if not won:
-        telemetry.record_late_completion("ignored")
-    return won
 
 
 async def _rollback_quietly(session: AsyncSession) -> None:

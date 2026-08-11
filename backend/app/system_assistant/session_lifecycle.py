@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import delete as sql_delete, select, update
+from sqlalchemy import case, delete as sql_delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -29,6 +29,18 @@ ACTIVE_ACTION_ERROR_CODE = "SYSTEM_ASSISTANT_SESSION_HAS_ACTIVE_ACTION"
 TICKET_BLOCKING_STATUSES = frozenset({"reserved"})
 RUN_BLOCKING_STATUSES = frozenset(
     {"executing", "partially_failed", "recovery_blocked", "outcome_unknown"}
+)
+CANCELLABLE_RUN_STATUSES = frozenset({"authorized", "executing"})
+TERMINAL_RUN_STATUSES = frozenset(
+    {
+        "succeeded",
+        "failed",
+        "partially_failed",
+        "recovered",
+        "recovery_blocked",
+        "outcome_unknown",
+        "aborted",
+    }
 )
 LATE_COMPLETION_ERROR_CODE = "LATE_COMPLETION_IGNORED"
 
@@ -164,11 +176,14 @@ async def cancel_action_run(
             update(ActionRun)
             .where(
                 ActionRun.run_id == run_id,
-                ActionRun.status == "executing",
+                ActionRun.status.in_(CANCELLABLE_RUN_STATUSES),
                 ActionRun.execution_generation == expected_generation,
             )
             .values(
-                status="outcome_unknown",
+                status=case(
+                    (ActionRun.status == "executing", "outcome_unknown"),
+                    else_="aborted",
+                ),
                 cancel_requested_at=now,
                 execution_generation=ActionRun.execution_generation + 1,
                 lease_owner=None,
@@ -209,7 +224,7 @@ async def cancel_session_action_runs(
                 .join(ActionTicket, ActionTicket.ticket_id == ActionRun.ticket_id)
                 .where(
                     ActionTicket.session_id == session_id,
-                    ActionRun.status == "executing",
+                    ActionRun.status.in_(CANCELLABLE_RUN_STATUSES),
                 )
                 .with_for_update()
             )
@@ -217,7 +232,9 @@ async def cancel_session_action_runs(
         results: list[CancelResult] = []
         for run in runs:
             generation = int(run.execution_generation)
-            run.status = "outcome_unknown"
+            run.status = (
+                "outcome_unknown" if run.status == "executing" else "aborted"
+            )
             run.cancel_requested_at = now
             run.execution_generation = generation + 1
             run.lease_owner = None
@@ -247,11 +264,7 @@ async def complete_action_run(
     now = now or utc_now()
     run_id = str(fence.run_id)
     generation = int(fence.execution_generation)
-    terminal = {
-        "succeeded", "failed", "partially_failed", "recovered",
-        "recovery_blocked", "outcome_unknown", "aborted",
-    }
-    if status not in terminal:
+    if status not in TERMINAL_RUN_STATUSES:
         raise ValueError(f"unsupported terminal status: {status}")
     await _rollback_if_needed(db)
     try:
@@ -285,16 +298,27 @@ async def complete_action_run(
             )
             return True
 
-        # The stale write is diagnostic only.  A persistent marker prevents a
-        # retrying old handler from incrementing the metric a second time.
+        # Only a non-terminal current run can receive the bounded stale-write
+        # marker.  Terminal rows are immutable after their winning CAS.
         await db.rollback()
-        run = await db.get(ActionRun, run_id)
-        if run is not None and run.error_code != LATE_COMPLETION_ERROR_CODE:
-            run.error_code = LATE_COMPLETION_ERROR_CODE
-            run.updated_at = now
-            run.state_version = int(run.state_version) + 1
+        marker = await db.execute(
+            update(ActionRun)
+            .where(
+                ActionRun.run_id == run_id,
+                ActionRun.status.not_in(TERMINAL_RUN_STATUSES),
+                ActionRun.error_code.is_(None),
+            )
+            .values(
+                error_code=LATE_COMPLETION_ERROR_CODE,
+                updated_at=now,
+                state_version=ActionRun.state_version + 1,
+            )
+        )
+        if marker.rowcount == 1:
             await db.commit()
             telemetry.record_late_completion("ignored")
+        else:
+            await db.rollback()
         return False
     except Exception:
         await db.rollback()
