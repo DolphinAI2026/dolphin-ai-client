@@ -486,6 +486,7 @@ const platformNavItem: NavItem = __DESKTOP__
 
 // 三模式共用的「能力中心」入口 → hub 页(技能/知识/MCP/AI网关 4 tab)
 const hubNavItem: NavItem = { key: 'hub', label: '能力中心', icon: 'spark', path: '/hub' }
+const auditLogNavItem: NavItem = { key: 'audit-logs', label: '管理审计日志', icon: 'activity', path: '/audit-logs' }
 const desktopSettingsItem = { path: '/desktop-settings' }
 
 const userAccount = computed(() => user.user?.username || '')
@@ -1004,6 +1005,19 @@ function renderIcon(name: string): string {
         </a>
 
         <!-- 知识库已并入「得小帆·共性能力」hub(/hub?tab=knowledge), 不再单列 footer 入口 -->
+
+        <a
+          v-if="user.isTenantAdmin"
+          class="console-row"
+          :class="{ active: isActive(auditLogNavItem.path) }"
+          :href="resolveHref(auditLogNavItem.path)"
+          title="管理审计日志"
+          @click="onMenuClick($event, auditLogNavItem)"
+          @auxclick="onMenuClick($event, auditLogNavItem)"
+        >
+          <span class="console-row-icon" v-html="renderIcon('activity')" />
+          <span>管理审计日志</span>
+        </a>
 
         <button
           v-if="isDesktop"

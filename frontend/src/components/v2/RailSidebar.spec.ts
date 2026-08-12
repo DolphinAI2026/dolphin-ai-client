@@ -141,6 +141,18 @@ describe('RailSidebar unified session source (SP2b)', () => {
 })
 
 describe('RailSidebar tenant navigation', () => {
+  it('shows the tenant audit log entry only to tenant administrators', () => {
+    const auditEntry = railSidebarSource.indexOf(':href="resolveHref(auditLogNavItem.path)"')
+    const auditEntryStart = railSidebarSource.lastIndexOf('<a', auditEntry)
+    const auditEntryEnd = railSidebarSource.indexOf('</a>', auditEntry)
+    const auditEntrySource = railSidebarSource.slice(auditEntryStart, auditEntryEnd)
+
+    expect(auditEntry).toBeGreaterThan(-1)
+    expect(auditEntrySource).toContain('v-if="user.isTenantAdmin"')
+    expect(auditEntrySource).toContain("renderIcon('activity')")
+    expect(auditEntrySource).toContain('管理审计日志')
+  })
+
   it('maps the visible tenant id to the public id for atomic tenant navigation', () => {
     expect(railSidebarSource).toContain(
       '@click="selectTenant(String(tenant.tenant_id))"',

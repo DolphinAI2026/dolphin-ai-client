@@ -4,7 +4,7 @@
 三类成员，UI 用 source 字段区分。
 """
 from __future__ import annotations
-from typing import Annotated, Optional
+from typing import Annotated, Literal, Optional
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -14,30 +14,67 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.deps import get_auth_context, AuthContext
+from app.application_access import (
+    PROJECT_TO_APPLICATION_ROLE,
+    ROLE_LEVELS,
+    normalize_application_role,
+    resolve_effective_application_role,
+)
 from app.models import Application, Project, ProjectMember, User
 from app.models.collaboration import ApplicationMember
 from app.models.tenant import Role, UserTenant
-from app.project_access import normalize_project_role
+from app.audit_log import (
+    AuditActorContext,
+    add_audit_log,
+    record_audit_log_best_effort,
+    snapshot_audit_actor,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/applications", tags=["application-members"])
 
-_ROLE_LEVELS = {
-    "viewer": 1,
-    "contributor": 2,
-    "maintainer": 3,
-    "owner": 4,
-}
-
-
 class InviteAppMemberRequest(BaseModel):
     username: Optional[str] = None
     user_id: Optional[int] = None
-    role: str = "contributor"
+    role: Literal["admin", "collaborator"] = "collaborator"
 
 
 class UpdateAppMemberRoleRequest(BaseModel):
-    role: str
+    role: Literal["admin", "collaborator"]
+
+
+async def _record_member_error(
+    db: AsyncSession,
+    *,
+    actor: AuditActorContext,
+    application_id: int,
+    event_type: str,
+    target_id: object,
+    error: Exception,
+) -> None:
+    try:
+        await db.rollback()
+        result = "denied" if isinstance(error, HTTPException) and error.status_code == 403 else "failure"
+        failure_reason = error.detail if isinstance(error, HTTPException) else str(error)
+        await record_audit_log_best_effort(
+            actor=actor,
+            application_id=application_id,
+            event_type=event_type,
+            target_type="application_member",
+            target_id=target_id,
+            result=result,
+            failure_reason=str(failure_reason),
+        )
+    except Exception:
+        logger.exception("member error audit failed", extra={"application_id": application_id})
+
+
+async def _require_member_manager(db: AsyncSession, app: Application, ctx: AuthContext) -> None:
+    if ctx.tenant_role in {"tenant_admin", "platform_admin"}:
+        return
+    role = await resolve_effective_application_role(db, app, ctx.user.id)
+    if role not in {"owner", "admin"}:
+        raise HTTPException(403, "需要应用所有者或管理员权限")
 
 
 async def _resolve_application_or_404(
@@ -67,9 +104,9 @@ async def _require_application_access(
 def _merge_member(members: dict[int, dict], item: dict) -> None:
     """Merge duplicate membership sources and keep the highest effective app role."""
     user_id = int(item["user_id"])
-    item["role"] = normalize_project_role(item.get("role"))
+    item["role"] = normalize_application_role(item.get("role")) or "collaborator"
     existing = members.get(user_id)
-    if not existing or _ROLE_LEVELS.get(item["role"], 0) > _ROLE_LEVELS.get(existing.get("role"), 0):
+    if not existing or ROLE_LEVELS.get(item["role"], 0) > ROLE_LEVELS.get(existing.get("role"), 0):
         members[user_id] = item
 
 
@@ -117,20 +154,25 @@ async def list_application_members(
         application_id=application_id,
         tenant_id=ctx.tenant_id,
     )
+    await _require_member_manager(db, app, ctx)
 
     members: dict[int, dict] = {}
 
     if app.project_id:
         pm_rows = (await db.execute(
             select(ProjectMember, User)
+            .join(Project, Project.id == ProjectMember.project_id)
             .join(User, ProjectMember.user_id == User.id)
-            .where(ProjectMember.project_id == app.project_id)
+            .where(
+                ProjectMember.project_id == app.project_id,
+                Project.tenant_id == app.tenant_id,
+            )
         )).all()
         for pm, u in pm_rows:
             _merge_member(members, {
                 "user_id": u.id,
                 "username": u.username,
-                "role": normalize_project_role(pm.role),
+                "role": PROJECT_TO_APPLICATION_ROLE.get(pm.role, "collaborator"),
                 "source": "inherited",
                 "is_active": u.is_active,
                 "created_at": pm.created_at.isoformat() if pm.created_at else None,
@@ -145,25 +187,24 @@ async def list_application_members(
         _merge_member(members, {
             "user_id": u.id,
             "username": u.username,
-            "role": normalize_project_role(am.role),
+            "role": am.role,
             "source": "direct",
             "is_active": u.is_active,
             "created_at": am.created_at.isoformat() if am.created_at else None,
         })
 
-    if app.created_by not in members:
-        owner_user = (await db.execute(
-            select(User).where(User.id == app.created_by)
-        )).scalar_one_or_none()
-        if owner_user:
-            _merge_member(members, {
-                "user_id": owner_user.id,
-                "username": owner_user.username,
-                "role": "owner",
-                "source": "creator",
-                "is_active": owner_user.is_active,
-                "created_at": app.created_at.isoformat() if app.created_at else None,
-            })
+    owner_user = (await db.execute(
+        select(User).where(User.id == app.created_by)
+    )).scalar_one_or_none()
+    if owner_user:
+        _merge_member(members, {
+            "user_id": owner_user.id,
+            "username": owner_user.username,
+            "role": "owner",
+            "source": "creator",
+            "is_active": owner_user.is_active,
+            "created_at": app.created_at.isoformat() if app.created_at else None,
+        })
 
     await _attach_tenant_user_meta(db, members=members, tenant_id=ctx.tenant_id)
     return list(members.values())
@@ -176,12 +217,35 @@ async def invite_application_member(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """邀请用户加入应用（外部协作者）"""
+    """直接添加当前组织用户为应用成员。"""
+    actor = snapshot_audit_actor(ctx)
+    target_ref = req.user_id or req.username or "unknown"
+    try:
+        return await _invite_application_member(application_id, req, ctx, db)
+    except Exception as error:
+        await _record_member_error(
+            db,
+            actor=actor,
+            application_id=application_id,
+            event_type="application_member.direct_add",
+            target_id=target_ref,
+            error=error,
+        )
+        raise
+
+
+async def _invite_application_member(
+    application_id: int,
+    req: InviteAppMemberRequest,
+    ctx: AuthContext,
+    db: AsyncSession,
+):
     app = await _require_application_access(
         db,
         application_id=application_id,
         tenant_id=ctx.tenant_id,
     )
+    await _require_member_manager(db, app, ctx)
 
     if req.user_id:
         target = (await db.execute(select(User).where(User.id == req.user_id))).scalar_one_or_none()
@@ -204,22 +268,25 @@ async def invite_application_member(
     if not ut:
         raise HTTPException(400, "目标用户不是当前组织的有效成员")
 
-    requested = normalize_project_role(req.role)
-    if requested == "owner":
-        raise HTTPException(400, "不能直接邀请为 owner（只有创建者持有）")
+    requested = req.role
     if app.created_by == target.id:
         raise HTTPException(400, "创建者已拥有 owner 权限")
 
     inherited_role = None
     if app.project_id:
         inherited_member = (await db.execute(
-            select(ProjectMember).where(
+            select(ProjectMember)
+            .join(Project, Project.id == ProjectMember.project_id)
+            .where(
                 ProjectMember.project_id == app.project_id,
                 ProjectMember.user_id == target.id,
+                Project.tenant_id == app.tenant_id,
             )
         )).scalar_one_or_none()
         if inherited_member:
-            inherited_role = normalize_project_role(inherited_member.role)
+            inherited_role = PROJECT_TO_APPLICATION_ROLE.get(
+                inherited_member.role, "collaborator",
+            )
 
     existing = (await db.execute(
         select(ApplicationMember).where(
@@ -229,7 +296,7 @@ async def invite_application_member(
     )).scalar_one_or_none()
     if existing:
         raise HTTPException(400, "该用户已是应用成员")
-    if inherited_role and _ROLE_LEVELS.get(requested, 0) <= _ROLE_LEVELS.get(inherited_role, 0):
+    if inherited_role and ROLE_LEVELS.get(requested, 0) <= ROLE_LEVELS.get(inherited_role, 0):
         raise HTTPException(400, "该用户已通过项目成员获得同等或更高权限")
 
     member = ApplicationMember(
@@ -239,6 +306,13 @@ async def invite_application_member(
         invited_by=ctx.user.id,
     )
     db.add(member)
+    await db.flush()
+    add_audit_log(
+        db, ctx=ctx, application_id=application_id,
+        event_type="application_member.direct_add", target_type="application_member",
+        target_id=target.id, result="success",
+        after_value={"user_id": target.id, "role": requested},
+    )
     await db.commit()
     await db.refresh(member)
 
@@ -261,11 +335,34 @@ async def update_application_member_role(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """改 application 直接成员的 role（不影响 inherited）"""
-    await _require_application_access(
+    actor = snapshot_audit_actor(ctx)
+    try:
+        return await _update_application_member_role(application_id, user_id, req, ctx, db)
+    except Exception as error:
+        await _record_member_error(
+            db,
+            actor=actor,
+            application_id=application_id,
+            event_type="application_member.role_changed",
+            target_id=user_id,
+            error=error,
+        )
+        raise
+
+
+async def _update_application_member_role(
+    application_id: int,
+    user_id: int,
+    req: UpdateAppMemberRoleRequest,
+    ctx: AuthContext,
+    db: AsyncSession,
+):
+    app = await _require_application_access(
         db,
         application_id=application_id,
         tenant_id=ctx.tenant_id,
     )
+    await _require_member_manager(db, app, ctx)
     am = (await db.execute(
         select(ApplicationMember).where(
             ApplicationMember.application_id == application_id,
@@ -275,13 +372,17 @@ async def update_application_member_role(
     if not am:
         raise HTTPException(404, "应用直接成员不存在（如是 inherited 请到 Project 修改）")
 
-    new_role = normalize_project_role(req.role)
-    if new_role == "owner":
-        raise HTTPException(400, "不能改成 owner")
-    if new_role not in ("maintainer", "contributor", "viewer"):
-        raise HTTPException(400, "角色只能是 maintainer/contributor/viewer")
-
+    old_role = am.role
+    new_role = req.role
     am.role = new_role
+    await db.flush()
+    add_audit_log(
+        db, ctx=ctx, application_id=application_id,
+        event_type="application_member.role_changed", target_type="application_member",
+        target_id=user_id, result="success",
+        before_value={"user_id": user_id, "role": old_role},
+        after_value={"user_id": user_id, "role": new_role},
+    )
     await db.commit()
     await db.refresh(am)
     return {"id": am.id, "user_id": am.user_id, "role": am.role}
@@ -295,11 +396,33 @@ async def remove_application_member(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """移除 application 直接成员"""
-    await _require_application_access(
+    actor = snapshot_audit_actor(ctx)
+    try:
+        return await _remove_application_member(application_id, user_id, ctx, db)
+    except Exception as error:
+        await _record_member_error(
+            db,
+            actor=actor,
+            application_id=application_id,
+            event_type="application_member.removed",
+            target_id=user_id,
+            error=error,
+        )
+        raise
+
+
+async def _remove_application_member(
+    application_id: int,
+    user_id: int,
+    ctx: AuthContext,
+    db: AsyncSession,
+):
+    app = await _require_application_access(
         db,
         application_id=application_id,
         tenant_id=ctx.tenant_id,
     )
+    await _require_member_manager(db, app, ctx)
     am = (await db.execute(
         select(ApplicationMember).where(
             ApplicationMember.application_id == application_id,
@@ -310,6 +433,13 @@ async def remove_application_member(
         raise HTTPException(404, "应用直接成员不存在")
     if user_id == ctx.user.id:
         raise HTTPException(400, "请勿通过应用设置移除自己")
+    before_value = {"user_id": user_id, "role": am.role}
     await db.delete(am)
+    await db.flush()
+    add_audit_log(
+        db, ctx=ctx, application_id=application_id,
+        event_type="application_member.removed", target_type="application_member",
+        target_id=user_id, result="success", before_value=before_value,
+    )
     await db.commit()
     return {"status": "ok"}

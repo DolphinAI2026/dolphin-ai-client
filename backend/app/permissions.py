@@ -11,6 +11,7 @@ from enum import Enum
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.application_access import resolve_effective_application_role
 from app.models.tenant import TeamMember
 
 
@@ -39,6 +40,17 @@ TEAM_ROLE_ACTIONS: dict[str, set[str]] = {
 
 # Actions that are "owner-only" for team members (not admins)
 _OWNER_ONLY_ACTIONS = {Action.EDIT, Action.DELETE}
+_APPLICATION_ACTIONS = (Action.VIEW, Action.EDIT, Action.DELETE, Action.CLONE)
+_APPLICATION_ROLE_ACTIONS: dict[str, set[Action]] = {
+    "owner": set(_APPLICATION_ACTIONS),
+    "admin": set(_APPLICATION_ACTIONS),
+    "collaborator": {Action.VIEW, Action.EDIT, Action.CLONE},
+}
+
+
+def _application_permissions_for_role(role: str | None) -> dict[Action, bool]:
+    allowed = _APPLICATION_ROLE_ACTIONS.get(role or "", set())
+    return {action: action in allowed for action in _APPLICATION_ACTIONS}
 
 
 def has_org_permission(permissions: dict | None, resource_type: str, action: str | Action) -> bool:
@@ -86,8 +98,19 @@ async def check_resource_permission(
     Layer 1: Org role permission (from role.permissions via ctx.org_permissions)
     Layer 2: Resource scope (ownership + team role)
     """
-    # 应用权限尚未设计，当前只由各接口自身的租户条件隔离。
     if resource_type == "application":
+        if ctx.tenant_role in ("platform_admin", "tenant_admin"):
+            return
+        if db is None:
+            raise ValueError("db is required for application permission checks")
+        role = await resolve_effective_application_role(db, resource, ctx.user.id)
+        application_permissions = _application_permissions_for_role(role)
+        normalized_action = Action(action)
+        if not application_permissions.get(normalized_action, False):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="无权执行此应用操作",
+            )
         return
 
     # Super admin / tenant admin bypass all checks
@@ -156,8 +179,16 @@ async def batch_get_permissions(
 ) -> list[dict[str, bool]]:
     """Batch compute permissions for a list of resources (avoids N+1 team queries)."""
     if resource_type == "application":
-        full = {Action.EDIT: True, Action.DELETE: True, Action.CLONE: True}
-        return [full for _ in resources]
+        if ctx.tenant_role in ("platform_admin", "tenant_admin"):
+            full = _application_permissions_for_role("owner")
+            return [dict(full) for _ in resources]
+        if db is None:
+            raise ValueError("db is required for application permission checks")
+        results = []
+        for resource in resources:
+            role = await resolve_effective_application_role(db, resource, ctx.user.id)
+            results.append(_application_permissions_for_role(role))
+        return results
 
     # Super admin / tenant admin: all permissions
     if ctx.tenant_role in ("platform_admin", "tenant_admin"):

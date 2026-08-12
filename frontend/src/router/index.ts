@@ -168,6 +168,16 @@ export const routes: RouteRecordRaw[] = [
       meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
     },
     {
+      path: '/audit-logs', name: 'AuditLogs',
+      component: () => import('@/views/TenantAuditLogsPage.vue'),
+      meta: { requiresAuth: true, tenantContext: 'required', requiresTenantAdmin: true, product: 'builder' }
+    },
+    {
+      path: '/applications/:id/audit-logs', name: 'ApplicationAuditLogs',
+      component: () => import('@/views/ApplicationAuditLogsPage.vue'),
+      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
+    },
+    {
       path: '/hub',
       name: 'CapabilitiesHub',
       component: () => import('@/views/CapabilitiesHubPage.vue'),

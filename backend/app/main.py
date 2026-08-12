@@ -29,6 +29,7 @@ from app.routes import (
     apaas,
     builder_mcp,
     application_members,
+    audit_logs,
     applications,
     auth,
     browser,
@@ -185,6 +186,8 @@ app.include_router(spec.router, prefix="/api")
 app.include_router(sse.router, prefix="/api")
 app.include_router(system_assistant.router, prefix="/api")
 app.include_router(application_members.router, prefix="/api")
+app.include_router(audit_logs.router, prefix="/api")
+app.include_router(audit_logs.application_router, prefix="/api")
 app.include_router(git_connection.router, prefix="/api")
 app.include_router(git_connection.app_router, prefix="/api")
 app.include_router(preferences.router, prefix="/api")

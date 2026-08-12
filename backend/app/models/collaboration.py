@@ -19,7 +19,9 @@ class ApplicationMember(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     application_id: Mapped[int] = mapped_column(Integer, ForeignKey("applications.id", ondelete="CASCADE"), nullable=False)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
-    role: Mapped[str] = mapped_column(String(20), default="contributor", nullable=False)
+    role: Mapped[str] = mapped_column(
+        String(20), default="collaborator", server_default="collaborator", nullable=False,
+    )
     invited_by: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 

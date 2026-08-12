@@ -26,11 +26,11 @@ async def _make_user(db, username: str) -> User:
     return u
 
 
-def _ctx_for(user: User, tenant_id: int) -> AuthContext:
+def _ctx_for(user: User, tenant_id: int, tenant_role: str = "member") -> AuthContext:
     return AuthContext(
         user=user,
         tenant_id=tenant_id,
-        tenant_role="tenant_admin",
+        tenant_role=tenant_role,
         org_permissions={},
     )
 
@@ -127,8 +127,7 @@ async def test_put_my_preference_rejects_invalid(db_session):
 
 
 @pytest.mark.asyncio
-async def test_patch_application_default_mode_owner_only(db_session):
-    """owner (即 maintainer+) 可改 application.default_mode"""
+async def test_application_default_mode_respects_effective_application_roles(db_session):
     s = await _seed_app(db_session)
     ctx = _ctx_for(s["owner"], s["tenant"].id)
 
@@ -146,14 +145,39 @@ async def test_patch_application_default_mode_owner_only(db_session):
     result2 = await patch_application_default_mode(s["application"].id, req2, ctx, db_session)
     assert result2["default_mode"] is None
 
-    # 非 maintainer (contributor) 改 → 403
-    other = await _make_user(db_session, "pref_contributor")
-    db_session.add(UserTenant(user_id=other.id, tenant_id=s["tenant"].id, status=1))
-    db_session.add(ProjectMember(project_id=s["project"].id, user_id=other.id, role="contributor"))
+    collaborator = await _make_user(db_session, "pref_contributor")
+    outsider = await _make_user(db_session, "pref_outsider")
+    db_session.add_all([
+        UserTenant(user_id=collaborator.id, tenant_id=s["tenant"].id, status=1),
+        UserTenant(user_id=outsider.id, tenant_id=s["tenant"].id, status=1),
+        ProjectMember(
+            project_id=s["project"].id,
+            user_id=collaborator.id,
+            role="contributor",
+        ),
+    ])
     await db_session.commit()
 
-    ctx_other = _ctx_for(other, s["tenant"].id)
-    req3 = UpdateAppDefaultModeRequest(default_mode="pro")
-    with pytest.raises(HTTPException) as exc:
-        await patch_application_default_mode(s["application"].id, req3, ctx_other, db_session)
-    assert exc.value.status_code == 403
+    collaborator_ctx = _ctx_for(collaborator, s["tenant"].id)
+    got = await get_application_default_mode(s["application"].id, collaborator_ctx, db_session)
+    assert got["default_mode"] is None
+    updated = await patch_application_default_mode(
+        s["application"].id,
+        UpdateAppDefaultModeRequest(default_mode="pro"),
+        collaborator_ctx,
+        db_session,
+    )
+    assert updated["default_mode"] == "pro"
+
+    outsider_ctx = _ctx_for(outsider, s["tenant"].id)
+    with pytest.raises(HTTPException) as get_denied:
+        await get_application_default_mode(s["application"].id, outsider_ctx, db_session)
+    assert get_denied.value.status_code == 403
+    with pytest.raises(HTTPException) as patch_denied:
+        await patch_application_default_mode(
+            s["application"].id,
+            UpdateAppDefaultModeRequest(default_mode="simple"),
+            outsider_ctx,
+            db_session,
+        )
+    assert patch_denied.value.status_code == 403
