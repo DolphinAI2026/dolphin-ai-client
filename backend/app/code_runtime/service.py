@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import base64
+import hashlib
+import hmac
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -328,6 +330,29 @@ def create_proxy_cookie_token(
         browser_session_id=browser_session_id,
         minutes=minutes,
     )
+
+
+def create_local_model_proxy_token(
+    *,
+    application_id: str,
+    user_id: int,
+    tenant_id: int,
+    control_plane_tenant_id: str | None,
+) -> str:
+    """Create an opaque token scoped to one application Runtime model proxy."""
+    material = "\x00".join(
+        (
+            str(application_id).strip(),
+            str(int(user_id)),
+            str(int(tenant_id)),
+            str(control_plane_tenant_id or "").strip(),
+        )
+    ).encode("utf-8")
+    return hmac.new(
+        settings.jwt_secret_key.encode("utf-8"),
+        material,
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def _validate_runtime_token(
@@ -1130,11 +1155,34 @@ async def open_code_session(
 
     if desktop_runtime:
         local_runtime = LocalRuntimeClient.from_environment()
+        proxy_token = create_local_model_proxy_token(
+            application_id=external_app_id,
+            user_id=session.user_id,
+            tenant_id=session.tenant_id,
+            control_plane_tenant_id=session.control_plane_tenant_id,
+        )
+        desktop_data_dir = (
+            getattr(local_runtime, "desktop_data_dir", None)
+            or os.getenv("DOLPHIN_DESKTOP_DATA_DIR")
+            or (Path.home() / ".ruijing-builder")
+        )
+        provider_options = {
+            "control_plane_url": control_plane_base_url(),
+            "control_plane_authorization": authorization_header,
+            "control_plane_tenant_id": control_plane_tenant_id,
+            "local_proxy_url": (
+                f"http://127.0.0.1:{settings.port}"
+                f"/api/code/model-proxy/{quote(external_app_id, safe='')}/v1"
+            ),
+            "local_proxy_token": proxy_token,
+            "cache_dir": str(Path(desktop_data_dir) / "model-catalog-cache"),
+        }
         if on_local_phase is None:
             opened, desktop_entry_token = await local_runtime.open_application_with_entry_token(
                 db,
                 session,
                 ctx,
+                provider_options=provider_options,
             )
         else:
             opened, desktop_entry_token = await local_runtime.open_application_with_entry_token(
@@ -1142,6 +1190,7 @@ async def open_code_session(
                 session,
                 ctx,
                 on_phase=on_local_phase,
+                provider_options=provider_options,
             )
     else:
         opened = await workspace_open_once()

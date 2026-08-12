@@ -5,6 +5,7 @@ import gzip
 import hashlib
 import json
 import logging
+import secrets
 import time
 import zlib
 from dataclasses import dataclass, field, replace
@@ -27,7 +28,9 @@ from app.code_runtime.service import (
     code_session_route_id,
     code_runtime_proxy_prefix,
     create_code_application,
+    create_local_model_proxy_token,
     create_proxy_cookie_token,
+    control_plane_base_url,
     default_local_code_application_workspace,
     default_workspace_open,
     ensure_code_session_public_id,
@@ -83,6 +86,8 @@ from app.models.ai_chat import (
 router = APIRouter(prefix="/code", tags=["code-runtime"])
 proxy_router = APIRouter(prefix="/code-runtime", tags=["code-runtime-proxy"])
 logger = logging.getLogger(__name__)
+
+_LOCAL_MODEL_PROXY_PATHS = {"models", "responses"}
 
 
 class CreateCodeSessionRequest(BaseModel):
@@ -752,12 +757,20 @@ async def open_code_runtime_session(
             and not session.app_id
             and is_local_code_application_id(session.external_application_id or "")
         )
-        if uses_local_builder:
+        uses_control_plane_models = bool(
+            uses_local_builder
+            and str(getattr(ctx.user, "account_source", "") or "").strip().lower()
+            == "control_plane"
+        )
+        if uses_local_builder and not uses_control_plane_models:
             authorization, auth_provider = None, None
             phase_key = _local_code_open_phase_key(session, ctx, session_ref)
             _local_code_open_phases[phase_key] = "checking_project"
         else:
             authorization, auth_provider = await _control_plane_request_auth(request, ctx, db)
+            if uses_local_builder:
+                phase_key = _local_code_open_phase_key(session, ctx, session_ref)
+                _local_code_open_phases[phase_key] = "checking_project"
         open_kwargs: dict[str, Any] = {}
         if uses_local_builder:
             open_kwargs["on_local_phase"] = lambda phase: _local_code_open_phases.__setitem__(
@@ -806,6 +819,91 @@ async def get_code_runtime_open_status(
         db,
         session,
         ctx,
+    )
+
+
+@router.api_route(
+    "/model-proxy/{session_ref}/v1/{path:path}",
+    methods=["GET", "POST"],
+    include_in_schema=False,
+)
+async def proxy_local_runtime_model(
+    session_ref: str,
+    path: str,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    normalized_path = path.strip("/")
+    if normalized_path not in _LOCAL_MODEL_PROXY_PATHS:
+        raise HTTPException(status_code=404, detail="Local model proxy path not found")
+    application_id = str(session_ref or "").strip()
+    if not is_local_code_application_id(application_id):
+        raise HTTPException(status_code=404, detail="Local model proxy session not found")
+    provided_token = str(request.headers.get("authorization") or "").strip()
+    sessions = (
+        await db.execute(
+            select(AIChatSession).where(
+                AIChatSession.mode == "code",
+                AIChatSession.external_application_id == application_id,
+            )
+        )
+    ).scalars().all()
+    session = next(
+        (
+            candidate
+            for candidate in sessions
+            if secrets.compare_digest(
+                provided_token,
+                "Bearer " + create_local_model_proxy_token(
+                    application_id=application_id,
+                    user_id=candidate.user_id,
+                    tenant_id=candidate.tenant_id,
+                    control_plane_tenant_id=candidate.control_plane_tenant_id,
+                ),
+            )
+        ),
+        None,
+    )
+    if session is None:
+        raise HTTPException(status_code=401, detail="Local model proxy token invalid")
+    control_plane_tenant_id = str(session.control_plane_tenant_id or "").strip()
+    if not control_plane_tenant_id:
+        raise HTTPException(status_code=409, detail="Control Plane tenant is unavailable")
+    try:
+        authorization = await _locked_control_plane_user_authorization(
+            user_id=int(session.user_id)
+        )
+    except SandboxRenewalFailure as exc:
+        raise HTTPException(status_code=401, detail="Control Plane login required") from exc
+    headers = {
+        "authorization": authorization,
+        "x-tenant-id": control_plane_tenant_id,
+        "accept": request.headers.get("accept", "application/json"),
+    }
+    content_type = str(request.headers.get("content-type") or "").strip()
+    if content_type:
+        headers["content-type"] = content_type
+    body = b"" if request.method == "GET" else await request.body()
+    client = httpx.AsyncClient(
+        follow_redirects=False,
+        timeout=httpx.Timeout(connect=10.0, read=None, write=60.0, pool=10.0),
+    )
+    upstream_request = client.build_request(
+        request.method,
+        f"{control_plane_base_url()}/api/code/model-gateway/v1/{normalized_path}",
+        headers=headers,
+        content=body,
+    )
+    try:
+        upstream = await client.send(upstream_request, stream=True)
+    except httpx.RequestError as exc:
+        await client.aclose()
+        raise HTTPException(status_code=503, detail="Control Plane 模型网关暂不可用") from exc
+    return StreamingResponse(
+        upstream.aiter_bytes(),
+        status_code=upstream.status_code,
+        headers=_copyable_response_headers(upstream.headers),
+        background=BackgroundTask(_close_upstream, upstream, client),
     )
 
 

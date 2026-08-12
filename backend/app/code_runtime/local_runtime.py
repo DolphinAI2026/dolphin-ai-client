@@ -12,7 +12,6 @@ import secrets
 import socket
 import stat
 import time
-import tomllib
 import uuid
 from collections.abc import Callable
 from datetime import datetime
@@ -30,6 +29,11 @@ from app.engineering_sessions.git_state import GitCommandError, git, git_common_
 from app.engineering_sessions.service import EngineeringSessionService
 from app.models import Application, RegisteredWorkspace
 from app.models.workspace_git import WorkspaceGitRemote
+from app.code_runtime.model_provider import (
+    provider_catalog_identity,
+    provider_document as resolve_provider_document,
+    provider_identity_from_document,
+)
 
 
 try:
@@ -52,7 +56,6 @@ _INSTANCE_CONFLICT = "LOCAL_RUNTIME_INSTANCE_CONFLICT"
 _INSTANCE_INVALID = "LOCAL_RUNTIME_INSTANCE_ID_INVALID"
 _PREPARATION_FAILED = "LOCAL_RUNTIME_PREPARATION_FAILED"
 _START_FAILED = "LOCAL_RUNTIME_START_FAILED"
-_MODEL_REQUIRED = "LOCAL_RUNTIME_MODEL_PROVIDER_REQUIRED"
 _MODEL_CONFLICT = "LOCAL_RUNTIME_MODEL_PROVIDER_CONFLICT"
 _WORKSPACE_REQUIRED = "LOCAL_APPLICATION_WORKSPACE_REQUIRED"
 _WORKSPACE_FORBIDDEN = "LOCAL_APPLICATION_WORKSPACE_FORBIDDEN"
@@ -1029,205 +1032,24 @@ async def _repo_metadata(
     return f"https://local.invalid/{quote(application_id, safe='')}.git", default_branch
 
 
-def _validated_model_config(model: Any) -> tuple[str, str, str, str]:
-    model_name = _text(getattr(model, "model", None))
-    base_url = _text(getattr(model, "base_url", None))
-    token = _text(getattr(model, "api_key", None))
-    provider = _text(getattr(model, "provider", None)).lower() or "openai"
-    try:
-        parsed = urlsplit(base_url)
-    except ValueError as exc:
-        raise _error(409, _MODEL_REQUIRED, "Coding 模型配置无效") from exc
-    if (
-        not model_name
-        or not token
-        or parsed.scheme not in {"http", "https"}
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.fragment
-        or any(ord(character) < 32 for character in base_url)
-    ):
-        raise _error(409, _MODEL_REQUIRED, "Coding 模型配置无效")
-    return provider, base_url.rstrip("/"), token, model_name
-
-
-def _provider_identity(model: Any) -> tuple[str, str, str]:
-    provider, base_url, token, _model_name = _validated_model_config(model)
-    return provider, base_url, token
-
-
-def _host_codex_provider_document() -> tuple[dict[str, Any], tuple[str, str, str]] | None:
-    if not runtime.is_desktop():
-        return None
-    if _text(os.getenv("DOLPHIN_CODE_HOST_CODEX_PROVIDER", "1")).lower() in {
-        "0",
-        "false",
-        "no",
-        "off",
-    }:
-        return None
-
-    configured_home = _text(os.getenv("DOLPHIN_CODE_HOST_CODEX_HOME"))
-    home = configured_home or _text(os.getenv("USERPROFILE")) or _text(os.getenv("HOME"))
-    if not home:
-        return None
-    codex_home = Path(home) if configured_home else Path(home) / ".codex"
-    config_path = codex_home / "config.toml"
-    auth_path = codex_home / "auth.json"
-
-    try:
-        config = tomllib.loads(config_path.read_text(encoding="utf-8"))
-        auth = json.loads(auth_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, tomllib.TOMLDecodeError, json.JSONDecodeError):
-        return None
-    if not isinstance(config, dict) or not isinstance(auth, dict):
-        return None
-
-    provider_name = _text(config.get("model_provider"))
-    model_name = _text(config.get("model"))
-    providers = config.get("model_providers")
-    if not provider_name or not model_name or not isinstance(providers, dict):
-        return None
-    provider_config = providers.get(provider_name)
-    if not isinstance(provider_config, dict):
-        return None
-
-    base_url = _text(provider_config.get("base_url"))
-    env_key = _text(provider_config.get("env_key"))
-    token = _text(os.getenv(env_key)) if env_key else ""
-    token = token or _text(auth.get("OPENAI_API_KEY"))
-    provider_view = type(
-        "HostCodexProvider",
-        (),
-        {
-            "provider": "openai",
-            "base_url": base_url,
-            "api_key": token,
-            "model": model_name,
-        },
-    )()
-    try:
-        identity = _provider_identity(provider_view)
-    except HTTPException:
-        return None
-
-    provider_fingerprint = hashlib.sha256(
-        "\x00".join(identity).encode("utf-8")
-    ).hexdigest()[:20]
-    provider_id = f"host.{provider_fingerprint}"
-    return (
-        {
-            "defaultProviderId": provider_id,
-            "providers": [
-                {
-                    "providerId": provider_id,
-                    "providerType": "openai-compatible",
-                    "runtimeProviderKind": "openai",
-                    "apiBaseUrl": identity[1],
-                    "token": identity[2],
-                    "defaultModel": model_name,
-                    "models": [{"id": model_name, "displayName": model_name}],
-                }
-            ],
-        },
-        identity,
-    )
-
-
 async def _provider_document(
     db: AsyncSession,
-    tenant_id: int,
+    ctx: Any,
     selected_config_id: int | None,
+    **kwargs: Any,
 ) -> tuple[dict[str, Any], tuple[str, str, str]]:
-    host_codex_provider = _host_codex_provider_document()
-    if host_codex_provider is not None:
-        return host_codex_provider
-
-    from app.crypto import decrypt_password
-    from app.harness.llm_resolver import resolve_llm_config
-    from app.routes.llm_configs import list_llm_configs_for_purpose
-
     try:
-        selected = await resolve_llm_config(
-            db,
-            tenant_id,
-            purpose="coding",
-            selected_config_id=selected_config_id,
+        return await resolve_provider_document(
+            db, ctx, selected_config_id, **kwargs
         )
     except HTTPException:
         raise
     except Exception as exc:
         raise _error(503, _PREPARATION_FAILED, "无法解析本地 Runtime 模型配置") from exc
-    if selected is None:
-        raise _error(409, _MODEL_REQUIRED, "请先配置可用的 Coding 模型")
-    identity = _provider_identity(selected)
-    compatible: dict[str, str] = {}
-    candidates = await list_llm_configs_for_purpose(db, tenant_id, "coding")
-    if not candidates:
-        candidates = await list_llm_configs_for_purpose(db, None, "coding")
-    for candidate in candidates:
-        try:
-            candidate_view = type(
-                "CandidateModel",
-                (),
-                {
-                    "provider": candidate.provider,
-                    "base_url": candidate.base_url,
-                    "api_key": decrypt_password(candidate.api_key_enc),
-                    "model": candidate.model,
-                },
-            )()
-            if _provider_identity(candidate_view) == identity:
-                compatible[_validated_model_config(candidate_view)[3]] = _validated_model_config(
-                    candidate_view
-                )[3]
-        except Exception:
-            continue
-    selected_model = _validated_model_config(selected)[3]
-    compatible[selected_model] = selected_model
-    provider_fingerprint = hashlib.sha256(
-        "\x00".join(identity).encode("utf-8")
-    ).hexdigest()[:20]
-    provider_id = f"local.{provider_fingerprint}"
-    return (
-        {
-            "defaultProviderId": provider_id,
-            "providers": [
-                {
-                    "providerId": provider_id,
-                    "providerType": "openai-compatible",
-                    "runtimeProviderKind": identity[0],
-                    "apiBaseUrl": identity[1],
-                    "token": identity[2],
-                    "defaultModel": selected_model,
-                    "models": [
-                        {"id": model_name, "displayName": model_name}
-                        for model_name in sorted(compatible)
-                    ],
-                }
-            ],
-        },
-        identity,
-    )
 
 
 def _provider_identity_from_document(document: dict[str, Any]) -> tuple[str, str, str]:
-    providers = document.get("providers")
-    if not isinstance(providers, list) or len(providers) != 1 or not isinstance(providers[0], dict):
-        raise ValueError("invalid runtime model provider document")
-    provider = providers[0]
-    view = type(
-        "PersistedModel",
-        (),
-        {
-            "provider": provider.get("runtimeProviderKind"),
-            "base_url": provider.get("apiBaseUrl"),
-            "api_key": provider.get("token"),
-            "model": provider.get("defaultModel"),
-        },
-    )()
-    return _provider_identity(view)
+    return provider_identity_from_document(document)
 
 
 class LocalRuntimeClient:
@@ -1498,13 +1320,15 @@ class LocalRuntimeClient:
         ctx: Any,
         runtime_scope_id: str,
         sandbox_instance_id: str,
+        provider_options: dict[str, Any] | None = None,
     ) -> None:
         if self.runtime_data_dir is None:
             raise _error(503, _MANAGER_UNAVAILABLE, "本地 Runtime manager 未配置")
-        _document, selected_identity = await _provider_document(
+        selected_document, selected_identity = await _provider_document(
             db,
-            int(ctx.tenant_id),
+            ctx,
             getattr(session, "selected_llm_config_id", None),
+            **(provider_options or {}),
         )
         try:
             with _runtime_directory_fds(
@@ -1514,7 +1338,11 @@ class LocalRuntimeClient:
                 create_instance=False,
             ) as paths:
                 stored = _read_json_at(paths["runtime_fd"], "model-provider.json")
-                if _provider_identity_from_document(stored) != selected_identity:
+                if (
+                    _provider_identity_from_document(stored) != selected_identity
+                    or provider_catalog_identity(stored)
+                    != provider_catalog_identity(selected_document)
+                ):
                     raise _error(
                         409,
                         _MODEL_CONFLICT,
@@ -1661,6 +1489,7 @@ class LocalRuntimeClient:
         ctx: Any,
         *,
         on_phase: Callable[[str], None] | None = None,
+        provider_options: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], str]:
         application_id = _application_id(session)
         runtime_scope_id = _runtime_scope_id(ctx, application_id)
@@ -1692,6 +1521,7 @@ class LocalRuntimeClient:
                 ctx,
                 runtime_scope_id,
                 sandbox_instance_id,
+                provider_options,
             )
         if manager_status is None:
             async with self._lock(runtime_scope_id):
@@ -1717,13 +1547,15 @@ class LocalRuntimeClient:
                                         ctx,
                                         runtime_scope_id,
                                         sandbox_instance_id,
+                                        provider_options,
                                     )
                                 else:
                                     sandbox_instance_id = _new_instance_id()
                                     provider_document, _identity = await _provider_document(
                                         db,
-                                        int(ctx.tenant_id),
+                                        ctx,
                                         getattr(session, "selected_llm_config_id", None),
+                                        **(provider_options or {}),
                                     )
                                     manager_status = await self._start(
                                         db,

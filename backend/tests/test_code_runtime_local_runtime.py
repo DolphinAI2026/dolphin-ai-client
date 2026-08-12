@@ -18,6 +18,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base
 from app.code_runtime import local_runtime as local_runtime_module
+from app.code_runtime import model_provider as model_provider_module
 from app.engineering_sessions.models import EngineeringSession
 from app.harness.llm_resolver import ResolvedLLMConfig
 from app.models import Application, RegisteredWorkspace
@@ -579,6 +580,108 @@ def test_from_environment_rejects_missing_required_manager_configuration(monkeyp
 
     assert exc.value.status_code == 503
     assert exc.value.detail == "LOCAL_RUNTIME_MANAGER_UNAVAILABLE: 本地 Runtime manager 未配置"
+
+
+def test_host_codex_provider_is_disabled_by_default(monkeypatch, tmp_path):
+    codex_home = tmp_path / ".codex"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        'model_provider = "host"\nmodel = "gpt-host"\n'
+        '[model_providers.host]\nbase_url = "https://host.example/v1"\nenv_key = "HOST_KEY"\n',
+        encoding="utf-8",
+    )
+    (codex_home / "auth.json").write_text('{"OPENAI_API_KEY":"host-secret"}', encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("DOLPHIN_CODE_HOST_CODEX_PROVIDER", "")
+    monkeypatch.setenv("HOST_KEY", "host-secret")
+    monkeypatch.setattr(local_runtime_module.runtime, "is_desktop", lambda: True)
+
+    assert model_provider_module.host_codex_provider_document() is None
+
+
+@pytest.mark.asyncio
+async def test_explicit_local_model_precedes_opt_in_host_codex(db, ctx, monkeypatch):
+    host_identity = ("openai", "https://host.example/v1", "host-secret")
+    local_identity = ("openai", "https://local.example/v1", "local-secret")
+    monkeypatch.setattr(
+        model_provider_module,
+        "host_codex_provider_document",
+        lambda: (
+            model_provider_module._document("host.provider", host_identity, "host-model", ["host-model"]),
+            host_identity,
+        ),
+    )
+
+    async def fake_local_provider(_db, tenant_id, selected_config_id):
+        assert tenant_id == 7
+        assert selected_config_id == 91
+        return (
+            model_provider_module._document(
+                "local.provider", local_identity, "local-model", ["local-model"]
+            ),
+            local_identity,
+        )
+
+    monkeypatch.setattr(model_provider_module, "_local_provider", fake_local_provider)
+
+    document, identity = await model_provider_module.provider_document(db, ctx, 91)
+
+    assert document["defaultProviderId"] == "local.provider"
+    assert identity == local_identity
+
+
+@pytest.mark.asyncio
+async def test_control_plane_catalog_builds_local_proxy_document_and_caches_metadata(
+    db, ctx, monkeypatch, tmp_path
+):
+    ctx.user.account_source = "control_plane"
+    ctx.control_plane_tenant_id = "tenant-cp"
+
+    class CatalogResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "defaultProviderId": "litellm",
+                "defaultModel": "gpt-5.5",
+                "providers": [{
+                    "providerId": "litellm",
+                    "providerType": "openai-compatible",
+                    "defaultModel": "gpt-5.5",
+                    "models": [{"id": "gpt-5.5", "displayName": "GPT-5.5"}],
+                    "credentialConfigured": True,
+                }],
+            }
+
+    class CatalogClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def get(self, *_args, **_kwargs):
+            return CatalogResponse()
+
+    monkeypatch.setattr(model_provider_module.httpx, "AsyncClient", lambda **_kwargs: CatalogClient())
+
+    document, identity = await model_provider_module.provider_document(
+        db,
+        ctx,
+        None,
+        control_plane_url="https://control.example",
+        control_plane_authorization="Bearer user-token",
+        control_plane_tenant_id="tenant-cp",
+        local_proxy_url="http://127.0.0.1:8000/api/code/model-proxy/11/v1",
+        local_proxy_token="local-proxy-token",
+        cache_dir=tmp_path,
+    )
+
+    assert document["defaultProviderId"] == "litellm"
+    assert document["providers"][0]["apiBaseUrl"].endswith("/model-proxy/11/v1")
+    assert document["providers"][0]["token"] == "local-proxy-token"
+    assert identity == ("openai", document["providers"][0]["apiBaseUrl"], "local-proxy-token")
+    assert list(tmp_path.glob("control-plane-*.json"))
 
 
 def test_from_environment_uses_explicit_runtime_data_dir(monkeypatch, tmp_path):
@@ -1535,6 +1638,47 @@ async def test_reused_runtime_rejects_conversation_with_incompatible_provider(
     await client.open_application(db, first, ctx)
     with pytest.raises(HTTPException) as exc:
         await client.open_application(db, second, ctx)
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail == (
+        "LOCAL_RUNTIME_MODEL_PROVIDER_CONFLICT: 当前会话选择的 Coding 模型与应用 Runtime 不兼容"
+    )
+
+
+@pytest.mark.asyncio
+async def test_reused_runtime_rejects_changed_remote_model_catalog(
+    db, ctx, git_repo, engineering_session, tmp_path, monkeypatch
+):
+    workspace = await _create_workspace(db, git_repo)
+    session = await _create_code_session(db, workspace_id=workspace.ws_id)
+    state: dict[str, dict[str, object] | None] = {"started": None}
+    catalog_model = {"value": "model-a"}
+
+    async def resolve_provider(*_args, **_kwargs):
+        model = catalog_model["value"]
+        identity = ("openai", "http://127.0.0.1:8000/api/code/model-proxy/session/v1", "proxy-token")
+        return model_provider_module._document("remote.provider", identity, model, [model]), identity
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            if state["started"] is None:
+                return httpx.Response(404)
+            return httpx.Response(200, json=state["started"])
+        state["started"] = _manager_status_for_start(request)
+        return httpx.Response(200, json=state["started"])
+
+    monkeypatch.setattr(local_runtime_module, "_provider_document", resolve_provider)
+    monkeypatch.setattr(
+        "app.code_runtime.local_runtime._allocate_loopback_address",
+        lambda: "127.0.0.1:19090",
+    )
+    client, _service = _client(tmp_path, engineering_session, httpx.MockTransport(handler))
+
+    await client.open_application(db, session, ctx)
+    catalog_model["value"] = "model-b"
+
+    with pytest.raises(HTTPException) as exc:
+        await client.open_application(db, session, ctx)
 
     assert exc.value.status_code == 409
     assert exc.value.detail == (
