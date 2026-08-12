@@ -376,6 +376,9 @@ async def test_terminal_transition_is_generation_cas_and_counted_once(tmp_path):
         telemetry = GovernanceTelemetryRegistry()
         async with session_factory() as session:
             async with session.begin():
+                ticket = await session.get(ActionTicket, "ticket-006")
+                ticket.status = "reserved"
+                ticket.state_version = 2
                 run = await session.get(ActionRun, "run-006")
                 run.status = "executing"
                 run.execution_generation = 1
@@ -398,7 +401,9 @@ async def test_terminal_transition_is_generation_cas_and_counted_once(tmp_path):
                 telemetry=telemetry,
             )
         async with session_factory() as session:
+            ticket = await session.get(ActionTicket, "ticket-006")
             run = await session.get(ActionRun, "run-006")
+            assert (ticket.status, ticket.state_version) == ("consumed", 3)
             assert run.status == "succeeded"
         series = "system_assistant_run_transition_total[status=succeeded]"
         assert sum(

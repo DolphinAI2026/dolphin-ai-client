@@ -127,6 +127,7 @@ async def test_live_tool_loop_dispatches_governance_request_and_projects_result(
     assert action_run.ticket_id == ticket.ticket_id
     assert action_run.tool_call_id == tool_call.id
     assert (action_run.status, action_run.result_status) == ("succeeded", "succeeded")
+    assert (ticket.status, ticket.state_version) == ("consumed", 3)
     assert (tool_call.status, tool_call.action_run_id, tool_call.correlation_id) == (
         "success", action_run.run_id, "corr-1",
     )

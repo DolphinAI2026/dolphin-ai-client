@@ -288,6 +288,25 @@ async def complete_action_run(
             )
         )
         if result.rowcount == 1:
+            ticket_id = await db.scalar(
+                select(ActionRun.ticket_id).where(ActionRun.run_id == run_id)
+            )
+            if ticket_id is not None:
+                ticket_result = await db.execute(
+                    update(ActionTicket)
+                    .where(
+                        ActionTicket.ticket_id == ticket_id,
+                        ActionTicket.status == "reserved",
+                    )
+                    .values(
+                        status="consumed",
+                        state_version=ActionTicket.state_version + 1,
+                        updated_at=now,
+                    )
+                )
+                if ticket_result.rowcount != 1:
+                    await db.rollback()
+                    return False
             await db.commit()
             run = await db.get(ActionRun, run_id)
             telemetry.record_run_transition(

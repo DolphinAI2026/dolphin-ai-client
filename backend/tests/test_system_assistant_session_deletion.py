@@ -19,7 +19,11 @@ from app.models import (
     AIChatToolCall,
 )
 from app.models.system_assistant_governance import ActionRun, ActionTicket
-from app.system_assistant.action_execution import execute_with_governance
+from app.system_assistant.action_execution import (
+    ExecutionFence,
+    complete_action_run,
+    execute_with_governance,
+)
 from app.system_assistant.action_store import ActionCASConflict, reserve_ticket_and_run
 from app.system_assistant.session_lifecycle import (
     ACTIVE_ACTION_ERROR_CODE,
@@ -261,6 +265,49 @@ async def test_reserved_ticket_blocks_delete_even_when_run_is_not_executing(tmp_
             ticket = await db.get(ActionTicket, "ticket-007")
             assert ticket.status == "reserved"
             assert await db.get(AIChatSession, session_id) is not None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_status", ["succeeded", "failed"])
+async def test_completion_consumes_reserved_ticket_and_unblocks_session_delete(
+    tmp_path, terminal_status: str,
+):
+    engine, factory = await _make_store(tmp_path / f"completed-{terminal_status}.sqlite3")
+    try:
+        session_id, _ = await _seed(factory)
+        async with factory() as db:
+            ticket = await db.get(ActionTicket, "ticket-007")
+            run = await db.get(ActionRun, "run-007")
+            ticket.status = "reserved"
+            ticket.state_version = 2
+            run.status = "executing"
+            run.execution_generation = 1
+            run.state_version = 1
+            run.lease_owner = "governed-handler"
+            run.lease_expires_at = _now() + timedelta(minutes=5)
+            await db.commit()
+
+        async with factory() as db:
+            assert await complete_action_run(
+                db,
+                ExecutionFence("run-007", 1),
+                status=terminal_status,
+                result_status=terminal_status,
+            )
+
+        async with factory() as db:
+            ticket = await db.get(ActionTicket, "ticket-007")
+            run = await db.get(ActionRun, "run-007")
+            assert (ticket.status, ticket.state_version) == ("consumed", 3)
+            assert (run.status, run.result_status) == (terminal_status, terminal_status)
+            assert await delete_session_with_guard(db, session_id) == {"ok": True}
+
+        async with factory() as db:
+            ticket = await db.get(ActionTicket, "ticket-007")
+            assert await db.get(AIChatSession, session_id) is None
+            assert (ticket.status, ticket.session_id) == ("consumed", None)
     finally:
         await engine.dispose()
 
