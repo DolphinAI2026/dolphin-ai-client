@@ -16,7 +16,7 @@ from app.harness.profiles.runagent_event_map import map_runagent_event
 from app.database import Base
 from app.models import AIChatSession, AIChatToolCall
 from app.models.agent_observability import AgentStep
-from app.models.system_assistant_governance import ActionRun
+from app.models.system_assistant_governance import ActionRun, ActionTicket
 from app.observability import recorder
 from app.system_assistant.result_envelope import (
     apply_agent_step_projection,
@@ -72,10 +72,16 @@ def _stub_live_llm(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_live_tool_loop_projects_linked_action_run_to_all_legacy_surfaces(
+async def test_live_tool_loop_dispatches_governance_request_and_projects_result(
     live_projection_db, monkeypatch,
 ):
-    session = AIChatSession(tenant_id=7, user_id=3, title="live projection")
+    session = AIChatSession(
+        tenant_id=7,
+        control_plane_tenant_id="cp-7",
+        user_id=3,
+        title="live projection",
+        assistant_profile="system_assistant",
+    )
     live_projection_db.add(session)
     await live_projection_db.commit()
     await live_projection_db.refresh(session)
@@ -87,38 +93,51 @@ async def test_live_tool_loop_projects_linked_action_run_to_all_legacy_surfaces(
     monkeypatch.setattr(agent_mod, "get_all_tool_schemas", _async_value([]))
     _stub_live_llm(monkeypatch)
 
-    async def execute_and_link(_tool_name, _args, _session, db):
-        tool_call = (await db.execute(
-            select(AIChatToolCall).order_by(AIChatToolCall.id.desc()).limit(1)
-        )).scalar_one()
-        db.add(ActionRun(
-            run_id="action-run-1", tool_call_id=tool_call.id,
-            capability_id="system_assistant.project_result", action_kind="project_result",
-            object_ref="workspace:1", status="recovered", args_digest="a" * 64,
-            object_revision="v1", policy_revision=9, base_state={}, change_manifest={},
-            result_summary={"digest": "snapshot-1"}, result_status="recovered",
-            correlation_id="corr-1", audit_delivery_status="not_required",
-        ))
-        await db.commit()
+    session._governance_action_request = agent_mod.GovernanceActionRequest(
+        tool_name="project_result",
+        capability_id="system_assistant.project_result",
+        action_kind="project_result",
+        object_ref="workspace:1",
+        object_revision="v1",
+        policy_revision=9,
+        snapshot_digest="snapshot-1",
+        correlation_id="corr-1",
+    )
+    calls = []
+
+    async def execute_handler(_tool_name, _args, _session, _db):
+        calls.append(_tool_name)
         return "legacy result"
 
-    monkeypatch.setattr(agent_mod, "execute_tool", execute_and_link)
+    monkeypatch.setattr(agent_mod, "execute_tool", execute_handler)
     events = []
-    async for event in agent_mod.run_agent(live_projection_db, session, "hi", asyncio.Event()):
+    async for event in agent_mod.run_agent(
+        live_projection_db, session, "请执行项目结果操作", asyncio.Event(),
+    ):
         events.append((event["event"], json.loads(event["data"])))
 
+    assert [name for name, _data in events if name == "error"] == []
     tool_call = (await live_projection_db.execute(select(AIChatToolCall))).scalar_one()
-    assert (tool_call.status, tool_call.action_run_id, tool_call.correlation_id) == (
-        "success", "action-run-1", "corr-1",
+    action_run = (await live_projection_db.execute(select(ActionRun))).scalar_one()
+    ticket = (await live_projection_db.execute(select(ActionTicket))).scalar_one()
+    assert calls == ["project_result"], (
+        events, action_run.status, action_run.result_status, action_run.error_code,
+        ticket.status, ticket.state_version,
     )
-    assert (tool_call.result_status, tool_call.snapshot_digest) == ("recovered", "snapshot-1")
+    assert action_run.ticket_id == ticket.ticket_id
+    assert action_run.tool_call_id == tool_call.id
+    assert (action_run.status, action_run.result_status) == ("succeeded", "succeeded")
+    assert (tool_call.status, tool_call.action_run_id, tool_call.correlation_id) == (
+        "success", action_run.run_id, "corr-1",
+    )
+    assert (tool_call.result_status, tool_call.snapshot_digest) == ("succeeded", "snapshot-1")
     tool_end = [data for name, data in events if name == "tool_call_end"]
     assert tool_end == [
         {
             "id": tool_call.id, "tool_name": "project_result", "status": "success",
             "result_text": "legacy result", "duration_ms": tool_end[0]["duration_ms"],
-            "action_run_id": "action-run-1", "correlation_id": "corr-1",
-            "result_status": "recovered", "policy_revision": 9,
+            "action_run_id": action_run.run_id, "correlation_id": "corr-1",
+            "result_status": "succeeded", "policy_revision": 9,
             "snapshot_digest": "snapshot-1",
         }
     ]
@@ -126,9 +145,9 @@ async def test_live_tool_loop_projects_linked_action_run_to_all_legacy_surfaces(
         select(AgentStep).where(AgentStep.step_type == "tool")
     )).scalar_one()
     assert (tool_step.status, tool_step.action_run_id, tool_step.correlation_id) == (
-        "success", "action-run-1", "corr-1",
+        "success", action_run.run_id, "corr-1",
     )
-    assert (tool_step.result_status, tool_step.snapshot_digest) == ("recovered", "snapshot-1")
+    assert (tool_step.result_status, tool_step.snapshot_digest) == ("succeeded", "snapshot-1")
 
 
 @pytest.mark.asyncio

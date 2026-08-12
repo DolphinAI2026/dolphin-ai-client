@@ -20,12 +20,15 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
 import time
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any, AsyncIterator, Optional
+from uuid import uuid4
 
 import httpx
 from cryptography.fernet import InvalidToken
@@ -43,7 +46,7 @@ from app.models import (
     AIChatArtifact,
     LLMConfig,
 )
-from app.models.system_assistant_governance import ActionRun
+from app.models.system_assistant_governance import ActionRun, ActionTicket
 from app.ai_chat.tools import TOOL_SCHEMAS, execute_tool, get_all_tool_schemas, split_core_deferred, build_deferred_manifest
 from app.observability import recorder
 from app.routes.llm_configs import build_llm_chat_completions_url
@@ -54,9 +57,150 @@ from app.system_assistant.result_envelope import (
     project_agent_step,
     project_sse_end,
 )
+from app.system_assistant.action_execution import complete_action_run
+from app.system_assistant.governance_dispatcher import dispatch_shadow_action
 from app import llm_transport
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class GovernanceActionRequest:
+    """Explicit authorization context supplied by an upstream governance owner."""
+
+    tool_name: str
+    capability_id: str
+    action_kind: str
+    object_ref: str
+    object_revision: str
+    policy_revision: int
+    snapshot_digest: str
+    correlation_id: str
+
+
+def _consume_governance_action_request(
+    session: AIChatSession, tool_name: str,
+) -> GovernanceActionRequest | None:
+    """Consume one explicit request only for its named live tool call."""
+    request = getattr(session, "_governance_action_request", None)
+    if not isinstance(request, GovernanceActionRequest) or request.tool_name != tool_name:
+        return None
+    delattr(session, "_governance_action_request")
+    return request
+
+
+def _tool_args_digest(args: dict[str, Any]) -> str:
+    """Persist a stable digest, never the raw live tool arguments, in governance rows."""
+    encoded = json.dumps(
+        args, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+async def _execute_governed_live_tool(
+    db: AsyncSession,
+    session: AIChatSession,
+    tool_call: AIChatToolCall,
+    tool_name: str,
+    args: dict[str, Any],
+    request: GovernanceActionRequest,
+) -> tuple[str, ActionRun | None]:
+    """Create and terminalize one durable run around the existing tool handler."""
+    tool_call_id = tool_call.id
+    if not session.public_id:
+        session.public_id = str(uuid4())
+
+    args_digest = _tool_args_digest(args)
+    ticket = ActionTicket(
+        ticket_id=str(uuid4()),
+        tenant_id=session.tenant_id,
+        control_plane_tenant_id=(
+            session.control_plane_tenant_id or f"legacy-tenant-{session.tenant_id}"
+        ),
+        user_id=session.user_id,
+        session_id=session.id,
+        session_public_id=session.public_id,
+        object_ref=request.object_ref,
+        action_kind=request.action_kind,
+        args_digest=args_digest,
+        object_revision=request.object_revision,
+        policy_revision=request.policy_revision,
+        status="authorized",
+        expires_at=datetime.utcnow() + timedelta(minutes=5),
+        correlation_id=request.correlation_id,
+        state_version=1,
+    )
+    action_run = ActionRun(
+        run_id=str(uuid4()),
+        ticket_id=ticket.ticket_id,
+        tool_call_id=tool_call_id,
+        capability_id=request.capability_id,
+        action_kind=request.action_kind,
+        object_ref=request.object_ref,
+        status="authorized",
+        args_digest=args_digest,
+        object_revision=request.object_revision,
+        policy_revision=request.policy_revision,
+        correlation_id=request.correlation_id,
+        state_version=0,
+    )
+    ticket_id = ticket.ticket_id
+    action_run_id = action_run.run_id
+    db.add_all((ticket, action_run))
+    await asyncio.shield(db.commit())
+    # The execution adapter validates its fence through this same session.
+    # Refresh only the governance run after its CAS transition; expiring the
+    # live ToolCall would trigger implicit async I/O during compatibility projection.
+    db.expire(action_run)
+
+    async def governed_handler(_fence: Any) -> str:
+        await db.refresh(session)
+        return legacy_result_text(await execute_tool(tool_name, args, session, db))
+
+    execution = await dispatch_shadow_action(
+        session=db,
+        ticket_id=ticket_id,
+        run_id=action_run_id,
+        governed_handler=governed_handler,
+        legacy_handler=None,
+        expected_ticket_state_version=1,
+        expected_run_state_version=0,
+        args_digest=args_digest,
+        object_revision=request.object_revision,
+        correlation_id=request.correlation_id,
+    )
+    if execution.fence is None:
+        await db.refresh(session)
+        await db.refresh(tool_call)
+        return "错误：治理动作未能启动", None
+
+    if execution.error is not None or not execution.governed_called:
+        completed = await complete_action_run(
+            db,
+            execution.fence,
+            status="failed",
+            result_status="failed",
+            result_summary={"digest": request.snapshot_digest},
+            error_code="GOVERNED_TOOL_FAILED",
+        )
+        await db.refresh(session)
+        await db.refresh(tool_call)
+        if not completed:
+            return "错误：治理动作结果未能确认", None
+        return "错误：动作执行失败", await _completed_action_run_for_tool_call(db, tool_call_id)
+
+    completed = await complete_action_run(
+        db,
+        execution.fence,
+        status="succeeded",
+        result_status="succeeded",
+        result_summary={"digest": request.snapshot_digest},
+    )
+    await db.refresh(session)
+    await db.refresh(tool_call)
+    if not completed:
+        return "错误：治理动作结果未能确认", None
+    return legacy_result_text(execution.value), await _completed_action_run_for_tool_call(db, tool_call_id)
 
 
 async def _completed_action_run_for_tool_call(
@@ -1310,24 +1454,40 @@ async def _run_agent_inner(
                 "started_at": _start_dt.isoformat(),
             })
 
-            # 执行
-            try:
-                # Keep the public dispatcher contract string-only even when a
-                # legacy handler accidentally returns a structured value.
-                result_text = legacy_result_text(await execute_tool(tool_name, args, session, db))
-                tc_db.status = "success"
-                tc_db.result_text = result_text
-                if tool_name == "search_tools":
-                    active_tool_names.update(_parse_activated(result_text))
-            except Exception as e:
-                tc_db.status = "error"
-                tc_db.error_message = str(e)
-                tc_db.result_text = f"错误：{e}"
-                result_text = tc_db.result_text
+            governance_request = _consume_governance_action_request(session, tool_name)
+            if governance_request is not None:
+                result_text, action_run = await _execute_governed_live_tool(
+                    db, session, tc_db, tool_name, args, governance_request,
+                )
+                await db.refresh(tc_db)
+                if action_run is None:
+                    tc_db.status = "error"
+                    tc_db.error_message = "GOVERNED_TOOL_UNCONFIRMED"
+                else:
+                    tc_db.result_text = result_text
+                    apply_tool_call_projection(tc_db, action_run)
+            else:
+                # 执行
+                try:
+                    # Keep the public dispatcher contract string-only even when a
+                    # legacy handler accidentally returns a structured value.
+                    result_text = legacy_result_text(await execute_tool(tool_name, args, session, db))
+                    tc_db.status = "success"
+                    tc_db.result_text = result_text
+                    if tool_name == "search_tools":
+                        active_tool_names.update(_parse_activated(result_text))
+                except Exception as e:
+                    tc_db.status = "error"
+                    tc_db.error_message = str(e)
+                    tc_db.result_text = f"错误：{e}"
+                    result_text = tc_db.result_text
 
-            action_run = await _completed_action_run_for_tool_call(db, tc_db.id)
+                action_run = await _completed_action_run_for_tool_call(db, tc_db.id)
+                if action_run is not None:
+                    apply_tool_call_projection(tc_db, action_run)
+
             if action_run is not None:
-                apply_tool_call_projection(tc_db, action_run)
+                tc_db.result_text = result_text
 
             tc_db.ended_at = datetime.utcnow()
             tc_db.duration_ms = int((time.monotonic() - _start_mono) * 1000)
