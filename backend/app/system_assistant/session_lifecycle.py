@@ -268,10 +268,43 @@ async def complete_action_run(
         raise ValueError(f"unsupported terminal status: {status}")
     await _rollback_if_needed(db)
     try:
+        ticket_id = await db.scalar(
+            select(ActionRun.ticket_id).where(ActionRun.run_id == run_id)
+        )
+        if ticket_id is not None:
+            ticket_result = await db.execute(
+                update(ActionTicket)
+                .where(
+                    ActionTicket.ticket_id == ticket_id,
+                    ActionTicket.status == "reserved",
+                )
+                .values(
+                    status="consumed",
+                    state_version=ActionTicket.state_version + 1,
+                    updated_at=now,
+                )
+            )
+            if ticket_result.rowcount != 1:
+                await db.rollback()
+                current_run = await db.scalar(
+                    select(ActionRun.run_id).where(
+                        ActionRun.run_id == run_id,
+                        ActionRun.ticket_id == ticket_id,
+                        ActionRun.status == "executing",
+                        ActionRun.execution_generation == generation,
+                        ActionRun.lease_expires_at > now,
+                        ActionRun.recovery_owner.is_(None),
+                    )
+                )
+                if current_run is not None:
+                    await db.rollback()
+                    return False
+
         result = await db.execute(
             update(ActionRun)
             .where(
                 ActionRun.run_id == run_id,
+                ActionRun.ticket_id == ticket_id,
                 ActionRun.status == "executing",
                 ActionRun.execution_generation == generation,
                 ActionRun.lease_expires_at > now,
@@ -288,25 +321,6 @@ async def complete_action_run(
             )
         )
         if result.rowcount == 1:
-            ticket_id = await db.scalar(
-                select(ActionRun.ticket_id).where(ActionRun.run_id == run_id)
-            )
-            if ticket_id is not None:
-                ticket_result = await db.execute(
-                    update(ActionTicket)
-                    .where(
-                        ActionTicket.ticket_id == ticket_id,
-                        ActionTicket.status == "reserved",
-                    )
-                    .values(
-                        status="consumed",
-                        state_version=ActionTicket.state_version + 1,
-                        updated_at=now,
-                    )
-                )
-                if ticket_result.rowcount != 1:
-                    await db.rollback()
-                    return False
             await db.commit()
             run = await db.get(ActionRun, run_id)
             telemetry.record_run_transition(

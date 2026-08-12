@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.models import (
@@ -308,6 +308,127 @@ async def test_completion_consumes_reserved_ticket_and_unblocks_session_delete(
             ticket = await db.get(ActionTicket, "ticket-007")
             assert await db.get(AIChatSession, session_id) is None
             assert (ticket.status, ticket.session_id) == ("consumed", None)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_completion_updates_ticket_before_run_to_match_delete_lock_order(tmp_path):
+    engine, factory = await _make_store(tmp_path / "completion-lock-order.sqlite3")
+    statements: list[str] = []
+
+    def record_governance_update(*args):
+        statement = args[2]
+        if statement.startswith("UPDATE system_assistant_action_"):
+            statements.append(statement)
+
+    try:
+        session_id, _ = await _seed(factory)
+        async with factory() as db:
+            ticket = await db.get(ActionTicket, "ticket-007")
+            run = await db.get(ActionRun, "run-007")
+            ticket.status = "reserved"
+            ticket.state_version = 2
+            run.status = "executing"
+            run.execution_generation = 1
+            run.state_version = 1
+            run.lease_owner = "governed-handler"
+            run.lease_expires_at = _now() + timedelta(minutes=5)
+            await db.commit()
+
+        event.listen(engine.sync_engine, "before_cursor_execute", record_governance_update)
+        async with factory() as db:
+            assert await complete_action_run(
+                db,
+                ExecutionFence("run-007", 1),
+                status="succeeded",
+                result_status="succeeded",
+            )
+        event.remove(engine.sync_engine, "before_cursor_execute", record_governance_update)
+
+        assert "system_assistant_action_tickets" in statements[0]
+        assert "system_assistant_action_runs" in statements[1]
+        async with factory() as db:
+            assert await db.get(AIChatSession, session_id) is not None
+    finally:
+        if event.contains(engine.sync_engine, "before_cursor_execute", record_governance_update):
+            event.remove(engine.sync_engine, "before_cursor_execute", record_governance_update)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first", ["completion", "delete"])
+async def test_completion_and_delete_independent_transactions_linearize_without_deadlock(
+    tmp_path, first: str,
+):
+    engine, factory = await _make_store(tmp_path / f"completion-delete-{first}.sqlite3")
+    try:
+        session_id, _ = await _seed(factory)
+        async with factory() as db:
+            ticket = await db.get(ActionTicket, "ticket-007")
+            run = await db.get(ActionRun, "run-007")
+            ticket.status = "reserved"
+            ticket.state_version = 2
+            run.status = "executing"
+            run.execution_generation = 1
+            run.state_version = 1
+            run.lease_owner = "governed-handler"
+            run.lease_expires_at = _now() + timedelta(minutes=5)
+            await db.commit()
+
+        ready = asyncio.Barrier(2)
+        release_completion = asyncio.Event()
+        release_delete = asyncio.Event()
+        results: dict[str, object] = {}
+
+        async def complete_in_own_transaction():
+            async with factory() as db:
+                await ready.wait()
+                await release_completion.wait()
+                results["completion"] = await complete_action_run(
+                    db,
+                    ExecutionFence("run-007", 1),
+                    status="succeeded",
+                    result_status="succeeded",
+                )
+
+        async def delete_in_own_transaction():
+            async with factory() as db:
+                await ready.wait()
+                await release_delete.wait()
+                try:
+                    results["delete"] = await delete_session_with_guard(db, session_id)
+                except SessionHasActiveAction as error:
+                    results["delete"] = error.code
+
+        completion_task = asyncio.create_task(complete_in_own_transaction())
+        delete_task = asyncio.create_task(delete_in_own_transaction())
+        if first == "completion":
+            release_completion.set()
+            await asyncio.wait_for(completion_task, timeout=5)
+            release_delete.set()
+            await asyncio.wait_for(delete_task, timeout=5)
+            assert results == {"completion": True, "delete": {"ok": True}}
+        else:
+            release_delete.set()
+            await asyncio.wait_for(delete_task, timeout=5)
+            release_completion.set()
+            await asyncio.wait_for(completion_task, timeout=5)
+            assert results == {
+                "delete": ACTIVE_ACTION_ERROR_CODE,
+                "completion": True,
+            }
+
+        async with factory() as db:
+            ticket = await db.get(ActionTicket, "ticket-007")
+            run = await db.get(ActionRun, "run-007")
+            assert (ticket.status, run.status) == ("consumed", "succeeded")
+            if first == "completion":
+                assert await db.get(AIChatSession, session_id) is None
+                assert ticket.session_id is None
+            else:
+                assert await db.get(AIChatSession, session_id) is not None
+                assert ticket.session_id == session_id
     finally:
         await engine.dispose()
 
