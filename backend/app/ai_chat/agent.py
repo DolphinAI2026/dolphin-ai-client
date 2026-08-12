@@ -43,14 +43,40 @@ from app.models import (
     AIChatArtifact,
     LLMConfig,
 )
+from app.models.system_assistant_governance import ActionRun
 from app.ai_chat.tools import TOOL_SCHEMAS, execute_tool, get_all_tool_schemas, split_core_deferred, build_deferred_manifest
 from app.observability import recorder
 from app.routes.llm_configs import build_llm_chat_completions_url
 from app.system_assistant.contracts import assistant_model_purpose
-from app.system_assistant.result_envelope import legacy_result_text
+from app.system_assistant.result_envelope import (
+    apply_tool_call_projection,
+    legacy_result_text,
+    project_agent_step,
+    project_sse_end,
+)
 from app import llm_transport
 
 logger = logging.getLogger(__name__)
+
+
+async def _completed_action_run_for_tool_call(
+    db: AsyncSession, tool_call_id: int | None,
+) -> ActionRun | None:
+    """Read a completed authoritative ActionRun linked to one legacy ToolCall."""
+    if tool_call_id is None:
+        return None
+    action_run = await db.scalar(
+        select(ActionRun)
+        .where(ActionRun.tool_call_id == tool_call_id)
+        .order_by(ActionRun.updated_at.desc())
+        .limit(1)
+    )
+    if action_run is None or action_run.status not in {
+        "succeeded", "recovered", "failed", "partially_failed",
+        "recovery_blocked", "outcome_unknown", "aborted",
+    }:
+        return None
+    return action_run
 
 
 def _apply_session_overrides(session, system_prompt_override, tool_names_override):
@@ -1299,27 +1325,54 @@ async def _run_agent_inner(
                 tc_db.result_text = f"错误：{e}"
                 result_text = tc_db.result_text
 
+            action_run = await _completed_action_run_for_tool_call(db, tc_db.id)
+            if action_run is not None:
+                apply_tool_call_projection(tc_db, action_run)
+
             tc_db.ended_at = datetime.utcnow()
             tc_db.duration_ms = int((time.monotonic() - _start_mono) * 1000)
             # 2026-05-21 fix: shield 防 cancel
             await asyncio.shield(db.commit())
             await db.refresh(tc_db)
 
-            yield _sse("tool_call_end", {
-                "id": tc_db.id,
-                "tool_name": tool_name,
-                "status": tc_db.status,
-                "result_text": result_text[:600] + ("..." if len(result_text) > 600 else ""),
-                "duration_ms": tc_db.duration_ms,
-            })
+            displayed_result = result_text[:600] + ("..." if len(result_text) > 600 else "")
+            if action_run is None:
+                yield _sse("tool_call_end", {
+                    "id": tc_db.id,
+                    "tool_name": tool_name,
+                    "status": tc_db.status,
+                    "result_text": displayed_result,
+                    "duration_ms": tc_db.duration_ms,
+                })
+            else:
+                end_event = project_sse_end(
+                    action_run,
+                    tool_call_id=tc_db.id,
+                    tool_name=tool_name,
+                    result_text=displayed_result,
+                    duration_ms=tc_db.duration_ms,
+                )
+                yield _sse(end_event["event"], end_event["data"])
 
             # ── 可观测：双写 tool step（AIChatToolCall 已写，这里给统一底座再记一笔） ──
             _obs_seq += 1
-            await recorder.record_step(
-                holder["run_id"], step_type="tool", seq=_obs_seq,
-                tool_name=tool_name, args=args, result_text=result_text,
-                status=tc_db.status, duration_ms=tc_db.duration_ms,
-            )
+            step_kwargs = {
+                "step_type": "tool", "seq": _obs_seq, "tool_name": tool_name,
+                "args": args, "result_text": result_text, "status": tc_db.status,
+                "duration_ms": tc_db.duration_ms,
+            }
+            if action_run is None:
+                await recorder.record_step(holder["run_id"], **step_kwargs)
+            else:
+                async def _record_projection(payload: dict[str, Any]) -> None:
+                    await recorder.record_step(holder["run_id"], **{
+                        **step_kwargs,
+                        **payload,
+                    })
+
+                await project_agent_step(
+                    action_run, result_text=result_text, recorder=_record_projection,
+                )
 
             # 特殊：write_artifact 成功 → 单独通知前端刷新右栏
             # 2026-05-21 扩展：update_app_from_doc / export_apaas_app_design_doc 也会

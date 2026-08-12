@@ -5,6 +5,7 @@ compatibility payloads and tolerate failures in diagnostic sinks.
 """
 from __future__ import annotations
 
+import inspect
 from dataclasses import asdict, dataclass
 from typing import Any, Callable, Mapping
 
@@ -186,22 +187,34 @@ def project_sse_start(
     }
 
 
-def project_agent_step(
+def _agent_step_payload(
+    action_run: Any,
+    *,
+    result_text: Any = "",
+) -> dict[str, Any]:
+    """Build an AgentStep compatibility payload without touching a recorder."""
+    envelope = project_action_run(action_run)
+    return {
+        "status": LEGACY_STATUS[envelope.status],
+        "result_text": legacy_result_text(result_text),
+        **_projection_fields(action_run, envelope),
+    }
+
+
+async def project_agent_step(
     action_run: Any,
     *,
     result_text: Any = "",
     recorder: Callable[[dict[str, Any]], Any] | None = None,
 ) -> dict[str, Any]:
-    """Build an AgentStep projection; recorder errors are diagnostic-only."""
+    """Build an AgentStep projection and await an async recorder if provided."""
     envelope = project_action_run(action_run)
-    payload = {
-        "status": LEGACY_STATUS[envelope.status],
-        "result_text": legacy_result_text(result_text),
-        **_projection_fields(action_run, envelope),
-    }
+    payload = _agent_step_payload(action_run, result_text=result_text)
     if recorder is not None:
         try:
-            recorder(payload)
+            recorded = recorder(payload)
+            if inspect.isawaitable(recorded):
+                await recorded
             governance_telemetry.record_observability_projection("success")
         except Exception:
             governance_telemetry.record_observability_projection("failed")
@@ -214,18 +227,18 @@ def project_agent_step(
 
 
 def apply_agent_step_projection(agent_step: Any, action_run: Any, *, result_text: Any = "") -> Any:
-    payload = project_agent_step(action_run, result_text=result_text)
+    payload = _agent_step_payload(action_run, result_text=result_text)
     for key, value in payload.items():
         if hasattr(agent_step, key):
             setattr(agent_step, key, value)
     return agent_step
 
 
-def project_action_run_to_agent_step(
+async def project_action_run_to_agent_step(
     action_run: Any, agent_step: Any | None = None, *, result_text: Any = ""
 ) -> Any:
     if agent_step is None:
-        return project_agent_step(action_run, result_text=result_text)
+        return await project_agent_step(action_run, result_text=result_text)
     return apply_agent_step_projection(agent_step, action_run, result_text=result_text)
 
 
