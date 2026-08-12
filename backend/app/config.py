@@ -158,6 +158,9 @@ class Settings(BaseSettings):
     # 首次打开真实 Code workspace 会同步等待 Control Plane 完成 Sandbox 部署和运行时就绪。
     # 默认值覆盖其 Helm 安装、部署就绪和运行时探测的组合预算。
     dolphin_code_workspace_open_timeout_seconds: int = 660
+    # 本地运行时 Mac 通常无法解析 Control Plane 返回的 *.svc.cluster.local runtimeBaseUrl。
+    # 开启后忽略该字段，回退到 specReviewUrl/builderUrl 推导的公网 Runtime 地址。
+    dolphin_code_ignore_runtime_base_url: bool = False
     dolphin_code_builder_url: str = ""
     dolphin_code_default_seed_project_id: str = "1781233861147"
     builder_sse_padding_bytes: int = Field(default=0, ge=0, le=65536)

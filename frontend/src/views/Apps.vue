@@ -663,7 +663,10 @@ async function openCodeSessionForApp(app: MergedApplication) {
       app_code: app.app_code,
     })
     window.dispatchEvent(new CustomEvent('code-rail-refresh'))
-    router.push(`/code/${created.public_id}`)
+    router.push({
+      path: `/code/${created.public_id}`,
+      query: { source: isLocalCodeApplication(app) ? 'local' : 'remote' },
+    })
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || error?.message || '创建 Code 会话失败')
   }

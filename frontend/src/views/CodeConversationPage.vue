@@ -238,6 +238,11 @@ function currentRuntimeAgentId(): string {
   return String(raw || '').trim()
 }
 
+function currentCodeApplicationSource(): 'local' | 'remote' | '' {
+  const raw = Array.isArray(route.query.source) ? route.query.source[0] : route.query.source
+  return raw === 'local' || raw === 'remote' ? raw : ''
+}
+
 function currentCodeRouteLocation(): CodeFrameRouteLocation {
   const query: CodeFrameRouteLocation['query'] = {}
   for (const [key, value] of Object.entries(route.query)) {
@@ -475,7 +480,9 @@ async function openCurrentSession() {
       return
     }
 
-    startOpenStatusPolling(sessionRef, requestSeq)
+    if (currentCodeApplicationSource() !== 'remote') {
+      startOpenStatusPolling(sessionRef, requestSeq)
+    }
     const opened = await codeRuntimeApi.openSession(sessionRef)
     stopOpenStatusPolling()
     if (opened.external_application_id.startsWith('local-')) {

@@ -1206,7 +1206,10 @@ async def open_code_session(
             try:
                 bootstrap_kwargs = (
                     {"runtime_base_url": opened.get("runtimeBaseUrl")}
-                    if "runtimeBaseUrl" in opened
+                    if (
+                        "runtimeBaseUrl" in opened
+                        and not settings.dolphin_code_ignore_runtime_base_url
+                    )
                     else {}
                 )
                 bootstrap = await bootstrap_runtime_session(
