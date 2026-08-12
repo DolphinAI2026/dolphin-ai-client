@@ -657,6 +657,36 @@ def test_control_plane_base_url_defaults_to_local_dev_port(monkeypatch):
     assert control_plane_base_url() == "http://127.0.0.1:8080"
 
 
+def test_local_model_proxy_token_is_stable_and_scope_bound(monkeypatch):
+    from app.config import settings
+    from app.code_runtime.service import create_local_model_proxy_token
+
+    monkeypatch.setattr(settings, "jwt_secret_key", "unit-test-secret", raising=False)
+
+    first = create_local_model_proxy_token(
+        application_id="application-a",
+        user_id=11,
+        tenant_id=0,
+        control_plane_tenant_id="tenant-cp",
+    )
+    second = create_local_model_proxy_token(
+        application_id="application-a",
+        user_id=11,
+        tenant_id=0,
+        control_plane_tenant_id="tenant-cp",
+    )
+    other = create_local_model_proxy_token(
+        application_id="application-b",
+        user_id=11,
+        tenant_id=0,
+        control_plane_tenant_id="tenant-cp",
+    )
+
+    assert first == second
+    assert first != other
+    assert len(first) >= 40
+
+
 def test_control_plane_headers_combine_user_bearer_and_delegated_identity(monkeypatch):
     from app.config import settings
     from app.code_runtime import service
@@ -2172,7 +2202,7 @@ async def test_open_local_code_session_uses_desktop_runtime_without_control_plan
         def from_environment(cls):
             return cls()
 
-        async def open_application_with_entry_token(self, _db, _session, _ctx):
+        async def open_application_with_entry_token(self, _db, _session, _ctx, **_kwargs):
             nonlocal manager_calls
             manager_calls += 1
             return (
@@ -2243,15 +2273,24 @@ async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_en
     entry_token = "desktop-entry-token-secret"
     opened_calls = 0
     bootstrap_calls = 0
+    provider_options_seen = None
 
     class FakeLocalRuntimeClient:
         @classmethod
         def from_environment(cls):
             return cls()
 
-        async def open_application_with_entry_token(self, _db, _session, _ctx):
-            nonlocal opened_calls
+        async def open_application_with_entry_token(
+            self,
+            _db,
+            _session,
+            _ctx,
+            *,
+            provider_options=None,
+        ):
+            nonlocal opened_calls, provider_options_seen
             opened_calls += 1
+            provider_options_seen = provider_options
             return (
                 {
                     "applicationId": "local-desktop-code-app",
@@ -2298,7 +2337,12 @@ async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_en
     result = await open_code_session(
         db=db_session,
         session_id=session.id,
-        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
+        ctx=SimpleNamespace(
+            user=SimpleNamespace(id=11),
+            tenant_id=7,
+            control_plane_tenant_id="tenant-cp",
+        ),
+        authorization_header="Bearer control-plane-user-token",
         workspace_open=lambda *_args: (_ for _ in ()).throw(
             AssertionError("desktop runtime must not use Control Plane")
         ),
@@ -2311,6 +2355,13 @@ async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_en
         )
     ).scalar_one()
     assert opened_calls == 1
+    assert provider_options_seen["control_plane_url"] == service.control_plane_base_url()
+    assert provider_options_seen["control_plane_authorization"] == "Bearer control-plane-user-token"
+    assert provider_options_seen["control_plane_tenant_id"] == "tenant-cp"
+    assert provider_options_seen["local_proxy_url"].endswith(
+        "/api/code/model-proxy/local-desktop-code-app/v1"
+    )
+    assert provider_options_seen["cache_dir"] == "/tmp/desktop-data/model-catalog-cache"
     assert bootstrap_calls == 0
     assert binding.execution_target == "desktop_agent_runtime"
     assert binding.runtime_session_id == "desktop-runtime-session-1"
@@ -2361,13 +2412,15 @@ async def test_desktop_runtime_creates_one_agent_session_per_shell_and_reuses_it
     )
     db_session.add_all([first, second])
     await db_session.commit()
+    provider_options_seen: list[dict[str, object]] = []
 
     class FakeLocalRuntimeClient:
         @classmethod
         def from_environment(cls):
             return cls()
 
-        async def open_application_with_entry_token(self, _db, _session, _ctx):
+        async def open_application_with_entry_token(self, _db, _session, _ctx, **kwargs):
+            provider_options_seen.append(kwargs["provider_options"])
             return (
                 {
                     "applicationId": "local-desktop-code-app",
@@ -2425,6 +2478,8 @@ async def test_desktop_runtime_creates_one_agent_session_per_shell_and_reuses_it
     await db_session.commit()
 
     assert created == ["desktop-runtime-session-1", "desktop-runtime-session-2"]
+    assert len({options["local_proxy_url"] for options in provider_options_seen}) == 1
+    assert len({options["local_proxy_token"] for options in provider_options_seen}) == 1
     assert first_open["runtime_session_id"] == "desktop-runtime-session-1"
     assert second_open["runtime_session_id"] == "desktop-runtime-session-2"
     assert reopened_first["runtime_session_id"] == "desktop-runtime-session-1"
@@ -2473,7 +2528,7 @@ async def test_open_code_session_does_not_fallback_when_configured_desktop_runti
         def from_environment(cls):
             return cls()
 
-        async def open_application_with_entry_token(self, _db, _session, _ctx):
+        async def open_application_with_entry_token(self, _db, _session, _ctx, **_kwargs):
             raise HTTPException(status_code=503, detail="LOCAL_RUNTIME_MANAGER_UNAVAILABLE: unavailable")
 
     async def unexpected_control_plane(*_args, **_kwargs):

@@ -2687,6 +2687,138 @@ async def test_open_local_code_runtime_session_does_not_require_control_plane_au
 
 
 @pytest.mark.asyncio
+async def test_open_local_code_runtime_session_uses_control_plane_auth_for_remote_models(
+    db_session,
+    monkeypatch,
+):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import open_code_runtime_session
+
+    session = AIChatSession(
+        tenant_id=0,
+        control_plane_tenant_id="tenant-cp",
+        user_id=11,
+        title="本地 Code",
+        mode="code",
+        status="active",
+        external_application_id="local-code-control-plane-model",
+    )
+    db_session.add(session)
+    await db_session.flush()
+    seen: dict[str, object] = {}
+
+    async def fake_control_plane_auth(*_args, **_kwargs):
+        return "Bearer control-plane-token", None
+
+    async def fake_open_code_session(**kwargs):
+        seen.update(kwargs)
+        return {
+            "external_application_id": session.external_application_id,
+            "route_id": "s1",
+            "embed_url": "/api/code-runtime/s1/builder/?token=test",
+        }
+
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_control_plane_request_auth",
+        fake_control_plane_auth,
+    )
+    monkeypatch.setattr(code_runtime_routes, "open_code_session", fake_open_code_session)
+    ctx = _ctx(tenant_id=0)
+    ctx.user.account_source = "control_plane"
+    ctx.control_plane_tenant_id = "tenant-cp"
+
+    await open_code_runtime_session(
+        session.public_id,
+        SimpleNamespace(headers={}),
+        ctx,
+        db_session,
+    )
+
+    assert seen["authorization_header"] == "Bearer control-plane-token"
+
+
+@pytest.mark.asyncio
+async def test_local_model_proxy_forwards_stream_with_control_plane_identity(
+    db_session,
+    monkeypatch,
+):
+    import httpx
+    import app.routes.code_runtime as code_runtime_routes
+    from app.code_runtime.service import create_local_model_proxy_token
+    from app.routes.code_runtime import proxy_local_runtime_model
+
+    session = AIChatSession(
+        tenant_id=0,
+        control_plane_tenant_id="tenant-cp",
+        user_id=11,
+        title="本地 Code",
+        mode="code",
+        status="active",
+        external_application_id="local-code-model-proxy",
+    )
+    db_session.add(session)
+    await db_session.flush()
+    token = create_local_model_proxy_token(
+        application_id="local-code-model-proxy",
+        user_id=11,
+        tenant_id=0,
+        control_plane_tenant_id="tenant-cp",
+    )
+    request = _proxy_request(
+        "local-code-model-proxy",
+        authorization=f"Bearer {token}",
+        method="POST",
+        body=b'{"model":"gpt-5.5","stream":true}',
+        path="model-proxy/local-code-model-proxy/v1/responses",
+    )
+    seen: dict[str, object] = {}
+
+    async def fake_authorization(**kwargs):
+        seen["user_id"] = kwargs["user_id"]
+        return "Bearer control-plane-token"
+
+    def handler(upstream: httpx.Request) -> httpx.Response:
+        seen["url"] = str(upstream.url)
+        seen["authorization"] = upstream.headers["authorization"]
+        seen["tenant"] = upstream.headers["x-tenant-id"]
+        return httpx.Response(
+            200,
+            content=b'data: {"type":"response.completed"}\n\n',
+            headers={"content-type": "text/event-stream"},
+        )
+
+    transport = httpx.MockTransport(handler)
+    original = code_runtime_routes.httpx.AsyncClient
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_locked_control_plane_user_authorization",
+        fake_authorization,
+    )
+    monkeypatch.setattr(
+        code_runtime_routes.httpx,
+        "AsyncClient",
+        lambda **kwargs: original(transport=transport, **kwargs),
+    )
+
+    response = await proxy_local_runtime_model(
+        "local-code-model-proxy",
+        "responses",
+        request,
+        db_session,
+    )
+    content = b"".join([chunk async for chunk in response.body_iterator])
+
+    assert seen == {
+        "user_id": 11,
+        "url": f"{code_runtime_routes.control_plane_base_url()}/api/code/model-gateway/v1/responses",
+        "authorization": "Bearer control-plane-token",
+        "tenant": "tenant-cp",
+    }
+    assert content.startswith(b"data:")
+
+
+@pytest.mark.asyncio
 async def test_local_runtime_status_restart_and_rebind_skip_control_plane_auth(
     db_session,
     monkeypatch,
