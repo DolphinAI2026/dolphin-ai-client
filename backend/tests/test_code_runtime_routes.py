@@ -5131,6 +5131,56 @@ async def test_concurrent_browser_renewal_singleflight_joins_new_generation(
 
 
 @pytest.mark.asyncio
+async def test_renew_browser_runtime_session_can_ignore_control_plane_runtime_base_url(
+    tmp_path,
+    monkeypatch,
+):
+    from app.code_runtime import sandbox_auth
+    from app.code_runtime.sandbox_auth import RuntimeBootstrap, renew_browser_runtime_session
+
+    monkeypatch.setattr(sandbox_auth.settings, "dolphin_code_ignore_runtime_base_url", True)
+
+    engine, Session = await _renewal_session_factory(tmp_path)
+    async with Session() as db:
+        _session, binding, rows = await _seed_browser_runtime(db)
+        binding_id = binding.id
+        observed_generation = rows["browser-a"].generation
+
+    async def authorization_provider(**_kwargs):
+        return "Bearer user-token"
+
+    async def workspace_open(_authorization):
+        return {
+            "specReviewUrl": "https://runtime.test/workspaces/crm/builder?token=launch",
+            "runtimeBaseUrl": "http://runtime-crm.dolphin-code.svc.cluster.local:8080",
+        }
+
+    async def bootstrap(builder_url, *, runtime_base_url=None):
+        assert builder_url.endswith("?token=launch")
+        assert runtime_base_url is None
+        return RuntimeBootstrap(
+            clean_builder_url="https://runtime.test/workspaces/crm/builder",
+            runtime_base_url="https://runtime.test/workspaces/crm",
+            runtime_cookie="renewed-cookie",
+            runtime_cookie_hash=hashlib.sha256(b"renewed-cookie").hexdigest(),
+            expires_at=None,
+        )
+
+    result = await renew_browser_runtime_session(
+        binding_id=binding_id,
+        browser_session_id="browser-a",
+        observed_generation=observed_generation,
+        session_factory=Session,
+        authorization_provider=authorization_provider,
+        workspace_open=workspace_open,
+        bootstrap=bootstrap,
+    )
+
+    assert result.runtime_cookie == "renewed-cookie"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_two_browser_forced_control_plane_refresh_is_singleflight(
     tmp_path,
     monkeypatch,
