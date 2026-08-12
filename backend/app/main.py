@@ -97,9 +97,21 @@ async def lifespan(app: FastAPI):
     # 启动时初始化数据库
     await init_db()
 
+    # B0 仅在 shadow 模式执行有界恢复扫描。对象 verifier 尚未挂载或扫描
+    # 超时时只发布 degraded 健康信息，不形成 readiness 阻断。
+    from app.database import AsyncSessionLocal
+    from app.system_assistant.recovery_coordinator import (
+        run_configured_startup_recovery_scan,
+    )
+    await run_configured_startup_recovery_scan(
+        app,
+        policy=settings.system_assistant_governance_policy,
+        session_factory=AsyncSessionLocal,
+        change_port=getattr(app.state, "system_assistant_change_recovery_port", None),
+    )
+
     # 运行种子数据
     from app.seed_data import seed_initial_data
-    from app.database import AsyncSessionLocal
     async with AsyncSessionLocal() as session:
         await seed_initial_data(session)
 
