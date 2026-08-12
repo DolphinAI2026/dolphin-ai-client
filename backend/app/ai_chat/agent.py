@@ -47,6 +47,7 @@ from app.ai_chat.tools import TOOL_SCHEMAS, execute_tool, get_all_tool_schemas, 
 from app.observability import recorder
 from app.routes.llm_configs import build_llm_chat_completions_url
 from app.system_assistant.contracts import assistant_model_purpose
+from app.system_assistant.result_envelope import legacy_result_text
 from app import llm_transport
 
 logger = logging.getLogger(__name__)
@@ -1285,7 +1286,9 @@ async def _run_agent_inner(
 
             # 执行
             try:
-                result_text = await execute_tool(tool_name, args, session, db)
+                # Keep the public dispatcher contract string-only even when a
+                # legacy handler accidentally returns a structured value.
+                result_text = legacy_result_text(await execute_tool(tool_name, args, session, db))
                 tc_db.status = "success"
                 tc_db.result_text = result_text
                 if tool_name == "search_tools":
