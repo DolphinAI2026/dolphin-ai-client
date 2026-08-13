@@ -238,10 +238,26 @@ export const routes: RouteRecordRaw[] = [
       meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true, product: 'builder' }
     },
     {
+      // Legacy CodingPage is kept only for the workspace preview iframe.
+      // User-facing Code sessions live under /code/* now.
       path: '/coding',
       name: 'Coding',
       component: () => import('@/views/CodingPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true, product: 'code' }
+      meta: {
+        requiresAuth: true,
+        tenantContext: 'required',
+        navExpanded: true,
+        product: 'code',
+        deprecated: true,
+      },
+      beforeEnter: (to, _from, next) => {
+        // The embedded Code preview is the only supported legacy entry.
+        if (String(to.query.embed || '') === 'true') {
+          next()
+          return
+        }
+        next({ path: '/code/apps', replace: true })
+      },
     },
     {
       path: '/admin/mcp',

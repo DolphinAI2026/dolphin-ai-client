@@ -293,15 +293,15 @@ describe('tenant URL route mount gate', () => {
     expect(next).toHaveBeenCalledWith({ path: '/', replace: true })
   })
 
-  it('keeps the legacy coding route inside the Code product boundary', async () => {
+  it('keeps the embedded legacy coding route inside the Code product boundary', async () => {
     installBootstrapState()
     routerGuardState.productAvailability = { builder: false, code: true }
     const routeMeta = router.getRoutes().find(route => route.path === '/coding')?.meta
 
     const next = await runGuard({
       path: '/coding',
-      fullPath: `/coding?tenantId=${currentUuid}`,
-      query: { tenantId: currentUuid },
+      fullPath: `/coding?embed=true&tenantId=${currentUuid}`,
+      query: { embed: 'true', tenantId: currentUuid },
       hash: '',
       meta: routeMeta,
     })
@@ -309,15 +309,15 @@ describe('tenant URL route mount gate', () => {
     expect(next).toHaveBeenCalledWith()
   })
 
-  it('keeps a trailing-slash legacy coding URL inside the Code product boundary', async () => {
+  it('keeps a trailing-slash embedded legacy coding URL inside the Code product boundary', async () => {
     installBootstrapState()
     routerGuardState.productAvailability = { builder: false, code: true }
     const routeMeta = router.getRoutes().find(route => route.path === '/coding')?.meta
 
     const next = await runGuard({
       path: '/coding/',
-      fullPath: `/coding/?tenantId=${currentUuid}`,
-      query: { tenantId: currentUuid },
+      fullPath: `/coding/?embed=true&tenantId=${currentUuid}`,
+      query: { embed: 'true', tenantId: currentUuid },
       hash: '',
       meta: routeMeta,
     })
