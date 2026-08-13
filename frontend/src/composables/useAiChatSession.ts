@@ -79,6 +79,7 @@ export interface AiChatSseReducerState {
   currentRunId: Ref<string | null>
   currentTurnAssistantMessageReceived: Ref<boolean>
   currentTurnFallbackErrorShown: Ref<boolean>
+  pendingUserMessage?: Ref<AIChatMessage | null>
   ensureDrain: () => void
   flushPending: () => void
   onErrorMessage?: (message: string) => void
@@ -88,9 +89,24 @@ export interface AiChatSseReducerState {
 export function createAiChatSseReducer(state: AiChatSseReducerState) {
   return function handleSseEvent(eventName: string, data: any) {
     switch (eventName) {
-      case 'user_message':
-        state.messages.value.push(data)
+      case 'user_message': {
+        // send() 先乐观展示用户消息；SSE 到达后用持久化消息替换，避免重复。
+        const pendingUser = state.pendingUserMessage?.value
+        if (
+          pendingUser &&
+          data?.role === 'user' &&
+          data?.session_id === pendingUser.session_id &&
+          data?.content === pendingUser.content,
+        ) {
+          const index = state.messages.value.findIndex(message => message.id === pendingUser.id)
+          if (index >= 0) state.messages.value.splice(index, 1, data)
+          else state.messages.value.push(data)
+          if (state.pendingUserMessage) state.pendingUserMessage.value = null
+        } else {
+          state.messages.value.push(data)
+        }
         break
+      }
       case 'run_started':
         state.currentRunId.value = data.run_id || null
         break
@@ -228,6 +244,47 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
   const pendingFinalMessage = ref<AIChatMessage | null>(null)
   const currentTurnAssistantMessageReceived = ref(false)
   const currentTurnFallbackErrorShown = ref(false)
+  const pendingUserMessage = ref<AIChatMessage | null>(null)
+
+  // SSE 是实时链路；低频轮询只负责兜底回收偶尔卡住的“工作中”状态。
+  const RUN_STATUS_POLL_MS = 3000
+  let runStatusPollTimer: ReturnType<typeof setInterval> | null = null
+  let runStatusPollSessionId: number | null = null
+  let runStatusPollInFlight = false
+
+  function stopRunStatusPolling() {
+    if (runStatusPollTimer) {
+      clearInterval(runStatusPollTimer)
+      runStatusPollTimer = null
+    }
+    runStatusPollSessionId = null
+    runStatusPollInFlight = false
+  }
+
+  async function reconcileFinishedRun(sessionId: number) {
+    if (!sending.value || currentSession.value?.id !== sessionId) return
+    stopRunStatusPolling()
+    // 让 send()/attachRun() 的 finally 完成同一套流式清理；Abort 不会触发用户可见错误。
+    currentAbort.value?.abort()
+  }
+
+  function startRunStatusPolling(sessionId: number) {
+    if (runStatusPollSessionId === sessionId && runStatusPollTimer) return
+    stopRunStatusPolling()
+    runStatusPollSessionId = sessionId
+    runStatusPollTimer = setInterval(async () => {
+      if (!sending.value || currentSession.value?.id !== sessionId || runStatusPollInFlight) return
+      runStatusPollInFlight = true
+      try {
+        const status = await aiChatApi.getRunStatus(sessionId)
+        if (!status.running) await reconcileFinishedRun(sessionId)
+      } catch {
+        // 轮询是兜底，单次失败不打断 SSE；下一周期继续尝试。
+      } finally {
+        runStatusPollInFlight = false
+      }
+    }, RUN_STATUS_POLL_MS)
+  }
 
   // 「AI 思考中 Ns」计时
   const typingSeconds = ref(0)
@@ -642,6 +699,7 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
     currentRunId,
     currentTurnAssistantMessageReceived,
     currentTurnFallbackErrorShown,
+    pendingUserMessage,
     ensureDrain,
     flushPending,
   })
@@ -672,12 +730,14 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
       startSecondsTimer()
       const controller = new AbortController()
       currentAbort.value = controller
+      startRunStatusPolling(id)
       void aiChatApi.attachRun(id, status.last_seq, {
         signal: controller.signal,
         onEvent: handleSseEvent,
       }).finally(async () => {
         if (currentAbort.value !== controller) return
         stopDrain()
+        stopRunStatusPolling()
         stopSecondsTimer()
         sending.value = false
         currentAbort.value = null
@@ -697,6 +757,7 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
   async function loadSession(id: number, restoreRun = true): Promise<void> {
     // 切到不同 session 前，先 abort 进行中的 SSE，清流式临时态，避免「新会话显示旧会话尾巴」
     if (currentSession.value && currentSession.value.id !== id) {
+      stopRunStatusPolling()
       if (currentAbort.value) {
         try { currentAbort.value.abort() } catch { /* ignore */ }
         currentAbort.value = null
@@ -710,6 +771,7 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
       stopSecondsTimer()
       sending.value = false
       currentRunId.value = null
+      pendingUserMessage.value = null
     }
     const appId = opts?.appId?.value
     const data = await aiChatApi.getSession(id, appId != null ? { app_id: appId } : undefined)
@@ -726,6 +788,7 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
     attachments.value = Array.isArray(data.attachments) ? data.attachments : []
     transientItems.value = []
     streamingText.value = ''
+    pendingUserMessage.value = null
     if (restoreRun) void restoreRunningSession(id)
   }
 
@@ -755,6 +818,7 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
 
   // 重置成一个全新空会话（不发 API；下次 send 时 ensureSession 才真建）
   function newSession(): void {
+    stopRunStatusPolling()
     if (currentAbort.value) {
       try { currentAbort.value.abort() } catch { /* ignore */ }
       currentAbort.value = null
@@ -772,6 +836,7 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
     pendingChars.value = []
     pendingFinalMessage.value = null
     currentRunId.value = null
+    pendingUserMessage.value = null
   }
 
   async function send(text: string, files?: File[]): Promise<void> {
@@ -800,11 +865,22 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
     streamingTools.value = {}
     pendingChars.value = []
     pendingFinalMessage.value = null
+    const optimisticMessage: AIChatMessage = {
+      id: -Date.now(),
+      session_id: session.id,
+      role: 'user',
+      content: msg,
+      extra_meta: { local_pending: true, attachment_ids: uploadedAttIds },
+      created_at: new Date().toISOString(),
+    }
+    pendingUserMessage.value = optimisticMessage
+    messages.value.push(optimisticMessage)
     currentTurnAssistantMessageReceived.value = false
     currentTurnFallbackErrorShown.value = false
     stopDrain()
     startSecondsTimer()
     currentAbort.value = new AbortController()
+    startRunStatusPolling(session.id)
     try {
       await aiChatApi.sendMessage(
         session.id,
@@ -828,6 +904,7 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
       }
       stopDrain()
       stopSecondsTimer()
+      stopRunStatusPolling()
       pendingFinalMessage.value = null
       sending.value = false
       currentAbort.value = null
@@ -844,6 +921,7 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
 
   async function stop(): Promise<void> {
     const sessionId = currentSession.value?.id ?? null
+    stopRunStatusPolling()
     if (sessionId) {
       try { await aiChatApi.abort(sessionId) } catch { /* ignore */ }
     }
@@ -858,6 +936,7 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
     streamingText.value = ''
     currentTurnAssistantMessageReceived.value = false
     currentTurnFallbackErrorShown.value = false
+    pendingUserMessage.value = null
     if (sessionId) {
       try { await loadSession(sessionId, false) } catch { /* keep current history */ }
     }
@@ -870,6 +949,7 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
     }
     stopDrain()
     stopSecondsTimer()
+    stopRunStatusPolling()
   }
 
   // composable scope 销毁时清理 timers / 进行中的请求
