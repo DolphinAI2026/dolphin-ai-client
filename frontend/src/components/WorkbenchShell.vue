@@ -21,7 +21,12 @@ import { useThemeStore } from '@/stores/theme'
 
 const route = useRoute()
 const theme = useThemeStore()
-const showNav = computed(() => route.query.embed_nav !== '0')
+// `embed_nav=0` is only meaningful for the legacy CodingPage iframe.
+// Never let that embedding flag hide the shared Code rail when navigating
+// between the system assistant and normal Code application sessions.
+const showNav = computed(() =>
+  route.query.embed_nav !== '0' || !route.path.startsWith('/coding'),
+)
 const narrowViewport = typeof window !== 'undefined'
   && window.matchMedia('(max-width: 640px)').matches
 // 标记「已在 WorkbenchShell 内」: 嵌套的 BuilderFrame 据此跳过再套一层壳(避免双左栏)。

@@ -214,6 +214,9 @@ export function nextAgentQuery(
   agent?: LocationQueryValueRaw,
 ): LocationQueryRaw {
   const next = { ...(query || {}) }
+  // This flag belongs only to the legacy embedded CodingPage. It must not
+  // leak from an embedded entry into the shared /code shell and hide its rail.
+  delete next.embed_nav
   if (agent) {
     next.agent = agent
   } else {

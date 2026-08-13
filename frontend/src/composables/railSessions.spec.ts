@@ -256,6 +256,15 @@ describe('rail session navigation target', () => {
       },
     })
   })
+
+  it('does not carry the embedded CodingPage navigation flag into Code routes', () => {
+    expect(nextAgentQuery({ embed_nav: '0', panel: 'activity' })).toEqual({
+      panel: 'activity',
+    })
+    expect(railSessionTarget('code', 42, { embed_nav: '0' })).toEqual({
+      path: '/code/42',
+    })
+  })
 })
 
 describe('rail session active state', () => {
