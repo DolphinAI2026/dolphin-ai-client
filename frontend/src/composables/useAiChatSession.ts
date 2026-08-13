@@ -96,7 +96,7 @@ export function createAiChatSseReducer(state: AiChatSseReducerState) {
           pendingUser &&
           data?.role === 'user' &&
           data?.session_id === pendingUser.session_id &&
-          data?.content === pendingUser.content,
+          data?.content === pendingUser.content
         ) {
           const index = state.messages.value.findIndex(message => message.id === pendingUser.id)
           if (index >= 0) state.messages.value.splice(index, 1, data)
