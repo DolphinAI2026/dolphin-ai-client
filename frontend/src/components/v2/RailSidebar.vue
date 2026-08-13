@@ -95,6 +95,7 @@ const isSystemAssistantRoute = computed(() => route.path === '/code/system-assis
 // 会话历史 —— 收进左栏单一导航(参考 Claude Code), 页面内层 sidebar 隐掉。
 // 统一使用 aiChatApi 会话; Code 模式只展示 mode=code 的应用会话。
 const aiSessions = ref<AIChatSession[]>([])
+const systemAssistantSessionData = ref<AIChatSession[]>([])
 const codeRailHistory = ref<CodeRailHistoryResponse | null>(null)
 const showRecent = computed(() => !effectiveCollapsed.value)
 let railAppsSeq = 0
@@ -105,7 +106,7 @@ let systemAssistantSessionsTimer: ReturnType<typeof setInterval> | null = null
 const appNameById = ref<Map<number, string>>(new Map())
 
 const systemAssistantSessions = computed<RailSession[]>(() =>
-  sortRailSessionsByUpdatedAt(normalizeAiSessions(aiSessions.value)),
+  sortRailSessionsByUpdatedAt(normalizeAiSessions(systemAssistantSessionData.value)),
 )
 const systemAssistantApplicationGroups = computed<RailSessionGroup[]>(() =>
   groupRailSessionsByApplication(normalizeCodeRailHistory(codeRailHistory.value), 'code'),
@@ -166,36 +167,27 @@ async function loadRailSessions() {
   const seq = ++railSessionsSeq
   const mode = currentMode.value
   try {
-    if (isSystemAssistantRoute.value) {
+    if (mode === 'code') {
       const [systemResult, applicationResult] = await Promise.allSettled([
         aiChatApi.listSessions({ mode: 'code', assistant_profile: 'system_assistant' }),
         codeRuntimeApi.listRailHistory(codeApplicationSource.value),
       ])
-      if (seq !== railSessionsSeq || !isSystemAssistantRoute.value) return
-      aiSessions.value = systemResult.status === 'fulfilled'
+      if (seq !== railSessionsSeq || mode !== currentMode.value) return
+      systemAssistantSessionData.value = systemResult.status === 'fulfilled'
         ? systemResult.value?.sessions || []
-        : []
+        : systemAssistantSessionData.value
       codeRailHistory.value = applicationResult.status === 'fulfilled'
         ? applicationResult.value
-        : { apps: [] }
-      return
-    }
-    if (mode === 'code') {
-      const history = await codeRuntimeApi.listRailHistory(codeApplicationSource.value)
-      if (seq !== railSessionsSeq || mode !== currentMode.value) return
-      codeRailHistory.value = history
-      aiSessions.value = []
+        : codeRailHistory.value
       return
     }
     const d = await aiChatApi.listSessions()
     if (seq !== railSessionsSeq || mode !== currentMode.value) return
-    codeRailHistory.value = null
     const sessions = d?.sessions || []
     aiSessions.value = sessions.filter(s => s.mode !== 'code')
   } catch {
     if (seq !== railSessionsSeq || mode !== currentMode.value) return
-    aiSessions.value = []
-    if (mode === 'code') codeRailHistory.value = { apps: [] }
+    if (mode !== 'code') aiSessions.value = []
   }
 }
 
@@ -204,7 +196,7 @@ function syncSystemAssistantSessionPolling() {
     clearInterval(systemAssistantSessionsTimer)
     systemAssistantSessionsTimer = null
   }
-  if (!isSystemAssistantRoute.value) return
+  if (currentMode.value !== 'code') return
   systemAssistantSessionsTimer = setInterval(() => {
     if (document.visibilityState === 'visible') void loadRailSessions()
   }, 6000)
@@ -252,6 +244,7 @@ watch(currentMode, () => {
   groupBy.value = loadGroupByForMode(currentMode.value)
   void loadRailApps()
   void loadRailSessions()
+  syncSystemAssistantSessionPolling()
 })
 watch(isSystemAssistantRoute, () => {
   void loadRailApps()
@@ -289,7 +282,7 @@ const sessionGroups = computed<RailSessionGroup[]>(() => {
 })
 
 async function openSession(session: RailSession) {
-  if (isSystemAssistantRoute.value && session.source !== 'code-agent' && session.source !== 'code-shell') {
+  if (currentMode.value === 'code' && session.source !== 'code-agent' && session.source !== 'code-shell') {
     router.push({ path: '/code/system-assistant', query: { ...route.query, session: String(session.id) } })
     return
   }
@@ -869,7 +862,7 @@ function renderIcon(name: string): string {
       </a>
 
       <SystemAssistantSessionSections
-        v-if="showRecent && isSystemAssistantRoute"
+        v-if="showRecent && currentMode === 'code'"
         class="rail-sessions rail-system-assistant-sessions"
         :system-sessions="systemAssistantSessions"
         :application-groups="systemAssistantApplicationGroups"
