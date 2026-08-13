@@ -10,4 +10,9 @@ describe('WorkbenchShell rail width is stable (no coding-focus flicker)', () => 
     expect(src).not.toContain('codingFocus')
     expect(src).not.toContain('workbench-coding-focus')
   })
+
+  it('scopes embed_nav=0 to the legacy CodingPage instead of hiding the Code rail', () => {
+    expect(src).toContain("route.path.startsWith('/coding')")
+    expect(src).toContain("route.query.embed_nav !== '0' || !route.path.startsWith('/coding')")
+  })
 })
