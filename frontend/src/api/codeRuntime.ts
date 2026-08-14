@@ -16,10 +16,12 @@ export type LocalApplicationDirectoryMode = 'new_directory' | 'existing_director
 export interface CodeApplicationLocation {
   location: CodeExecutionLocation
   location_id: string
+  external_application_id: string
   availability: CodeLocationAvailability
   workspace_id?: string | null
   workspace_path?: string | null
   environment_name?: string | null
+  original_application?: CodeApplication
 }
 
 export interface UnifiedCodeApplication {

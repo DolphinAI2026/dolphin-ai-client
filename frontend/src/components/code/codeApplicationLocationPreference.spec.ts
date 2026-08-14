@@ -1,0 +1,56 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  commitCodeApplicationLocationPreference,
+  discardPendingCodeApplicationLocationPreference,
+  loadCodeApplicationLocationPreference,
+  stageCodeApplicationLocationPreference,
+} from './codeApplicationLocationPreference'
+
+const scope = {
+  deploymentId: 'deployment-a',
+  userId: 'user-7',
+  logicalApplicationId: 'logical-crm',
+}
+
+describe('Code application location preference', () => {
+  beforeEach(() => {
+    const durable = new Map<string, string>()
+    const pending = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => durable.get(key) ?? null,
+      setItem: (key: string, value: string) => durable.set(key, value),
+      removeItem: (key: string) => durable.delete(key),
+    })
+    vi.stubGlobal('sessionStorage', {
+      getItem: (key: string) => pending.get(key) ?? null,
+      setItem: (key: string, value: string) => pending.set(key, value),
+      removeItem: (key: string) => pending.delete(key),
+    })
+  })
+
+  it('stages a shell selection without changing the durable preference', () => {
+    stageCodeApplicationLocationPreference(scope, 'local', 'shell-42')
+
+    expect(loadCodeApplicationLocationPreference(scope)).toBeNull()
+  })
+
+  it('commits only the matching application and shell session', () => {
+    stageCodeApplicationLocationPreference(scope, 'remote', 'shell-42')
+
+    expect(commitCodeApplicationLocationPreference(scope, 'shell-other')).toBe(false)
+    expect(commitCodeApplicationLocationPreference({ ...scope, logicalApplicationId: 'other' }, 'shell-42')).toBe(false)
+    expect(loadCodeApplicationLocationPreference(scope)).toBeNull()
+
+    expect(commitCodeApplicationLocationPreference(scope, 'shell-42')).toBe(true)
+    expect(loadCodeApplicationLocationPreference(scope)).toBe('remote')
+  })
+
+  it('discards a pending selection without changing a previous durable preference', () => {
+    stageCodeApplicationLocationPreference(scope, 'local', 'shell-1')
+    expect(commitCodeApplicationLocationPreference(scope, 'shell-1')).toBe(true)
+    stageCodeApplicationLocationPreference(scope, 'remote', 'shell-2')
+
+    expect(discardPendingCodeApplicationLocationPreference(scope, 'shell-2')).toBe(true)
+    expect(loadCodeApplicationLocationPreference(scope)).toBe('local')
+  })
+})

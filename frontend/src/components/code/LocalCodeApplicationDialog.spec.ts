@@ -37,6 +37,11 @@ describe('LocalCodeApplicationDialog', () => {
     expect(dialogSource).not.toContain('ElMessageBox.prompt')
   })
 
+  it('accepts an initial directory mode from the shared add menu', () => {
+    expect(dialogSource).toContain('initialDirectoryMode?: LocalApplicationDirectoryMode')
+    expect(dialogSource).toContain("props.initialDirectoryMode || 'new_directory'")
+  })
+
   it('does not apply a late new-directory default after existing-directory selection', async () => {
     let latestRequest = 1
     const requestId = latestRequest

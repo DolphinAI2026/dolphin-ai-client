@@ -86,6 +86,7 @@ import {
 
 const props = defineProps<{
   modelValue: boolean
+  initialDirectoryMode?: LocalApplicationDirectoryMode
   linkedRemoteApplicationId?: string | null
   linkedRemoteDeploymentId?: string | null
 }>()
@@ -151,11 +152,13 @@ async function resetForm() {
   appName.value = ''
   codeEdited.value = false
   appCode.value = createLocalApplicationCode('', suffix.value)
-  directoryMode.value = 'new_directory'
-  initializeProject.value = false
+  const nextDirectoryMode = props.initialDirectoryMode || 'new_directory'
+  const directoryModeChanged = directoryMode.value !== nextDirectoryMode
+  directoryMode.value = nextDirectoryMode
+  initializeProject.value = directoryMode.value === 'existing_directory'
   selectedDirectory.value = ''
   submitError.value = ''
-  await loadDefaultWorkspace()
+  if (directoryMode.value === 'new_directory' && !directoryModeChanged) await loadDefaultWorkspace()
 }
 
 async function loadDefaultWorkspace() {

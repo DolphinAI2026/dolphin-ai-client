@@ -13,6 +13,8 @@ export interface CodeApplicationLoadOptions {
   force?: boolean
 }
 
+export type CodeApplicationSourceLoadResult = PromiseSettledResult<CodeApplicationListResponse>
+
 type CodeApplicationListParams = Parameters<typeof codeRuntimeApi.listApplications>[0]
 
 interface CacheEntry {
@@ -148,5 +150,17 @@ export const useCodeApplicationsStore = defineStore('codeApplications', () => {
     cacheGeneration += 1
   }
 
-  return { load, invalidateTenant, clear }
+  async function loadLocations(
+    scope: CodeApplicationCacheScope,
+    sources: Array<'local' | 'remote'>,
+    params: Omit<NonNullable<CodeApplicationListParams>, 'source'> = {},
+    options: CodeApplicationLoadOptions = {},
+  ): Promise<Partial<Record<'local' | 'remote', CodeApplicationSourceLoadResult>>> {
+    const results = await Promise.allSettled(
+      sources.map(source => load(scope, { ...params, source }, options)),
+    )
+    return Object.fromEntries(sources.map((source, index) => [source, results[index]]))
+  }
+
+  return { load, loadLocations, invalidateTenant, clear }
 })

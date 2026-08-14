@@ -15,28 +15,40 @@ describe('Apps Code mode entry', () => {
     expect(appsSource).toContain('window.dispatchEvent')
   })
 
-  it('loads Code applications through the shared tenant-scoped store', () => {
-    expect(appsSource).toContain("from '@/stores/codeApplications'")
-    expect(appsSource).toContain('codeApplications.load')
+  it('loads Code applications through the unified tenant-scoped composable', () => {
+    expect(appsSource).toContain("from '@/composables/useUnifiedCodeApplications'")
+    expect(appsSource).toContain('useUnifiedCodeApplications')
     expect(appsSource).toContain('tenantId: user.tenantId')
     expect(appsSource).not.toContain('codeMode ? codeRuntimeApi.listApplications')
   })
 
-  it('separates desktop local and remote applications without exposing local UI on web', () => {
+  it('uses one unified application list with location filtering', () => {
+    expect(appsSource).toContain("from '@/composables/useUnifiedCodeApplications'")
+    expect(appsSource).toContain('useUnifiedCodeApplications')
+    expect(appsSource).toContain('codeLocationFilter')
+    expect(appsSource).toContain('全部')
+    expect(appsSource).toContain('本机可用')
+    expect(appsSource).toContain('远程可用')
+    expect(appsSource).not.toContain('codeApplicationSource')
+    expect(appsSource).not.toContain('storeCodeApplicationSource')
+  })
+
+  it('uses one add menu and one local dialog for both directory modes', () => {
     expect(appsSource).toContain('LocalCodeApplicationDialog')
-    expect(appsSource).toContain("type CodeApplicationSource")
-    expect(appsSource).toContain("isDesktop ? loadStoredCodeApplicationSource('local') : 'remote'")
-    expect(appsSource).toContain("source: codeApplicationSource.value")
-    expect(appsSource).toContain('本地应用')
-    expect(appsSource).toContain('远程应用')
-    expect(appsSource).toContain('新建本地应用')
-    expect(appsSource).toContain('新建远程应用')
-    expect(appsSource).toContain('storeCodeApplicationSource(source)')
+    expect(appsSource).toContain('AddCodeApplicationMenu')
+    expect(appsSource).toContain(':initial-directory-mode="localApplicationDirectoryMode"')
     expect(appsSource).not.toContain('ElMessageBox.prompt')
   })
 
-  it('keeps source tabs visible while moving application status into a dropdown filter', () => {
-    expect(appsSource).toContain('class="apps-source-switch"')
+  it('delegates location-aware opening and stages preference after shell creation', () => {
+    expect(appsSource).toContain('CodeApplicationActions')
+    expect(appsSource).toContain('location.external_application_id')
+    expect(appsSource).toContain('stageCodeApplicationLocationPreference')
+    expect(appsSource).toContain('created.public_id')
+  })
+
+  it('keeps location filters visible while application status remains a dropdown filter', () => {
+    expect(appsSource).toContain('class="apps-location-switch"')
     expect(appsSource).toContain('class="apps-status-filter"')
     expect(appsSource).toContain('<el-select')
     expect(appsSource).toContain('v-model="activeTab"')
