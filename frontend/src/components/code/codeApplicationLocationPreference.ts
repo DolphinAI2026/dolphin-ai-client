@@ -29,23 +29,32 @@ function shellKey(shellSessionRef: string): string {
 }
 
 function commitPendingKey(pendingKey: string, shellSessionRef: string): boolean {
+  let pending: PendingLocationPreference
+  let durableKey: string
   try {
     if (!pendingKey.startsWith(`${PENDING_PREFIX}:`)) return false
     const raw = sessionStorage.getItem(pendingKey)
     if (!raw) return false
-    const pending = JSON.parse(raw) as Partial<PendingLocationPreference>
+    const parsed = JSON.parse(raw) as Partial<PendingLocationPreference>
     if (
-      (pending.location !== 'local' && pending.location !== 'remote')
-      || pending.shellSessionRef !== String(shellSessionRef)
+      (parsed.location !== 'local' && parsed.location !== 'remote')
+      || parsed.shellSessionRef !== String(shellSessionRef)
     ) return false
-    const durableKey = pendingKey.replace(`${PENDING_PREFIX}:`, `${DURABLE_PREFIX}:`)
-    localStorage.setItem(durableKey, pending.location)
-    sessionStorage.removeItem(pendingKey)
-    sessionStorage.removeItem(shellKey(shellSessionRef))
-    return true
+    pending = parsed as PendingLocationPreference
+    durableKey = pendingKey.replace(`${PENDING_PREFIX}:`, `${DURABLE_PREFIX}:`)
   } catch {
     return false
   }
+  try {
+    localStorage.setItem(durableKey, pending.location)
+  } catch {
+    return false
+  }
+  try {
+    sessionStorage.removeItem(pendingKey)
+    sessionStorage.removeItem(shellKey(shellSessionRef))
+  } catch { /* durable preference is already committed */ }
+  return true
 }
 
 function discardPendingKey(pendingKey: string, shellSessionRef: string): boolean {

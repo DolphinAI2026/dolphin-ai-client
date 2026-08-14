@@ -153,6 +153,7 @@ async def sandbox_auth_state_endpoint() -> dict[str, str]:
 
 _control_plane_user_locks: dict[int, asyncio.Lock] = {}
 _code_session_open_locks: dict[str, asyncio.Lock] = {}
+_code_session_creation_locks: dict[tuple[str, str, int, str, str, str], asyncio.Lock] = {}
 _local_code_open_phases: dict[tuple[int, int, str], str] = {}
 
 
@@ -170,6 +171,32 @@ def _code_session_open_lock(session_ref: str) -> asyncio.Lock:
     if lock is None:
         lock = asyncio.Lock()
         _code_session_open_locks[key] = lock
+    return lock
+
+
+def _code_session_creation_lock(
+    ctx: AuthContext,
+    logical_application_id: str,
+    execution_location: str,
+    session_purpose: str,
+) -> asyncio.Lock:
+    control_plane_tenant_id = _control_plane_code_tenant_id(ctx)
+    tenant_scope = (
+        ("control_plane", control_plane_tenant_id)
+        if control_plane_tenant_id
+        else ("local", str(ctx.tenant_id))
+    )
+    key = (
+        *tenant_scope,
+        int(ctx.user.id),
+        logical_application_id,
+        execution_location,
+        session_purpose,
+    )
+    lock = _code_session_creation_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _code_session_creation_locks[key] = lock
     return lock
 
 
@@ -723,93 +750,106 @@ async def create_code_session_from_external_app(
     app_code = str(body.app_code or "").strip() or None
     title = str(body.title or "").strip() or f"{app_name or app_code or external_id} Code"
 
-    existing = None
+    creation_lock = None
     if location_request["session_policy"] == "resume_recent":
-        candidates = (
-            await db.execute(
-                select(AIChatSession)
-                .where(
-                    _code_session_scope(AIChatSession, ctx),
-                    AIChatSession.user_id == ctx.user.id,
-                    AIChatSession.mode == "code",
-                    AIChatSession.status != "archived",
-                    AIChatSession.session_purpose == location_request["session_purpose"],
-                    or_(
-                        AIChatSession.logical_application_id == location_request["logical_application_id"],
-                        and_(
-                            AIChatSession.logical_application_id.is_(None),
-                            AIChatSession.external_application_id == external_id,
+        creation_lock = _code_session_creation_lock(
+            ctx,
+            location_request["logical_application_id"],
+            location_request["execution_location"],
+            location_request["session_purpose"],
+        )
+        await creation_lock.acquire()
+    try:
+        existing = None
+        if location_request["session_policy"] == "resume_recent":
+            candidates = (
+                await db.execute(
+                    select(AIChatSession)
+                    .where(
+                        _code_session_scope(AIChatSession, ctx),
+                        AIChatSession.user_id == ctx.user.id,
+                        AIChatSession.mode == "code",
+                        AIChatSession.status != "archived",
+                        AIChatSession.session_purpose == location_request["session_purpose"],
+                        or_(
+                            AIChatSession.logical_application_id == location_request["logical_application_id"],
+                            and_(
+                                AIChatSession.logical_application_id.is_(None),
+                                AIChatSession.external_application_id == external_id,
+                            ),
                         ),
-                    ),
-                    or_(
-                        AIChatSession.execution_location == location_request["execution_location"],
-                        AIChatSession.execution_location.is_(None),
-                    ),
+                        or_(
+                            AIChatSession.execution_location == location_request["execution_location"],
+                            AIChatSession.execution_location.is_(None),
+                        ),
+                    )
+                    .order_by(AIChatSession.updated_at.desc(), AIChatSession.id.desc())
                 )
-                .order_by(AIChatSession.updated_at.desc(), AIChatSession.id.desc())
-            )
-        ).scalars().all()
-        for candidate in candidates:
-            derived = derive_session_location(candidate)
-            if derived and derived["execution_location"] == location_request["execution_location"]:
-                existing = candidate
-                break
-    if existing:
-        changed = False
-        if not getattr(existing, "public_id", None):
-            ensure_code_session_public_id(existing)
-            changed = True
-        if app_name and existing.external_app_name != app_name:
-            existing.external_app_name = app_name
-            changed = True
-        if app_code and existing.external_app_code != app_code:
-            existing.external_app_code = app_code
-            changed = True
-        if body.title and existing.title != title:
-            existing.title = title
-            changed = True
-        if body.selected_llm_config_id and existing.selected_llm_config_id != body.selected_llm_config_id:
-            existing.selected_llm_config_id = body.selected_llm_config_id
-            changed = True
-        previous_location = existing.execution_location
-        previous_logical_id = existing.logical_application_id
-        backfill_session_location(existing)
-        if (
-            existing.execution_location != previous_location
-            or existing.logical_application_id != previous_logical_id
-        ):
-            changed = True
-        if existing.logical_application_id != location_request["logical_application_id"]:
-            existing.logical_application_id = location_request["logical_application_id"]
-            changed = True
-        if existing.execution_location != location_request["execution_location"]:
-            existing.execution_location = location_request["execution_location"]
-            changed = True
-        if changed:
-            await db.commit()
-            await db.refresh(existing)
-        return _session_to_dict(existing)
+            ).scalars().all()
+            for candidate in candidates:
+                derived = derive_session_location(candidate)
+                if derived and derived["execution_location"] == location_request["execution_location"]:
+                    existing = candidate
+                    break
+        if existing:
+            changed = False
+            if not getattr(existing, "public_id", None):
+                ensure_code_session_public_id(existing)
+                changed = True
+            if app_name and existing.external_app_name != app_name:
+                existing.external_app_name = app_name
+                changed = True
+            if app_code and existing.external_app_code != app_code:
+                existing.external_app_code = app_code
+                changed = True
+            if body.title and existing.title != title:
+                existing.title = title
+                changed = True
+            if body.selected_llm_config_id and existing.selected_llm_config_id != body.selected_llm_config_id:
+                existing.selected_llm_config_id = body.selected_llm_config_id
+                changed = True
+            previous_location = existing.execution_location
+            previous_logical_id = existing.logical_application_id
+            backfill_session_location(existing)
+            if (
+                existing.execution_location != previous_location
+                or existing.logical_application_id != previous_logical_id
+            ):
+                changed = True
+            if existing.logical_application_id != location_request["logical_application_id"]:
+                existing.logical_application_id = location_request["logical_application_id"]
+                changed = True
+            if existing.execution_location != location_request["execution_location"]:
+                existing.execution_location = location_request["execution_location"]
+                changed = True
+            if changed:
+                await db.commit()
+                await db.refresh(existing)
+            return _session_to_dict(existing)
 
-    session = AIChatSession(
-        tenant_id=ctx.tenant_id,
-        control_plane_tenant_id=_control_plane_code_tenant_id(ctx),
-        user_id=ctx.user.id,
-        app_id=None,
-        external_application_id=external_id,
-        external_app_name=app_name,
-        external_app_code=app_code,
-        logical_application_id=location_request["logical_application_id"],
-        execution_location=location_request["execution_location"],
-        session_purpose=location_request["session_purpose"],
-        title=title,
-        mode="code",
-        status="active",
-        selected_llm_config_id=body.selected_llm_config_id if body.selected_llm_config_id else None,
-    )
-    db.add(session)
-    await db.commit()
-    await db.refresh(session)
-    return _session_to_dict(session)
+        session = AIChatSession(
+            tenant_id=ctx.tenant_id,
+            control_plane_tenant_id=_control_plane_code_tenant_id(ctx),
+            user_id=ctx.user.id,
+            app_id=None,
+            external_application_id=external_id,
+            external_app_name=app_name,
+            external_app_code=app_code,
+            logical_application_id=location_request["logical_application_id"],
+            execution_location=location_request["execution_location"],
+            session_purpose=location_request["session_purpose"],
+            title=title,
+            mode="code",
+            status="active",
+            selected_llm_config_id=body.selected_llm_config_id if body.selected_llm_config_id else None,
+        )
+        db.add(session)
+        await db.commit()
+        await db.refresh(session)
+        return _session_to_dict(session)
+    finally:
+        if creation_lock is not None:
+            creation_lock.release()
 
 
 @router.post("/sessions/{session_ref}/open")

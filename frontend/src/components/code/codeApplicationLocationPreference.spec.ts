@@ -47,6 +47,18 @@ describe('Code application location preference', () => {
     expect(loadCodeApplicationLocationPreference(scope)).toBe('remote')
   })
 
+  it('keeps a durable preference when pending storage cleanup fails', () => {
+    stageCodeApplicationLocationPreference(scope, 'local', 'shell-42')
+    vi.stubGlobal('sessionStorage', {
+      getItem: sessionStorage.getItem,
+      setItem: sessionStorage.setItem,
+      removeItem: () => { throw new Error('storage cleanup unavailable') },
+    })
+
+    expect(commitCodeApplicationLocationPreference(scope, 'shell-42')).toBe(true)
+    expect(loadCodeApplicationLocationPreference(scope)).toBe('local')
+  })
+
   it('discards a pending selection without changing a previous durable preference', () => {
     stageCodeApplicationLocationPreference(scope, 'local', 'shell-1')
     expect(commitCodeApplicationLocationPreference(scope, 'shell-1')).toBe(true)

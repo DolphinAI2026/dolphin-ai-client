@@ -3978,6 +3978,69 @@ async def test_create_code_session_from_external_app_resume_recent_scopes_to_loc
 
 
 @pytest.mark.asyncio
+async def test_create_code_session_from_external_app_resume_recent_concurrently_reuses_one_session(tmp_path):
+    from app.routes.code_runtime import (
+        CreateExternalCodeSessionRequest,
+        create_code_session_from_external_app,
+    )
+
+    engine, Session = await _renewal_session_factory(tmp_path)
+    request = CreateExternalCodeSessionRequest(
+        logical_application_id="logical-crm",
+        external_application_id="local-crm",
+        execution_location="local",
+        session_policy="resume_recent",
+        session_purpose="standard",
+    )
+
+    async def create_session():
+        async with Session() as session:
+            return await create_code_session_from_external_app(request, _ctx(), session)
+
+    try:
+        first, second = await asyncio.gather(create_session(), create_session())
+        async with Session() as verification_session:
+            rows = (
+                await verification_session.execute(
+                    select(AIChatSession).where(
+                        AIChatSession.tenant_id == 7,
+                        AIChatSession.user_id == 11,
+                        AIChatSession.mode == "code",
+                        AIChatSession.logical_application_id == "logical-crm",
+                        AIChatSession.execution_location == "local",
+                        AIChatSession.session_purpose == "standard",
+                    )
+                )
+            ).scalars().all()
+    finally:
+        await engine.dispose()
+
+    assert first["id"] == second["id"]
+    assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_create_code_session_from_external_app_resume_recent_create_new_never_reuses(db_session):
+    from app.routes.code_runtime import (
+        CreateExternalCodeSessionRequest,
+        create_code_session_from_external_app,
+    )
+
+    request = CreateExternalCodeSessionRequest(
+        logical_application_id="logical-crm",
+        external_application_id="local-crm",
+        execution_location="local",
+        session_policy="create_new",
+        session_purpose="standard",
+    )
+
+    first = await create_code_session_from_external_app(request, _ctx(), db_session)
+    second = await create_code_session_from_external_app(request, _ctx(), db_session)
+
+    assert first["id"] != second["id"]
+
+
+@pytest.mark.asyncio
 async def test_create_code_session_from_external_app_resume_recent_backfills_matching_legacy_location(db_session):
     from app.routes.code_runtime import (
         CreateExternalCodeSessionRequest,
