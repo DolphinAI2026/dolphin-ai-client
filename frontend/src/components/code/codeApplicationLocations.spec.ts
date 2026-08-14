@@ -266,12 +266,17 @@ describe('unified Code application locations', () => {
       linked,
       'local',
       'CODE_APPLICATION_LOCAL_LOCATION_MISSING',
-    )).toEqual({ state: 'local_missing', alternativeLocation: null })
+    )).toEqual({ state: 'local_missing', alternativeLocation: 'remote' })
     expect(resolveCodeApplicationLocationRecovery(
       linked,
       'remote',
       'CODE_APPLICATION_REMOTE_LOCATION_UNAVAILABLE',
-    )).toEqual({ state: 'remote_unavailable', alternativeLocation: null })
+    )).toEqual({ state: 'remote_unavailable', alternativeLocation: 'local' })
+    expect(resolveCodeApplicationLocationRecovery(
+      { ...linked, remote: { ...linked.remote!, availability: 'unavailable' } },
+      'local',
+      'CODE_APPLICATION_LOCAL_LOCATION_MISSING',
+    )).toEqual({ state: 'local_missing', alternativeLocation: null })
   })
 
   it('offers another location only for generic unavailability when that cached location is ready', () => {

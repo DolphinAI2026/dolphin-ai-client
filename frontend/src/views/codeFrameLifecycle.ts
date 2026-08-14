@@ -134,6 +134,14 @@ export function beginCodeFrameOpen(
   }
 }
 
+export function shouldDiscardPendingCodeFrameForNextSession(
+  state: CodeFrameLifecycle,
+  nextSessionRef: string,
+): boolean {
+  const pendingSessionRef = state.pending?.sessionRef || state.request?.sessionRef
+  return Boolean(pendingSessionRef && pendingSessionRef !== nextSessionRef)
+}
+
 export function queuePendingCodeFrame(
   state: CodeFrameLifecycle,
   input: Pick<CodeFrameOpenRequest, 'requestId' | 'sessionRef'> & { url: string; baseUrl: string },

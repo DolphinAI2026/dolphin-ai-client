@@ -207,10 +207,10 @@ export function resolveCodeApplicationLocationRecovery(
     return { state: 'all_unavailable', alternativeLocation: null }
   }
   if (errorCode === 'CODE_APPLICATION_LOCAL_LOCATION_MISSING') {
-    return { state: 'local_missing', alternativeLocation: null }
+    return { state: 'local_missing', alternativeLocation: alternativeReady ? alternativeLocation : null }
   }
   if (errorCode === 'CODE_APPLICATION_REMOTE_LOCATION_UNAVAILABLE') {
-    return { state: 'remote_unavailable', alternativeLocation: null }
+    return { state: 'remote_unavailable', alternativeLocation: alternativeReady ? alternativeLocation : null }
   }
   if (errorCode === 'CODE_APPLICATION_LOCATION_UNAVAILABLE') {
     return {

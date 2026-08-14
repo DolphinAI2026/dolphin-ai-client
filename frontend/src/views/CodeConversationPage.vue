@@ -138,6 +138,7 @@ import {
   promoteReadyCodeFrame,
   queuePendingCodeFrame,
   setCodeFrameCacheLimit,
+  shouldDiscardPendingCodeFrameForNextSession,
   type CodeFrame,
   type CodeFrameFailureInput,
   type CodeFrameRouteLocation,
@@ -418,16 +419,13 @@ async function openCurrentSession() {
   const openKey = `${sessionRef}:${codeRouteLocationKey(routeLocation)}`
   if (loading.value && openInFlightKey === openKey) return
   const currentRequest = frameLifecycle.value.request
-  if (
-    currentRequest?.sessionRef === sessionRef
-    && codeRouteLocationsEqual(currentRequest.route, routeLocation)
-  ) {
+  if (currentRequest?.sessionRef === sessionRef) {
     return
   }
   openInFlightKey = openKey
   const requestSeq = ++openRequestSeq
   runtimeAuthInvalidFrameKey = ''
-  discardPendingCodeApplicationLocationPreferenceForLeavingShell()
+  discardPendingCodeApplicationLocationPreferenceForChangedShell(sessionRef)
   frameLifecycle.value = beginCodeFrameOpen(frameLifecycle.value, {
     requestId: requestSeq,
     sessionRef,
@@ -646,6 +644,11 @@ function discardPendingCodeApplicationLocationPreferenceForLeavingShell() {
   }
   const request = frameLifecycle.value.request
   if (request) discardPendingCodeApplicationLocationPreferenceByShellSessionRef(request.sessionRef)
+}
+
+function discardPendingCodeApplicationLocationPreferenceForChangedShell(nextSessionRef: string) {
+  if (!shouldDiscardPendingCodeFrameForNextSession(frameLifecycle.value, nextSessionRef)) return
+  discardPendingCodeApplicationLocationPreferenceForLeavingShell()
 }
 
 function retryFailedSession() {

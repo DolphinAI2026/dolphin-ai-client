@@ -12,6 +12,7 @@ import {
   promoteReadyCodeFrame,
   queuePendingCodeFrame,
   setCodeFrameCacheLimit,
+  shouldDiscardPendingCodeFrameForNextSession,
   type CodeFrameRouteLocation,
 } from './codeFrameLifecycle'
 
@@ -46,6 +47,13 @@ function activateInitialFrame() {
 }
 
 describe('code frame lifecycle', () => {
+  it('keeps pending state for an agent route change in the same shell but discards it for another shell', () => {
+    const state = openInitialFrame()
+
+    expect(shouldDiscardPendingCodeFrameForNextSession(state, 'session-1')).toBe(false)
+    expect(shouldDiscardPendingCodeFrameForNextSession(state, 'session-2')).toBe(true)
+  })
+
   it('keeps the first frame pending until trusted readiness promotes it', () => {
     let state = openInitialFrame()
     const pending = state.pending!
