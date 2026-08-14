@@ -127,6 +127,7 @@ import { pickDirectory } from '@/utils/desktop'
 import type { CodeWorkspaceOpenPhase } from '@/api/codeRuntime'
 import {
   activateCachedCodeFrame,
+  awaitCurrentCodeFrameOpenRequest,
   beginCodeFrameOpen,
   createCodeFrameLifecycle,
   failCodeFrameOpen,
@@ -425,6 +426,7 @@ async function openCurrentSession() {
   }
   openInFlightKey = openKey
   const requestSeq = ++openRequestSeq
+  const isCurrentRequest = () => requestSeq === openRequestSeq
   runtimeAuthInvalidFrameKey = ''
   discardPendingCodeApplicationLocationPreferenceForChangedShell(sessionRef)
   frameLifecycle.value = beginCodeFrameOpen(frameLifecycle.value, {
@@ -464,8 +466,13 @@ async function openCurrentSession() {
       // iframe mounted instead of reopening the workspace through Control Plane.
       if (runtimeAgentId) {
         try {
-          await codeRuntimeApi.activateAgentSession(sessionRef, runtimeAgentId)
+          const activated = await awaitCurrentCodeFrameOpenRequest(
+            isCurrentRequest,
+            () => codeRuntimeApi.activateAgentSession(sessionRef, runtimeAgentId),
+          )
+          if (activated.status === 'stale' || !isCurrentRequest()) return
         } catch (activationError: any) {
+          if (!isCurrentRequest()) return
           if (!isUnavailableRuntimeSessionError(activationError, runtimeAgentId)) {
             throw activationError
           }
@@ -480,7 +487,12 @@ async function openCurrentSession() {
     }
 
     startOpenStatusPolling(sessionRef, requestSeq)
-    const opened = await codeRuntimeApi.openSession(sessionRef)
+    const openedResult = await awaitCurrentCodeFrameOpenRequest(
+      isCurrentRequest,
+      () => codeRuntimeApi.openSession(sessionRef),
+    )
+    if (openedResult.status === 'stale' || !isCurrentRequest()) return
+    const opened = openedResult.value
     stopOpenStatusPolling()
     if (opened.external_application_id.startsWith('local-')) {
       localWorkspaceOpening.value = true
@@ -489,21 +501,30 @@ async function openCurrentSession() {
       localWorkspaceOpening.value = false
     }
     if (opened.route_id && opened.route_id !== sessionRef) {
-      await router.replace({
-        path: `/code/${opened.route_id}`,
-        query: route.query,
-      })
+      const routeReplaced = await awaitCurrentCodeFrameOpenRequest(
+        isCurrentRequest,
+        () => router.replace({
+          path: `/code/${opened.route_id}`,
+          query: route.query,
+        }),
+      )
+      if (routeReplaced.status === 'stale' || !isCurrentRequest()) return
       return
     }
     if (runtimeAgentId && opened.runtime_session_id !== runtimeAgentId) {
       try {
-        await codeRuntimeApi.activateAgentSession(opened.session_id, runtimeAgentId)
+        const activated = await awaitCurrentCodeFrameOpenRequest(
+          isCurrentRequest,
+          () => codeRuntimeApi.activateAgentSession(opened.session_id, runtimeAgentId),
+        )
+        if (activated.status === 'stale' || !isCurrentRequest()) return
       } catch (activationError: any) {
+        if (!isCurrentRequest()) return
         if (!isUnavailableRuntimeSessionError(activationError, runtimeAgentId)) throw activationError
         clearRouteAgentQueryIfCurrent(runtimeAgentId)
       }
     }
-    if (requestSeq !== openRequestSeq) return
+    if (!isCurrentRequest()) return
 
     frameLifecycle.value = setCodeFrameCacheLimit(
       frameLifecycle.value,

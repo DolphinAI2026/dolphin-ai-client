@@ -80,6 +80,20 @@ export function shouldReuseCodeFrameOpenRequest(
   return Boolean(request && request.sessionRef === sessionRef && codeFrameRoutesEqual(request.route, route))
 }
 
+export type CurrentCodeFrameOpenRequestResult<T> =
+  | { status: 'current'; value: T }
+  | { status: 'stale' }
+
+export async function awaitCurrentCodeFrameOpenRequest<T>(
+  isCurrent: () => boolean,
+  operation: () => Promise<T>,
+): Promise<CurrentCodeFrameOpenRequestResult<T>> {
+  if (!isCurrent()) return { status: 'stale' }
+  const value = await operation()
+  if (!isCurrent()) return { status: 'stale' }
+  return { status: 'current', value }
+}
+
 export function createCodeFrameLifecycle(): CodeFrameLifecycle {
   return {
     active: null,

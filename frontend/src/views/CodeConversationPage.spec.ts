@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
+import { awaitCurrentCodeFrameOpenRequest } from './codeFrameLifecycle'
 import pageSource from './CodeConversationPage.vue?raw'
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}
 
 describe('CodeConversationPage', () => {
   it('opens a Dolphin Code session and renders the d-ai-code iframe', () => {
@@ -179,6 +188,92 @@ describe('CodeConversationPage', () => {
       .toBeLessThan(pageSource.indexOf('codeRuntimeApi.activateAgentSession(opened.session_id, runtimeAgentId)'))
     expect(pageSource.indexOf('codeRuntimeApi.activateAgentSession(opened.session_id, runtimeAgentId)'))
       .toBeLessThan(pageSource.indexOf('queuePendingFrame(opened.embed_url)'))
+  })
+
+  it('gates open and cached/runtime activation completion before applying request side effects', () => {
+    const openSource = pageSource.slice(
+      pageSource.indexOf('async function openCurrentSession()'),
+      pageSource.indexOf('function queuePendingFrame'),
+    )
+
+    expect(openSource).toContain('awaitCurrentCodeFrameOpenRequest')
+    expect(openSource.match(/awaitCurrentCodeFrameOpenRequest/g)).toHaveLength(4)
+    expect(openSource.match(/\.status === 'stale' \|\| !isCurrentRequest\(\)/g)).toHaveLength(4)
+    expect(openSource).toContain('() => codeRuntimeApi.openSession(sessionRef)')
+    expect(openSource).toContain('() => codeRuntimeApi.activateAgentSession(sessionRef, runtimeAgentId)')
+    expect(openSource).toContain('() => codeRuntimeApi.activateAgentSession(opened.session_id, runtimeAgentId)')
+  })
+
+  it('ignores stale open completion before stopping polling, activating, or replacing the current frame', async () => {
+    let currentRequestId = 1
+    let activeAgent = ''
+    const effects: string[] = []
+    const agent1Open = deferred<string>()
+    const agent2Open = deferred<string>()
+
+    const completeOpen = async (
+      requestId: number,
+      agentId: string,
+      openPromise: Promise<string>,
+    ) => {
+      const opened = await awaitCurrentCodeFrameOpenRequest(
+        () => requestId === currentRequestId,
+        () => openPromise,
+      )
+      if (opened.status === 'stale') return
+
+      effects.push(`stop-polling:${agentId}`)
+      const activated = await awaitCurrentCodeFrameOpenRequest(
+        () => requestId === currentRequestId,
+        async () => {
+          effects.push(`activate:${agentId}`)
+        },
+      )
+      if (activated.status === 'stale') return
+      activeAgent = agentId
+    }
+
+    const agent1Request = completeOpen(1, 'agent-1', agent1Open.promise)
+    currentRequestId = 2
+    const agent2Request = completeOpen(2, 'agent-2', agent2Open.promise)
+
+    agent2Open.resolve('agent-2-opened')
+    await agent2Request
+    agent1Open.resolve('agent-1-opened')
+    await agent1Request
+
+    expect(effects).toEqual([
+      'stop-polling:agent-2',
+      'activate:agent-2',
+    ])
+    expect(activeAgent).toBe('agent-2')
+  })
+
+  it('does not replace the current frame when activation becomes stale while awaiting', async () => {
+    let currentRequestId = 1
+    let activeAgent = ''
+    const agent1Activation = deferred<void>()
+
+    const activateAndCommit = async (
+      requestId: number,
+      agentId: string,
+      activation: () => Promise<void>,
+    ) => {
+      const activated = await awaitCurrentCodeFrameOpenRequest(
+        () => requestId === currentRequestId,
+        activation,
+      )
+      if (activated.status === 'stale') return
+      activeAgent = agentId
+    }
+
+    const agent1Request = activateAndCommit(1, 'agent-1', () => agent1Activation.promise)
+    currentRequestId = 2
+    await activateAndCommit(2, 'agent-2', async () => undefined)
+    agent1Activation.resolve()
+    await agent1Request
+
+    expect(activeAgent).toBe('agent-2')
   })
 
   it('drops stale route agent query when the runtime session no longer exists', () => {
