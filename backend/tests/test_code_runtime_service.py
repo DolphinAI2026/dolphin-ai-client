@@ -3307,3 +3307,72 @@ async def test_short_code_route_rejects_another_control_plane_tenant(db_session)
             ctx=ctx,
             workspace_open=lambda *_args: pytest.fail("must not open another tenant workspace"),
         )
+
+
+def test_local_application_location_normalizes_identity_and_availability(tmp_path):
+    from app.code_runtime.application_locations import (
+        build_local_application_location,
+        local_location_id,
+        local_workspace_availability,
+        normalize_local_workspace_path,
+    )
+
+    workspace = tmp_path / "sales" / "workspace"
+    workspace.mkdir(parents=True)
+    alternate_path = workspace.parent / "." / workspace.name
+    missing_path = tmp_path / "sales" / "missing"
+
+    normalized = str(workspace.resolve())
+    assert normalize_local_workspace_path(alternate_path) == normalized
+    assert local_location_id(alternate_path) == local_location_id(workspace)
+    assert local_workspace_availability(workspace) == "ready"
+    assert local_workspace_availability(missing_path) == "missing"
+    assert build_local_application_location(
+        workspace_id="workspace-7",
+        workspace_path=alternate_path,
+    ) == {
+        "location": "local",
+        "location_id": local_location_id(workspace),
+        "availability": "ready",
+        "workspace_id": "workspace-7",
+        "workspace_path": normalized,
+        "environment_name": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_legacy_code_session_derives_location_and_backfills_on_write(db_session):
+    from app.code_runtime.session_location import (
+        backfill_session_location,
+        derive_session_location,
+    )
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="local-sales",
+        title="Legacy local session",
+        mode="code",
+        status="active",
+    )
+    db_session.add(session)
+    await db_session.flush()
+
+    assert derive_session_location(session) == {
+        "execution_location": "local",
+        "logical_application_id": "legacy:local-sales",
+    }
+    assert backfill_session_location(session) == {
+        "execution_location": "local",
+        "logical_application_id": "legacy:local-sales",
+    }
+    assert session.execution_location == "local"
+    assert session.logical_application_id == "legacy:local-sales"
+
+    session_id = session.id
+    await db_session.commit()
+    db_session.expire_all()
+    stored = await db_session.get(AIChatSession, session_id)
+    assert stored is not None
+    assert stored.execution_location == "local"
+    assert stored.logical_application_id == "legacy:local-sales"

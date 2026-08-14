@@ -1,0 +1,86 @@
+"""Stable local application-location primitives shared by later Code flows."""
+
+from __future__ import annotations
+
+import hashlib
+import os
+from pathlib import Path
+from typing import Literal, TypedDict
+
+
+CodeExecutionLocation = Literal["local", "remote"]
+CodeLocationAvailability = Literal["ready", "missing", "unreadable", "unavailable"]
+
+
+class CodeApplicationLocation(TypedDict):
+    location: CodeExecutionLocation
+    location_id: str
+    availability: CodeLocationAvailability
+    workspace_id: str | None
+    workspace_path: str | None
+    environment_name: str | None
+
+
+def normalize_local_workspace_path(value: str | Path) -> str:
+    """Return the canonical absolute path used for local location identity."""
+
+    raw_path = str(value or "").strip()
+    if not raw_path:
+        raise ValueError("local workspace path is required")
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        raise ValueError("local workspace path must be absolute")
+    normalized = str(path.resolve(strict=False))
+    if os.name == "nt":
+        if normalized.lower().startswith("\\\\?\\unc\\"):
+            return "\\\\" + normalized[8:]
+        if normalized.startswith("\\\\?\\"):
+            return normalized[4:]
+    return normalized
+
+
+def local_location_id(workspace_path: str | Path) -> str:
+    """Build a path-stable local location identifier without exposing the path."""
+
+    normalized_path = normalize_local_workspace_path(workspace_path)
+    digest = hashlib.sha256(normalized_path.encode("utf-8")).hexdigest()
+    return f"local-{digest[:32]}"
+
+
+def local_workspace_availability(workspace_path: str | Path) -> CodeLocationAvailability:
+    """Classify a local workspace without creating or changing it."""
+
+    try:
+        path = Path(normalize_local_workspace_path(workspace_path))
+        if not path.exists():
+            return "missing"
+        if not path.is_dir():
+            return "unavailable"
+        if not os.access(path, os.R_OK | os.X_OK):
+            return "unreadable"
+        with os.scandir(path):
+            pass
+    except PermissionError:
+        return "unreadable"
+    except (OSError, ValueError):
+        return "unavailable"
+    return "ready"
+
+
+def build_local_application_location(
+    *,
+    workspace_id: str | None,
+    workspace_path: str | Path,
+) -> CodeApplicationLocation:
+    """Describe one local application location for the unified application API."""
+
+    normalized_path = normalize_local_workspace_path(workspace_path)
+    normalized_workspace_id = str(workspace_id).strip() if workspace_id is not None else ""
+    return {
+        "location": "local",
+        "location_id": local_location_id(normalized_path),
+        "availability": local_workspace_availability(normalized_path),
+        "workspace_id": normalized_workspace_id or None,
+        "workspace_path": normalized_path,
+        "environment_name": None,
+    }

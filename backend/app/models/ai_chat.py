@@ -86,6 +86,14 @@ class AIChatSession(Base):
     external_application_id: Mapped[Optional[str]] = mapped_column(String(80), nullable=True, index=True)
     external_app_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     external_app_code: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    # 应用逻辑身份和产品位置独立于 Runtime 的 execution_target。
+    logical_application_id: Mapped[Optional[str]] = mapped_column(String(160), nullable=True, index=True)
+    execution_location: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    session_purpose: Mapped[str] = mapped_column(
+        String(32), default="standard", server_default="standard", nullable=False
+    )
+    initialization_task_key: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    initialization_task_state: Mapped[Optional[str]] = mapped_column(String(24), nullable=True)
     # workspace 目录路径（per-session tmp 目录，用于 run_python 的 cwd + 附件存储）
     workspace_dir: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     # 绑定工作区 ws_id（非路径，是 WorkspaceManager 的 ws_id）；Code 会话据此让引擎推导

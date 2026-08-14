@@ -9,7 +9,29 @@ export const CODE_RUNTIME_ACTIVATION_RETRY_DELAYS_MS = [] as const
 // 首次冷启动会同步等待 Control Plane 部署 Sandbox；必须长于后端的 workspace/open 预算。
 export const CODE_RUNTIME_WORKSPACE_OPEN_TIMEOUT_MS = 690_000
 
-export type CodeApplicationSource = 'local' | 'remote'
+export type CodeExecutionLocation = 'local' | 'remote'
+export type CodeLocationAvailability = 'ready' | 'missing' | 'unreadable' | 'unavailable'
+
+export interface CodeApplicationLocation {
+  location: CodeExecutionLocation
+  location_id: string
+  availability: CodeLocationAvailability
+  workspace_id?: string | null
+  workspace_path?: string | null
+  environment_name?: string | null
+}
+
+export interface UnifiedCodeApplication {
+  logical_application_id: string
+  app_name: string
+  app_code?: string | null
+  local?: CodeApplicationLocation
+  remote?: CodeApplicationLocation
+  association: 'local_only' | 'remote_only' | 'linked'
+}
+
+// Retained for one compatibility cycle as a request for one execution location.
+export type CodeApplicationSource = CodeExecutionLocation
 
 export const CODE_APPLICATION_SOURCE_STORAGE_KEY = 'dolphin-code-application-source-v1'
 export const CODE_APPLICATION_SOURCE_CHANGED_EVENT = 'code-application-source-changed'
