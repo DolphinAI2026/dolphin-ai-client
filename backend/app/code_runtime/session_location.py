@@ -106,6 +106,8 @@ async def code_session_creation_database_lock(
     mysql_lock_acquired = False
     mysql_lock_name = ""
     try:
+        if db.in_transaction():
+            await db.commit()
         if dialect_name == "sqlite":
             await db.execute(text("BEGIN IMMEDIATE"))
         elif dialect_name == "postgresql":

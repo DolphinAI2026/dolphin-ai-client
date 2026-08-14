@@ -4093,6 +4093,130 @@ async def test_code_session_location_database_lock_rolls_back_when_commit_fails(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("dialect_name", "lock_statement"),
+    [("sqlite", "BEGIN IMMEDIATE"), ("mysql", "SELECT GET_LOCK")],
+)
+async def test_code_session_location_database_lock_ends_existing_transaction_before_lock(
+    dialect_name,
+    lock_statement,
+):
+    from app.code_runtime.session_location import (
+        code_session_creation_database_lock,
+        code_session_creation_scope,
+    )
+
+    events: list[str] = []
+
+    class FakeResult:
+        def scalar_one(self):
+            return 1
+
+    class FakeLockConnection:
+        async def execute(self, statement, _parameters=None):
+            events.append(statement.text)
+            return FakeResult()
+
+        async def close(self):
+            events.append("lock connection closed")
+
+    class FakeBind:
+        dialect = SimpleNamespace(name=dialect_name)
+
+        async def connect(self):
+            events.append("lock connection opened")
+            return FakeLockConnection()
+
+    class FakeSession:
+        bind = FakeBind()
+
+        def __init__(self):
+            self.transaction_open = True
+
+        def in_transaction(self):
+            return self.transaction_open
+
+        async def commit(self):
+            events.append("commit")
+            self.transaction_open = False
+
+        async def rollback(self):
+            events.append("rollback")
+            self.transaction_open = False
+
+        async def execute(self, statement, _parameters=None):
+            if statement.text == "BEGIN IMMEDIATE":
+                assert not self.transaction_open
+                self.transaction_open = True
+            elif statement.text == "SELECT business":
+                if dialect_name == "mysql":
+                    assert not self.transaction_open
+                    self.transaction_open = True
+                else:
+                    assert self.transaction_open
+            events.append(statement.text)
+            return FakeResult()
+
+    session = FakeSession()
+    scope = code_session_creation_scope(
+        tenant_type="local",
+        tenant_id="7",
+        user_id=11,
+        logical_application_id="logical-crm",
+        execution_location="local",
+        session_purpose="standard",
+    )
+
+    async with code_session_creation_database_lock(session, scope):
+        await session.execute(text("SELECT business"))
+
+    lock_event = next(event for event in events if event.startswith(lock_statement))
+    assert events.index("commit") < events.index(lock_event)
+    assert events.index(lock_event) < events.index("SELECT business")
+    assert events[-1] in {"commit", "lock connection closed"}
+
+
+@pytest.mark.asyncio
+async def test_code_session_location_database_lock_rolls_back_when_pre_lock_commit_fails():
+    from app.code_runtime.session_location import (
+        code_session_creation_database_lock,
+        code_session_creation_scope,
+    )
+
+    events: list[str] = []
+
+    class FailingPreLockCommitSession:
+        bind = SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
+        def in_transaction(self):
+            return True
+
+        async def commit(self):
+            events.append("commit")
+            raise RuntimeError("pre-lock commit failed")
+
+        async def rollback(self):
+            events.append("rollback")
+
+        async def execute(self, _statement, _parameters=None):
+            raise AssertionError("database lock must not run after pre-lock commit failure")
+
+    scope = code_session_creation_scope(
+        tenant_type="local",
+        tenant_id="7",
+        user_id=11,
+        logical_application_id="logical-crm",
+        execution_location="local",
+        session_purpose="standard",
+    )
+
+    with pytest.raises(RuntimeError, match="pre-lock commit failed"):
+        async with code_session_creation_database_lock(FailingPreLockCommitSession(), scope):
+            pytest.fail("database lock body must not run")
+    assert events == ["commit", "rollback"]
+
+
+@pytest.mark.asyncio
 async def test_create_code_session_from_external_app_resume_recent_create_new_never_reuses(db_session):
     from app.routes.code_runtime import (
         CreateExternalCodeSessionRequest,
