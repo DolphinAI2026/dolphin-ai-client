@@ -1595,27 +1595,33 @@ async def list_code_runtime_rail_history(
     tenant_history = scope == "tenant"
     if tenant_history and not _can_view_tenant_code_history(ctx):
         raise HTTPException(status_code=403, detail="仅租户管理员可查看租户级 Code 历史")
-    if (
+    uses_authoritative_desktop_remote = (
         source in {"remote", "all"}
         and runtime.is_desktop()
         and ctx.user.account_source == "control_plane"
-    ):
+    )
+    remote_result: dict[str, Any] | None = None
+    if uses_authoritative_desktop_remote:
         try:
-            result = await _desktop_remote_rail_history(ctx, db)
+            remote_result = await _desktop_remote_rail_history(ctx, db)
         except Exception:
             sandbox_auth_metrics.record_builder_stage(
                 "rail_history_remote",
                 "failure",
                 time.monotonic() - started,
             )
-            raise
-        sandbox_auth_metrics.record_builder_stage(
-            "rail_history_remote",
-            "success",
-            time.monotonic() - started,
-        )
-        if source == "remote":
-            return result
+            if source == "remote":
+                raise
+            await db.rollback()
+            remote_result = {"apps": []}
+        else:
+            sandbox_auth_metrics.record_builder_stage(
+                "rail_history_remote",
+                "success",
+                time.monotonic() - started,
+            )
+            if source == "remote":
+                return remote_result
 
     try:
         external_application_id = func.coalesce(
@@ -1627,7 +1633,9 @@ async def list_code_runtime_rail_history(
             literal("session:") + cast(AIChatSession.id, String),
         )
         source_filters = []
-        if source == "local":
+        if source == "local" or (
+            source == "all" and uses_authoritative_desktop_remote
+        ):
             source_filters.append(external_application_id.like("local-%"))
         user_scope = [] if tenant_history else [AIChatSession.user_id == ctx.user.id]
         representative_shells = (
@@ -1828,6 +1836,13 @@ async def list_code_runtime_rail_history(
         "success",
         time.monotonic() - started,
     )
+    if remote_result is not None:
+        return {
+            "apps": [
+                *remote_result.get("apps", []),
+                *result["apps"],
+            ],
+        }
     return result
 
 
