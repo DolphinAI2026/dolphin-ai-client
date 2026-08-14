@@ -10,6 +10,8 @@ export const CODE_RUNTIME_ACTIVATION_RETRY_DELAYS_MS = [] as const
 export const CODE_RUNTIME_WORKSPACE_OPEN_TIMEOUT_MS = 690_000
 
 export type CodeExecutionLocation = 'local' | 'remote'
+export type CodeSessionPolicy = 'resume_recent' | 'create_new'
+export type CodeSessionPurpose = 'standard' | 'project_initialization' | 'project_recheck'
 export type CodeLocationAvailability = 'ready' | 'missing' | 'unreadable' | 'unavailable'
 export type LocalApplicationDirectoryMode = 'new_directory' | 'existing_directory'
 
@@ -89,6 +91,21 @@ export interface CreateCodeApplicationRequest {
   linked_remote_application_id?: string | null
   linked_remote_deployment_id?: string | null
 }
+
+export interface CreateCodeSessionFromApplicationRequest {
+  logical_application_id: string
+  external_application_id: string
+  execution_location: CodeExecutionLocation
+  session_policy: CodeSessionPolicy
+  session_purpose: CodeSessionPurpose
+  app_name?: string | null
+  app_code?: string | null
+}
+
+type LegacyCreateCodeSessionFromApplicationRequest = Pick<
+  CreateCodeSessionFromApplicationRequest,
+  'external_application_id' | 'app_name' | 'app_code'
+>
 
 export interface CodeRuntimeOpenResponse {
   session_id: string
@@ -183,11 +200,24 @@ export const codeRuntimeApi = {
     }, { headers: controlPlaneCodeAuthorization() })
   },
   createSessionFromExternalApp(
-    app: { external_application_id: string; app_name?: string | null; app_code?: string | null },
+    app: CreateCodeSessionFromApplicationRequest | LegacyCreateCodeSessionFromApplicationRequest,
     body?: { title?: string; selected_llm_config_id?: number | null },
   ) {
+    const locationRequest = app as Partial<CreateCodeSessionFromApplicationRequest>
     return request.post<any, AIChatSession>('/code/sessions/from-external-app', {
       external_application_id: app.external_application_id,
+      ...(locationRequest.logical_application_id
+        ? { logical_application_id: locationRequest.logical_application_id }
+        : {}),
+      ...(locationRequest.execution_location
+        ? { execution_location: locationRequest.execution_location }
+        : {}),
+      ...(locationRequest.session_policy
+        ? { session_policy: locationRequest.session_policy }
+        : {}),
+      ...(locationRequest.session_purpose
+        ? { session_purpose: locationRequest.session_purpose }
+        : {}),
       ...(app.app_name ? { app_name: app.app_name } : {}),
       ...(app.app_code ? { app_code: app.app_code } : {}),
       ...(body?.title ? { title: body.title } : {}),

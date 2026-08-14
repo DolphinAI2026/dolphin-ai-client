@@ -66,6 +66,12 @@ from app.code_runtime.sandbox_auth import (
 )
 from app.code_runtime.sandbox_metrics import sandbox_auth_metrics
 from app.code_runtime.execution_target import is_desktop_agent_runtime_target
+from app.code_runtime.session_location import (
+    CodeApplicationLocationRequestError,
+    backfill_session_location,
+    derive_session_location,
+    normalize_code_session_location_request,
+)
 from app.code_runtime.local_runtime import (
     LocalRuntimeClient,
     rebind_registered_local_workspace,
@@ -98,6 +104,10 @@ class CreateCodeSessionRequest(BaseModel):
 
 class CreateExternalCodeSessionRequest(BaseModel):
     external_application_id: str
+    logical_application_id: Optional[str] = None
+    execution_location: Optional[str] = None
+    session_policy: Optional[str] = None
+    session_purpose: Optional[str] = None
     app_name: Optional[str] = None
     app_code: Optional[str] = None
     title: Optional[str] = None
@@ -351,6 +361,9 @@ def _session_to_dict(session: AIChatSession) -> dict:
         "external_application_id": getattr(session, "external_application_id", None),
         "external_app_name": getattr(session, "external_app_name", None),
         "external_app_code": getattr(session, "external_app_code", None),
+        "logical_application_id": getattr(session, "logical_application_id", None),
+        "execution_location": getattr(session, "execution_location", None),
+        "session_purpose": getattr(session, "session_purpose", "standard"),
         "selected_llm_config_id": session.selected_llm_config_id,
         "workspace_dir": session.workspace_dir,
         "workspace_id": session.workspace_id,
@@ -696,24 +709,51 @@ async def create_code_session_from_external_app(
     external_id = str(body.external_application_id or "").strip()
     if not external_id:
         raise HTTPException(status_code=400, detail="external_application_id 不能为空")
+    try:
+        location_request = normalize_code_session_location_request(
+            logical_application_id=body.logical_application_id,
+            external_application_id=external_id,
+            execution_location=body.execution_location,
+            session_policy=body.session_policy,
+            session_purpose=body.session_purpose,
+        )
+    except CodeApplicationLocationRequestError as exc:
+        raise HTTPException(status_code=400, detail=f"{exc.code}: {exc}") from exc
     app_name = str(body.app_name or "").strip() or None
     app_code = str(body.app_code or "").strip() or None
     title = str(body.title or "").strip() or f"{app_name or app_code or external_id} Code"
 
-    existing = (
-        await db.execute(
-            select(AIChatSession)
-            .where(
-                _code_session_scope(AIChatSession, ctx),
-                AIChatSession.user_id == ctx.user.id,
-                AIChatSession.mode == "code",
-                AIChatSession.status != "archived",
-                AIChatSession.external_application_id == external_id,
+    existing = None
+    if location_request["session_policy"] == "resume_recent":
+        candidates = (
+            await db.execute(
+                select(AIChatSession)
+                .where(
+                    _code_session_scope(AIChatSession, ctx),
+                    AIChatSession.user_id == ctx.user.id,
+                    AIChatSession.mode == "code",
+                    AIChatSession.status != "archived",
+                    AIChatSession.session_purpose == location_request["session_purpose"],
+                    or_(
+                        AIChatSession.logical_application_id == location_request["logical_application_id"],
+                        and_(
+                            AIChatSession.logical_application_id.is_(None),
+                            AIChatSession.external_application_id == external_id,
+                        ),
+                    ),
+                    or_(
+                        AIChatSession.execution_location == location_request["execution_location"],
+                        AIChatSession.execution_location.is_(None),
+                    ),
+                )
+                .order_by(AIChatSession.updated_at.desc(), AIChatSession.id.desc())
             )
-            .order_by(AIChatSession.updated_at.desc(), AIChatSession.id.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
+        ).scalars().all()
+        for candidate in candidates:
+            derived = derive_session_location(candidate)
+            if derived and derived["execution_location"] == location_request["execution_location"]:
+                existing = candidate
+                break
     if existing:
         changed = False
         if not getattr(existing, "public_id", None):
@@ -731,6 +771,20 @@ async def create_code_session_from_external_app(
         if body.selected_llm_config_id and existing.selected_llm_config_id != body.selected_llm_config_id:
             existing.selected_llm_config_id = body.selected_llm_config_id
             changed = True
+        previous_location = existing.execution_location
+        previous_logical_id = existing.logical_application_id
+        backfill_session_location(existing)
+        if (
+            existing.execution_location != previous_location
+            or existing.logical_application_id != previous_logical_id
+        ):
+            changed = True
+        if existing.logical_application_id != location_request["logical_application_id"]:
+            existing.logical_application_id = location_request["logical_application_id"]
+            changed = True
+        if existing.execution_location != location_request["execution_location"]:
+            existing.execution_location = location_request["execution_location"]
+            changed = True
         if changed:
             await db.commit()
             await db.refresh(existing)
@@ -744,6 +798,9 @@ async def create_code_session_from_external_app(
         external_application_id=external_id,
         external_app_name=app_name,
         external_app_code=app_code,
+        logical_application_id=location_request["logical_application_id"],
+        execution_location=location_request["execution_location"],
+        session_purpose=location_request["session_purpose"],
         title=title,
         mode="code",
         status="active",

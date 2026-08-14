@@ -3892,6 +3892,148 @@ async def test_create_code_session_from_external_app_reuses_existing_app_shell_s
 
 
 @pytest.mark.asyncio
+async def test_create_code_session_from_external_app_persists_session_location_contract(db_session):
+    from app.routes.code_runtime import (
+        CreateExternalCodeSessionRequest,
+        create_code_session_from_external_app,
+    )
+
+    result = await create_code_session_from_external_app(
+        CreateExternalCodeSessionRequest(
+            logical_application_id="logical-crm",
+            external_application_id="local-crm",
+            execution_location="local",
+            session_policy="create_new",
+            session_purpose="project_recheck",
+        ),
+        _ctx(),
+        db_session,
+    )
+
+    session = await db_session.get(AIChatSession, result["id"])
+    assert result["logical_application_id"] == "logical-crm"
+    assert result["execution_location"] == "local"
+    assert result["session_purpose"] == "project_recheck"
+    assert session.logical_application_id == "logical-crm"
+    assert session.execution_location == "local"
+    assert session.session_purpose == "project_recheck"
+
+
+@pytest.mark.asyncio
+async def test_create_code_session_from_external_app_resume_recent_scopes_to_location_and_purpose(db_session):
+    from app.routes.code_runtime import (
+        CreateExternalCodeSessionRequest,
+        create_code_session_from_external_app,
+    )
+
+    local = await create_code_session_from_external_app(
+        CreateExternalCodeSessionRequest(
+            logical_application_id="logical-crm",
+            external_application_id="local-crm",
+            execution_location="local",
+            session_policy="create_new",
+            session_purpose="standard",
+        ),
+        _ctx(),
+        db_session,
+    )
+    remote = await create_code_session_from_external_app(
+        CreateExternalCodeSessionRequest(
+            logical_application_id="logical-crm",
+            external_application_id="remote-crm",
+            execution_location="remote",
+            session_policy="create_new",
+            session_purpose="standard",
+        ),
+        _ctx(),
+        db_session,
+    )
+    recheck = await create_code_session_from_external_app(
+        CreateExternalCodeSessionRequest(
+            logical_application_id="logical-crm",
+            external_application_id="local-crm",
+            execution_location="local",
+            session_policy="create_new",
+            session_purpose="project_recheck",
+        ),
+        _ctx(),
+        db_session,
+    )
+
+    resumed = await create_code_session_from_external_app(
+        CreateExternalCodeSessionRequest(
+            logical_application_id="logical-crm",
+            external_application_id="local-crm",
+            execution_location="local",
+            session_policy="resume_recent",
+            session_purpose="standard",
+        ),
+        _ctx(),
+        db_session,
+    )
+
+    assert resumed["id"] == local["id"]
+    assert resumed["id"] != remote["id"]
+    assert resumed["id"] != recheck["id"]
+
+
+@pytest.mark.asyncio
+async def test_create_code_session_from_external_app_resume_recent_backfills_matching_legacy_location(db_session):
+    from app.routes.code_runtime import (
+        CreateExternalCodeSessionRequest,
+        create_code_session_from_external_app,
+    )
+
+    legacy = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        title="Legacy Code",
+        mode="code",
+        status="active",
+        external_application_id="local-crm",
+    )
+    db_session.add(legacy)
+    await db_session.commit()
+
+    resumed = await create_code_session_from_external_app(
+        CreateExternalCodeSessionRequest(
+            logical_application_id="logical-crm",
+            external_application_id="local-crm",
+            execution_location="local",
+            session_policy="resume_recent",
+            session_purpose="standard",
+        ),
+        _ctx(),
+        db_session,
+    )
+
+    await db_session.refresh(legacy)
+    assert resumed["id"] == legacy.id
+    assert legacy.logical_application_id == "logical-crm"
+    assert legacy.execution_location == "local"
+
+
+@pytest.mark.asyncio
+async def test_create_code_session_from_external_app_rejects_invalid_session_location_contract(db_session):
+    from fastapi import HTTPException
+    from app.routes.code_runtime import (
+        CreateExternalCodeSessionRequest,
+        create_code_session_from_external_app,
+    )
+
+    with pytest.raises(HTTPException, match="CODE_APPLICATION_LOCATION_REQUIRED"):
+        await create_code_session_from_external_app(
+            CreateExternalCodeSessionRequest(
+                logical_application_id="logical-crm",
+                external_application_id="local-crm",
+                execution_location="other",
+            ),
+            _ctx(),
+            db_session,
+        )
+
+
+@pytest.mark.asyncio
 async def test_control_plane_code_sessions_are_isolated_by_remote_tenant(db_session):
     from app.routes.code_runtime import (
         CreateExternalCodeSessionRequest,

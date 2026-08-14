@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   commitCodeApplicationLocationPreference,
+  commitPendingCodeApplicationLocationPreferenceByShellSessionRef,
   discardPendingCodeApplicationLocationPreference,
+  discardPendingCodeApplicationLocationPreferenceByShellSessionRef,
   loadCodeApplicationLocationPreference,
   stageCodeApplicationLocationPreference,
 } from './codeApplicationLocationPreference'
@@ -52,5 +54,26 @@ describe('Code application location preference', () => {
 
     expect(discardPendingCodeApplicationLocationPreference(scope, 'shell-2')).toBe(true)
     expect(loadCodeApplicationLocationPreference(scope)).toBe('local')
+  })
+
+  it('uses the shell session index to commit only its pending scope', () => {
+    const billingScope = { ...scope, logicalApplicationId: 'logical-billing' }
+    stageCodeApplicationLocationPreference(scope, 'local', 'shell-crm')
+    stageCodeApplicationLocationPreference(billingScope, 'remote', 'shell-billing')
+
+    expect(commitPendingCodeApplicationLocationPreferenceByShellSessionRef('shell-crm')).toBe(true)
+    expect(loadCodeApplicationLocationPreference(scope)).toBe('local')
+    expect(loadCodeApplicationLocationPreference(billingScope)).toBeNull()
+  })
+
+  it('uses the shell session index to discard only its pending scope', () => {
+    const billingScope = { ...scope, logicalApplicationId: 'logical-billing' }
+    stageCodeApplicationLocationPreference(scope, 'local', 'shell-crm')
+    stageCodeApplicationLocationPreference(billingScope, 'remote', 'shell-billing')
+
+    expect(discardPendingCodeApplicationLocationPreferenceByShellSessionRef('shell-billing')).toBe(true)
+    expect(commitPendingCodeApplicationLocationPreferenceByShellSessionRef('shell-crm')).toBe(true)
+    expect(loadCodeApplicationLocationPreference(scope)).toBe('local')
+    expect(loadCodeApplicationLocationPreference(billingScope)).toBeNull()
   })
 })
