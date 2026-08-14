@@ -234,7 +234,15 @@ onBeforeUnmount(() => {
       @answer-ask="option => send(option)"
       @open-trace="openTrace"
       @open-artifact="openArtifact"
-    />
+    >
+      <template #typing>
+        <div class="system-assistant-working" role="status" aria-live="polite">
+          <span class="system-assistant-working-dot" aria-hidden="true" />
+          <span>正在处理</span>
+          <span v-if="typingSeconds > 0" class="system-assistant-working-time">· {{ typingSeconds }}s</span>
+        </div>
+      </template>
+    </AgentConversation>
 
     <div class="system-assistant-composer">
       <UnifiedChatComposer
@@ -408,12 +416,12 @@ onBeforeUnmount(() => {
 }
 
 .system-assistant-conversation :deep(.ac-list) {
-  padding-inline: max(16px, calc((100% - 820px) / 2));
+  padding: 16px;
 }
 
 .system-assistant-composer {
   flex: 0 0 auto;
-  padding: 10px max(16px, calc((100% - 820px) / 2)) 14px;
+  padding: 6px 16px 10px;
   border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
   background: var(--surface);
 }
@@ -460,11 +468,14 @@ onBeforeUnmount(() => {
   }
 
   .system-assistant-composer {
-    padding: 8px 10px 10px;
+    padding: 6px 12px 10px;
   }
 
   .system-assistant-conversation :deep(.ac-list) {
-    padding-inline: 10px;
+    padding: 14px 12px;
   }
+
 }
 </style>
+
+<style scoped src="./SystemAssistantPage.runtime-alignment.css"></style>
