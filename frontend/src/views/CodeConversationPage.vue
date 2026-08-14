@@ -138,6 +138,7 @@ import {
   promoteReadyCodeFrame,
   queuePendingCodeFrame,
   setCodeFrameCacheLimit,
+  shouldReuseCodeFrameOpenRequest,
   shouldDiscardPendingCodeFrameForNextSession,
   type CodeFrame,
   type CodeFrameFailureInput,
@@ -419,7 +420,7 @@ async function openCurrentSession() {
   const openKey = `${sessionRef}:${codeRouteLocationKey(routeLocation)}`
   if (loading.value && openInFlightKey === openKey) return
   const currentRequest = frameLifecycle.value.request
-  if (currentRequest?.sessionRef === sessionRef) {
+  if (shouldReuseCodeFrameOpenRequest(currentRequest, sessionRef, routeLocation)) {
     return
   }
   openInFlightKey = openKey

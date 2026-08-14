@@ -72,6 +72,14 @@ function codeFrameRoutesEqual(
   ])
 }
 
+export function shouldReuseCodeFrameOpenRequest(
+  request: CodeFrameOpenRequest | null,
+  sessionRef: string,
+  route: CodeFrameRouteLocation,
+): boolean {
+  return Boolean(request && request.sessionRef === sessionRef && codeFrameRoutesEqual(request.route, route))
+}
+
 export function createCodeFrameLifecycle(): CodeFrameLifecycle {
   return {
     active: null,
