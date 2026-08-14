@@ -1444,6 +1444,46 @@ async def test_create_code_application_registers_existing_local_workspace(
 
 
 @pytest.mark.asyncio
+async def test_list_code_applications_projects_persisted_local_location_contract(
+    db_session,
+    tmp_path,
+):
+    from app.code_runtime import service
+    from app.models import RegisteredWorkspace
+
+    missing_workspace = tmp_path / "missing-local-workspace"
+    db_session.add(RegisteredWorkspace(
+        ws_id="workspace-local-sales",
+        abs_path=str(missing_workspace),
+        user_id=11,
+        tenant_id=7,
+        workspace_type="code-local-application",
+        apaas_app_id="local-sales",
+        logical_application_id="logical-sales",
+        linked_remote_application_id="remote-sales",
+        linked_remote_deployment_id="deployment-sales",
+        display_name="本机销售助手",
+    ))
+    await db_session.commit()
+
+    result = await service.list_code_applications(
+        source="local",
+        db=db_session,
+        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
+    )
+
+    assert result["items"] == [{
+        **result["items"][0],
+        "logical_application_id": "logical-sales",
+        "linked_remote_application_id": "remote-sales",
+        "linked_remote_deployment_id": "deployment-sales",
+        "local_workspace_path": str(missing_workspace),
+        "workspace_id": "workspace-local-sales",
+        "availability": "missing",
+    }]
+
+
+@pytest.mark.asyncio
 async def test_create_code_application_uses_seed_project_override(monkeypatch):
     from app.code_runtime import service
     from app.config import settings

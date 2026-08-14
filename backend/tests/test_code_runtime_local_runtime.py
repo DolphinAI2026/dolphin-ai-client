@@ -13,6 +13,7 @@ import httpx
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -462,6 +463,45 @@ async def test_duplicate_path_reuses_owned_registered_application(
     assert duplicate.id == original.id
     assert duplicate.apaas_app_id == "local-original"
     assert duplicate.logical_application_id == "local:local-original"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_path_cannot_be_registered_as_another_application_in_another_tenant(
+    db,
+    ctx,
+    tmp_path,
+):
+    workspace_path = tmp_path / "shared-local-project"
+    workspace_path.mkdir()
+    original = await ensure_registered_local_workspace(
+        db,
+        ctx,
+        application_id="local-tenant-a",
+        display_name="Tenant A",
+        workspace_path=workspace_path,
+        directory_mode="existing_directory",
+    )
+
+    tenant_b = SimpleNamespace(
+        tenant_id=8,
+        user=SimpleNamespace(id=11, username="dev", display_name="Developer"),
+    )
+    with pytest.raises(HTTPException) as exc:
+        await ensure_registered_local_workspace(
+            db,
+            tenant_b,
+            application_id="local-tenant-b",
+            display_name="Tenant B",
+            workspace_path=workspace_path,
+            directory_mode="existing_directory",
+        )
+
+    assert exc.value.status_code == 409
+    assert "LOCAL_APPLICATION_PATH_ALREADY_BOUND" in str(exc.value.detail)
+    rows = (await db.execute(select(RegisteredWorkspace))).scalars().all()
+    assert [(row.id, row.tenant_id, row.apaas_app_id) for row in rows] == [
+        (original.id, 7, "local-tenant-a"),
+    ]
 
 
 @pytest.mark.asyncio

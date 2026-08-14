@@ -4,6 +4,13 @@ import { railTenantHome } from './RailSidebar.vue'
 import { groupCodeRailHistoryByApplication } from './codeRailHistory'
 import type { CodeRailHistoryResponse } from '@/api/codeRuntime'
 
+type RailSidebarModule = typeof import('./RailSidebar.vue') & {
+  createLatestRailNavigationIntent?: () => {
+    begin: () => number
+    isCurrent: (intent: number) => boolean
+  }
+}
+
 describe('RailSidebar brand mark', () => {
   it('uses the Ruijing whale mark in the rail logo', () => {
     expect(railSidebarSource).toContain('ruijing-whale-mark.svg')
@@ -30,6 +37,26 @@ describe('RailSidebar product availability', () => {
 // SP2b(2026-06-25): rail 会话统一单一来源 aiChatApi; Code 模式复用同一
 // 会话分组，只是按 mode=code 拉取并路由到 /code。
 describe('RailSidebar unified session source (SP2b)', () => {
+  it('lets only the latest async rail click commit navigation', async () => {
+    const module = await import('./RailSidebar.vue') as RailSidebarModule
+    expect(module.createLatestRailNavigationIntent).toBeTypeOf('function')
+    const navigation = module.createLatestRailNavigationIntent!()
+    const committed: string[] = []
+    let releaseFirst!: () => void
+    const firstActivation = new Promise<void>((resolve) => { releaseFirst = resolve })
+
+    const firstIntent = navigation.begin()
+    const first = firstActivation.then(() => {
+      if (navigation.isCurrent(firstIntent)) committed.push('first')
+    })
+    const secondIntent = navigation.begin()
+    if (navigation.isCurrent(secondIntent)) committed.push('second')
+    releaseFirst()
+    await first
+
+    expect(committed).toEqual(['second'])
+  })
+
   it('keeps same-name logical applications separate while grouping local and remote locations', () => {
     const history: CodeRailHistoryResponse = {
       apps: [

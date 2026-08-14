@@ -187,6 +187,19 @@ export interface CodeApplicationLocationRecovery {
   alternativeLocation: CodeExecutionLocation | null
 }
 
+export function codeApplicationRecoveryStateFromError(
+  errorCode: string,
+  originalLocation: CodeExecutionLocation,
+): CodeApplicationRecoveryState | null {
+  if (errorCode === 'CODE_APPLICATION_ALL_LOCATIONS_UNAVAILABLE') return 'all_unavailable'
+  if (errorCode === 'CODE_APPLICATION_LOCAL_LOCATION_MISSING') return 'local_missing'
+  if (errorCode === 'CODE_APPLICATION_REMOTE_LOCATION_UNAVAILABLE') return 'remote_unavailable'
+  if (errorCode === 'CODE_APPLICATION_LOCATION_UNAVAILABLE') {
+    return originalLocation === 'local' ? 'local_missing' : 'remote_unavailable'
+  }
+  return null
+}
+
 export function resolveCodeApplicationShellSessionRef(session: {
   route_id?: unknown
   public_id?: unknown

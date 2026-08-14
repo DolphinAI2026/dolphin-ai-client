@@ -70,12 +70,16 @@ from app.code_runtime.agent_activation import code_runtime_agent_activation_tran
 from app.code_runtime.execution_target import is_desktop_agent_runtime_target
 from app.code_runtime.session_location import (
     CodeApplicationLocationRequestError,
+    CodeApplicationLocationUnavailableError,
     CodeSessionCreationScope,
     backfill_session_location,
+    code_application_location_unavailable_code,
     code_session_creation_database_lock,
     code_session_creation_scope,
     derive_session_location,
+    linked_local_application_availability,
     normalize_code_session_location_request,
+    validate_persisted_code_application_location,
 )
 from app.code_runtime.local_runtime import (
     LocalRuntimeClient,
@@ -748,6 +752,19 @@ async def create_code_session_from_external_app(
         )
     except CodeApplicationLocationRequestError as exc:
         raise HTTPException(status_code=400, detail=f"{exc.code}: {exc}") from exc
+    try:
+        await validate_persisted_code_application_location(
+            db,
+            user_id=ctx.user.id,
+            external_application_id=external_id,
+            logical_application_id=location_request["logical_application_id"],
+            execution_location=location_request["execution_location"],
+        )
+    except CodeApplicationLocationUnavailableError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=f"{exc.code}: {exc}",
+        ) from exc
     app_name = str(body.app_name or "").strip() or None
     app_code = str(body.app_code or "").strip() or None
     title = str(body.title or "").strip() or f"{app_name or app_code or external_id} Code"
@@ -877,6 +894,21 @@ async def open_code_runtime_session(
     async with _code_session_open_lock(lock_key):
         if session is None:
             session = await resolve_code_session(db, session_ref)
+        location = derive_session_location(session) if session is not None else None
+        if session is not None and location is not None:
+            try:
+                await validate_persisted_code_application_location(
+                    db,
+                    user_id=ctx.user.id,
+                    external_application_id=str(session.external_application_id or "").strip(),
+                    logical_application_id=location["logical_application_id"],
+                    execution_location=location["execution_location"],
+                )
+            except CodeApplicationLocationUnavailableError as exc:
+                raise HTTPException(
+                    status_code=exc.status_code,
+                    detail=f"{exc.code}: {exc}",
+                ) from exc
         uses_local_builder = bool(
             session
             and not session.app_id
@@ -902,14 +934,38 @@ async def open_code_runtime_session(
                 phase_key,
                 phase,
             )
-        result = await open_code_session(
-            db=db,
-            session_id=session_ref,
-            ctx=ctx,
-            authorization_header=authorization,
-            auth_provider=auth_provider,
-            **open_kwargs,
-        )
+        try:
+            result = await open_code_session(
+                db=db,
+                session_id=session_ref,
+                ctx=ctx,
+                authorization_header=authorization,
+                auth_provider=auth_provider,
+                **open_kwargs,
+            )
+        except HTTPException as exc:
+            if (
+                session is not None
+                and location is not None
+                and location["execution_location"] == "remote"
+                and exc.status_code in {404, 502, 503, 504}
+            ):
+                local_availability = await linked_local_application_availability(
+                    db,
+                    user_id=ctx.user.id,
+                    remote_application_id=str(session.external_application_id or "").strip(),
+                    logical_application_id=location["logical_application_id"],
+                )
+                code = code_application_location_unavailable_code(
+                    "remote",
+                    "unavailable",
+                    alternative_availability=local_availability,
+                )
+                raise HTTPException(
+                    status_code=exc.status_code,
+                    detail=f"{code}: 远程应用位置当前不可用",
+                ) from exc
+            raise
         if uses_local_builder:
             _local_code_open_phases[phase_key] = "opening_workbench"
         try:
@@ -1648,7 +1704,11 @@ async def list_code_runtime_rail_history(
             select(
                 AIChatSession.id.label("shell_session_id"),
                 func.row_number().over(
-                    partition_by=(AIChatSession.user_id, representative_shell_key),
+                    partition_by=(
+                        AIChatSession.user_id,
+                        representative_shell_key,
+                        AIChatSession.session_purpose,
+                    ),
                     order_by=(
                         AIChatSession.updated_at.desc(),
                         CodeRuntimeBinding.updated_at.desc(),
@@ -1787,6 +1847,7 @@ async def list_code_runtime_rail_history(
                 "external_application_id": external_id,
                 "logical_application_id": location["logical_application_id"],
                 "execution_location": location["execution_location"],
+                "session_purpose": str(session.session_purpose or "standard"),
                 "app_name": session.external_app_name or session.title,
                 "app_code": session.external_app_code,
                 "runtime_session_id": binding.runtime_session_id if binding else None,
@@ -3384,35 +3445,41 @@ async def activate_browser_authenticated_agent_session(
     )
     if authorization.response is not None:
         return authorization.response
-    encoded_id = quote(str(runtime_session_id), safe="")
-    try:
-        payload, authorization = await _browser_runtime_json_request_for_session(
+    async with code_runtime_agent_activation_transaction(db, binding.id) as locked_binding:
+        encoded_id = quote(str(runtime_session_id), safe="")
+        try:
+            payload, authorization = await _browser_runtime_json_request_for_session(
+                session,
+                locked_binding,
+                authorization,
+                "POST",
+                f"/api/agent/sessions/{encoded_id}/activate",
+                request=request,
+                session_id=session_id,
+                db=db,
+            )
+        except SandboxRenewalFailure as exc:
+            return _sandbox_renewal_failure_response(
+                exc,
+                session_id=session_id,
+                forwarded_prefix=request.headers.get("x-forwarded-prefix", ""),
+            )
+        if authorization.proxy_cookie_reissue_required and authorization.runtime_cookie:
+            _set_runtime_cookie(
+                response,
+                authorization.runtime_cookie,
+                session_id,
+                request.headers.get("x-forwarded-prefix", ""),
+            )
+        activated_id = str((payload or {}).get("runtimeSessionId") or runtime_session_id)
+        locked_binding.runtime_session_id = activated_id
+        await _remember_runtime_agent_session(
+            db,
             session,
-            binding,
-            authorization,
-            "POST",
-            f"/api/agent/sessions/{encoded_id}/activate",
-            request=request,
-            session_id=session_id,
-            db=db,
+            locked_binding,
+            activated_id,
+            payload,
         )
-    except SandboxRenewalFailure as exc:
-        return _sandbox_renewal_failure_response(
-            exc,
-            session_id=session_id,
-            forwarded_prefix=request.headers.get("x-forwarded-prefix", ""),
-        )
-    if authorization.proxy_cookie_reissue_required and authorization.runtime_cookie:
-        _set_runtime_cookie(
-            response,
-            authorization.runtime_cookie,
-            session_id,
-            request.headers.get("x-forwarded-prefix", ""),
-    )
-    activated_id = str((payload or {}).get("runtimeSessionId") or runtime_session_id)
-    binding.runtime_session_id = activated_id
-    await _remember_runtime_agent_session(db, session, binding, activated_id, payload)
-    await db.commit()
     return {
         "shell_session_id": ensure_code_session_public_id(session),
         "runtime_session_id": activated_id,

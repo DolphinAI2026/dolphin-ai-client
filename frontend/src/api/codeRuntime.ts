@@ -155,6 +155,7 @@ export interface CodeRailHistoryApp {
   external_application_id: string
   logical_application_id: string
   execution_location: CodeExecutionLocation
+  session_purpose?: CodeSessionPurpose | null
   app_name?: string | null
   app_code?: string | null
   workspace_path?: string | null

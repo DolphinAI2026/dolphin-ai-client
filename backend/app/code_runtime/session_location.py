@@ -12,7 +12,11 @@ from typing import Any, Literal, TypedDict
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
-from app.code_runtime.application_locations import CodeExecutionLocation
+from app.code_runtime.application_locations import (
+    CodeExecutionLocation,
+    CodeLocationAvailability,
+    local_workspace_availability,
+)
 
 
 _LOCAL_APPLICATION_PREFIX = "local-"
@@ -30,6 +34,15 @@ class CodeApplicationLocationRequestError(ValueError):
     """A stable client error for an invalid Code application location request."""
 
     code = "CODE_APPLICATION_LOCATION_REQUIRED"
+
+
+class CodeApplicationLocationUnavailableError(ValueError):
+    """A stable unavailable-location error selected from persisted facts."""
+
+    def __init__(self, code: str, message: str, *, status_code: int) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status_code = status_code
 
 
 class CodeSessionLocationRequest(TypedDict):
@@ -226,6 +239,92 @@ def normalize_code_session_location_request(
         "session_policy": policy,
         "session_purpose": purpose,
     }
+
+
+def code_application_location_unavailable_code(
+    execution_location: CodeExecutionLocation,
+    availability: CodeLocationAvailability,
+    *,
+    alternative_availability: CodeLocationAvailability | None = None,
+) -> str:
+    if execution_location == "local":
+        if availability == "missing":
+            return "CODE_APPLICATION_LOCAL_LOCATION_MISSING"
+        return "CODE_APPLICATION_LOCATION_UNAVAILABLE"
+    if alternative_availability is not None and alternative_availability != "ready":
+        return "CODE_APPLICATION_ALL_LOCATIONS_UNAVAILABLE"
+    return "CODE_APPLICATION_REMOTE_LOCATION_UNAVAILABLE"
+
+
+async def validate_persisted_code_application_location(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    external_application_id: str,
+    logical_application_id: str,
+    execution_location: CodeExecutionLocation,
+) -> None:
+    """Reject a known persisted local location that is no longer usable."""
+
+    if execution_location != "local":
+        return
+    from sqlalchemy import or_, select
+
+    from app.models import RegisteredWorkspace
+
+    workspace = (
+        await db.execute(
+            select(RegisteredWorkspace)
+            .where(
+                RegisteredWorkspace.user_id == int(user_id),
+                or_(
+                    RegisteredWorkspace.apaas_app_id == external_application_id,
+                    RegisteredWorkspace.logical_application_id == logical_application_id,
+                ),
+            )
+            .order_by(RegisteredWorkspace.last_opened_at.desc(), RegisteredWorkspace.id.desc())
+        )
+    ).scalars().first()
+    if workspace is None:
+        return
+    availability = local_workspace_availability(workspace.abs_path)
+    if availability == "ready":
+        return
+    code = code_application_location_unavailable_code("local", availability)
+    raise CodeApplicationLocationUnavailableError(
+        code,
+        "本机应用目录缺失或当前不可读",
+        status_code=409,
+    )
+
+
+async def linked_local_application_availability(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    remote_application_id: str,
+    logical_application_id: str,
+) -> CodeLocationAvailability | None:
+    from sqlalchemy import or_, select
+
+    from app.models import RegisteredWorkspace
+
+    workspace = (
+        await db.execute(
+            select(RegisteredWorkspace)
+            .where(
+                RegisteredWorkspace.user_id == int(user_id),
+                or_(
+                    RegisteredWorkspace.linked_remote_application_id == remote_application_id,
+                    RegisteredWorkspace.logical_application_id == logical_application_id,
+                ),
+            )
+            .order_by(RegisteredWorkspace.last_opened_at.desc(), RegisteredWorkspace.id.desc())
+        )
+    ).scalars().first()
+    if workspace is None:
+        return None
+    return local_workspace_availability(workspace.abs_path)
 
 
 def derive_session_location(session: Any) -> SessionLocationValues | None:

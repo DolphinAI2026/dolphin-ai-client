@@ -84,6 +84,14 @@
         @restart="restartLocalRuntime"
         @rebind="rebindLocalWorkspace"
       />
+      <CodeApplicationRecoveryPanel
+        v-else-if="locationRecovery"
+        :state="locationRecovery.state"
+        :original-location="locationRecovery.originalLocation"
+        :opening="loading"
+        @retry="retryFailedSession"
+        @back="backToCodeApplications"
+      />
       <div v-else-if="showInitialLoading" class="code-status">正在打开 Code 工作台...</div>
       <div v-else-if="errorMessage && !hasAnyFrame" class="code-error">
         <strong>Code 工作台暂时无法打开</strong>
@@ -126,7 +134,12 @@ import { codeRuntimeApi } from '@/api/codeRuntime'
 import { nextAgentQuery } from '@/composables/railSessions'
 import { findCodeRailHistoryApp, formatCodeRailLocationSummary } from '@/components/v2/codeRailHistory'
 import AppIcon from '@/components/common/AppIcon.vue'
+import CodeApplicationRecoveryPanel from '@/components/code/CodeApplicationRecoveryPanel.vue'
 import CodeWorkspaceOpening from '@/components/code/CodeWorkspaceOpening.vue'
+import {
+  codeApplicationRecoveryStateFromError,
+  type CodeApplicationRecoveryState,
+} from '@/components/code/codeApplicationLocations'
 import {
   commitPendingCodeApplicationLocationPreferenceByShellSessionRef,
   discardPendingCodeApplicationLocationPreferenceByShellSessionRef,
@@ -185,6 +198,11 @@ const workspaceOpeningPhase = ref<CodeWorkspaceOpenPhase>('checking_project')
 const workspaceOpeningStartedAt = ref(Date.now())
 const workspaceRecoveryBusy = ref(false)
 const sessionLocationSummary = ref('')
+const sessionExecutionLocation = ref<'local' | 'remote'>('remote')
+const locationRecovery = ref<{
+  state: CodeApplicationRecoveryState
+  originalLocation: 'local' | 'remote'
+} | null>(null)
 let railRefreshTimer: number | undefined
 let openStatusTimer: number | undefined
 let openStatusPollingSeq = 0
@@ -442,6 +460,7 @@ async function openCurrentSession() {
     openRequestSeq += 1
     sessionLocationRequestSeq += 1
     sessionLocationSummary.value = ''
+    locationRecovery.value = null
     resetCodeFrames()
     loading.value = false
     errorMessage.value = ''
@@ -452,6 +471,7 @@ async function openCurrentSession() {
     openRequestSeq += 1
     sessionLocationRequestSeq += 1
     sessionLocationSummary.value = ''
+    locationRecovery.value = null
     openInFlightKey = ''
     runtimeAuthInvalidFrameKey = ''
     errorMessage.value = '缺少 Code 会话'
@@ -478,6 +498,7 @@ async function openCurrentSession() {
   })
   loading.value = true
   errorMessage.value = ''
+  locationRecovery.value = null
 
   // An exact cached route is already authenticated inside its mounted iframe.
   // Promote it synchronously so a normal back-and-forth sandbox switch does
@@ -600,6 +621,19 @@ async function openCurrentSession() {
   } catch (error: any) {
     if (requestSeq === openRequestSeq) {
       const message = error?.response?.data?.detail || error?.message || '打开失败'
+      const errorCode = [
+        'CODE_APPLICATION_LOCATION_UNAVAILABLE',
+        'CODE_APPLICATION_LOCAL_LOCATION_MISSING',
+        'CODE_APPLICATION_REMOTE_LOCATION_UNAVAILABLE',
+        'CODE_APPLICATION_ALL_LOCATIONS_UNAVAILABLE',
+      ].find(candidate => String(message).includes(candidate)) || ''
+      const recoveryState = codeApplicationRecoveryStateFromError(
+        errorCode,
+        sessionExecutionLocation.value,
+      )
+      locationRecovery.value = recoveryState
+        ? { state: recoveryState, originalLocation: sessionExecutionLocation.value }
+        : null
       if (isLocalWorkspaceError(message)) {
         localWorkspaceOpening.value = true
         workspaceOpeningPhase.value = workspaceErrorPhase(message)
@@ -625,6 +659,7 @@ async function loadSessionLocationSummary(sessionRef: string) {
     const history = await codeRuntimeApi.listRailHistory()
     if (requestSeq !== sessionLocationRequestSeq) return
     const app = findCodeRailHistoryApp(history, sessionRef)
+    if (app) sessionExecutionLocation.value = app.execution_location
     sessionLocationSummary.value = app
       ? formatCodeRailLocationSummary(
         app.execution_location,

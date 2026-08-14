@@ -296,4 +296,54 @@ describe('unified Code application locations', () => {
       'CODE_APPLICATION_LOCATION_UNAVAILABLE',
     )).toEqual({ state: 'local_missing', alternativeLocation: 'remote' })
   })
+
+  it('merges the persisted local API projection with its linked remote application after refresh', () => {
+    const [linked] = mergeCodeApplicationLocations(
+      [application('local-sales', 'desktop-local', {
+        logical_application_id: 'logical-sales',
+        linked_remote_application_id: 'remote-sales',
+        linked_remote_deployment_id: 'deployment-sales',
+        local_workspace_path: '/workspace/sales',
+        workspace_id: 'workspace-sales',
+        availability: 'missing',
+      })],
+      [application('remote-sales', 'd-ai-code')],
+      'deployment-sales',
+    )
+
+    expect(linked.logical_application_id).toBe('logical-sales')
+    expect(linked.association).toBe('linked')
+    expect(linked.local).toMatchObject({
+      availability: 'missing',
+      workspace_id: 'workspace-sales',
+      workspace_path: '/workspace/sales',
+    })
+    expect(linked.remote?.location_id).toBe('remote-sales')
+  })
+
+  it('maps every stable backend location error to a recovery state', async () => {
+    const module = await import('./codeApplicationLocations') as typeof import('./codeApplicationLocations') & {
+      codeApplicationRecoveryStateFromError?: (
+        errorCode: string,
+        location: 'local' | 'remote',
+      ) => string | null
+    }
+    expect(module.codeApplicationRecoveryStateFromError).toBeTypeOf('function')
+    expect(module.codeApplicationRecoveryStateFromError!(
+      'CODE_APPLICATION_LOCATION_UNAVAILABLE',
+      'local',
+    )).toBe('local_missing')
+    expect(module.codeApplicationRecoveryStateFromError!(
+      'CODE_APPLICATION_LOCAL_LOCATION_MISSING',
+      'local',
+    )).toBe('local_missing')
+    expect(module.codeApplicationRecoveryStateFromError!(
+      'CODE_APPLICATION_REMOTE_LOCATION_UNAVAILABLE',
+      'remote',
+    )).toBe('remote_unavailable')
+    expect(module.codeApplicationRecoveryStateFromError!(
+      'CODE_APPLICATION_ALL_LOCATIONS_UNAVAILABLE',
+      'remote',
+    )).toBe('all_unavailable')
+  })
 })

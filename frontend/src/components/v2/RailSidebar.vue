@@ -12,6 +12,14 @@ export function railTenantHome(
 ): string {
   return desktop ? railModeMeta[mode].home : railDefaultProductHome(availability)
 }
+
+export function createLatestRailNavigationIntent() {
+  let current = 0
+  return {
+    begin: () => ++current,
+    isCurrent: (intent: number) => intent === current,
+  }
+}
 </script>
 
 <script setup lang="ts">
@@ -272,6 +280,7 @@ function toggleGroup(label: string) {
 
 const creatingCodeAgentSession = ref(false)
 const creatingBuilderSession = ref(false)
+const railNavigationIntent = createLatestRailNavigationIntent()
 const sessionGroups = computed<(RailSessionGroup | CodeRailSessionGroup)[]>(() => {
   if (effectiveGroupBy.value === 'app' && currentMode.value === 'code') {
     return groupCodeRailHistoryByApplication(codeRailHistory.value)
@@ -297,8 +306,11 @@ const sessionGroups = computed<(RailSessionGroup | CodeRailSessionGroup)[]>(() =
 })
 
 async function openSession(session: RailSession) {
+  const intent = railNavigationIntent.begin()
   if (isSystemAssistantRoute.value && session.source !== 'code-agent' && session.source !== 'code-shell') {
-    router.push({ path: '/code/system-assistant', query: { ...route.query, session: String(session.id) } })
+    if (railNavigationIntent.isCurrent(intent)) {
+      router.push({ path: '/code/system-assistant', query: { ...route.query, session: String(session.id) } })
+    }
     return
   }
   if (currentMode.value === 'code' && session.source === 'code-agent' && session.shellSessionId && session.runtimeSessionId) {
@@ -306,6 +318,7 @@ async function openSession(session: RailSession) {
       await codeRuntimeApi.activateAgentSession(session.shellSessionId, session.runtimeSessionId)
     } catch { /* iframe will surface runtime errors on open */ }
   }
+  if (!railNavigationIntent.isCurrent(intent)) return
   router.push(railSessionTarget(currentMode.value, session, route.query))
 }
 
@@ -325,6 +338,7 @@ function openCodeLocationSession(
 }
 
 function createSystemAssistantSession() {
+  railNavigationIntent.begin()
   const query = { ...route.query }
   delete query.session
   router.push({ path: '/code/system-assistant', query })
@@ -424,9 +438,11 @@ async function createCodeAgentSession(shellSessionId?: string | null) {
     return
   }
 
+  const intent = railNavigationIntent.begin()
   creatingCodeAgentSession.value = true
   try {
     const result = await codeRuntimeApi.createAgentSession(shellSessionId)
+    if (!railNavigationIntent.isCurrent(intent)) return
     if (result.runtime_session_id) {
       upsertOptimisticCodeAgentSession(shellSessionId, result.runtime_session_id, result.session)
       router.push({
@@ -710,18 +726,21 @@ async function selectTenant(value: string) {
 }
 
 function go(path: string) {
+  railNavigationIntent.begin()
   tenantMenuOpen.value = false
   userMenuOpen.value = false
   router.push(path)
 }
 
 function goNav(item: NavItem) {
+  railNavigationIntent.begin()
   tenantMenuOpen.value = false
   router.push(item.path)
 }
 
 function switchMode(mode: AppMode) {
   if (mode === currentMode.value) return
+  railNavigationIntent.begin()
   modeStore.setMode(mode)
   tenantMenuOpen.value = false
   router.push(MODE_META[mode].home)

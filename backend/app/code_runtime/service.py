@@ -812,6 +812,7 @@ async def list_code_applications(
                 continue
             created_at = workspace.created_at.isoformat() if workspace.created_at else None
             updated_at = workspace.last_opened_at.isoformat() if workspace.last_opened_at else created_at
+            availability = local_workspace_availability(workspace_path)
             items.append({
                 "id": application_id,
                 "external_application_id": application_id,
@@ -829,6 +830,10 @@ async def list_code_applications(
                 "dicts": 0,
                 "local_workspace_path": workspace_path,
                 "workspace_id": workspace.ws_id,
+                "logical_application_id": workspace.logical_application_id,
+                "linked_remote_application_id": workspace.linked_remote_application_id,
+                "linked_remote_deployment_id": workspace.linked_remote_deployment_id,
+                "availability": availability,
                 "repository": None,
                 "owner": None,
                 "created_at": created_at,

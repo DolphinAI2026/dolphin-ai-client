@@ -479,7 +479,7 @@ class RegisteredWorkspace(Base):
     # (本地 SQLite 无此限制,故只在 MySQL 上线时暴露)。改用带 mysql_length 前缀的唯一索引:
     # MySQL 只索引 abs_path 前 255 字符(255*4=1020<3072),SQLite 忽略 mysql_length 走全列。
     __table_args__ = (
-        Index("uq_regws_tenant_path", "tenant_id", "abs_path", unique=True, mysql_length={"abs_path": 255}),
+        Index("uq_regws_abs_path", "abs_path", unique=True, mysql_length={"abs_path": 255}),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

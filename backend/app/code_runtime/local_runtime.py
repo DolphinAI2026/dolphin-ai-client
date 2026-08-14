@@ -22,6 +22,7 @@ from urllib.parse import quote, unquote, urlsplit
 import httpx
 from fastapi import HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import runtime
@@ -408,13 +409,7 @@ async def ensure_registered_local_workspace(
     remote_application_id = _optional_remote_identifier(linked_remote_application_id)
     remote_deployment_id = _optional_remote_identifier(linked_remote_deployment_id)
 
-    candidates = (
-        await db.execute(
-            select(RegisteredWorkspace).where(
-                RegisteredWorkspace.tenant_id == int(ctx.tenant_id),
-            )
-        )
-    ).scalars().all()
+    candidates = (await db.execute(select(RegisteredWorkspace))).scalars().all()
     existing = next(
         (
             candidate
@@ -425,6 +420,8 @@ async def ensure_registered_local_workspace(
         None,
     )
     if existing is not None:
+        if existing.tenant_id != int(ctx.tenant_id):
+            raise _error(409, _PATH_ALREADY_BOUND, "本地项目目录已绑定到其他应用")
         if existing.user_id != int(ctx.user.id):
             raise _error(409, _PATH_ALREADY_BOUND, "本地项目目录已绑定给其他用户")
         bound_application = _text(existing.apaas_app_id)
@@ -473,7 +470,35 @@ async def ensure_registered_local_workspace(
         display_name=_text(display_name)[:200] or _safe_workspace_component(external_app_id),
     )
     db.add(workspace)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        concurrent_rows = (
+            await db.execute(select(RegisteredWorkspace))
+        ).scalars().all()
+        concurrent = next(
+            (
+                candidate
+                for candidate in concurrent_rows
+                if local_workspace_path_identity(candidate.abs_path)
+                == local_workspace_path_identity(resolved_abs)
+            ),
+            None,
+        )
+        if concurrent is None:
+            raise
+        return await ensure_registered_local_workspace(
+            db,
+            ctx,
+            application_id=external_app_id,
+            display_name=display_name,
+            workspace_path=resolved_abs,
+            directory_mode=directory_mode,
+            logical_application_id=logical_application_id,
+            linked_remote_application_id=remote_application_id,
+            linked_remote_deployment_id=remote_deployment_id,
+        )
     await db.refresh(workspace)
     return workspace
 

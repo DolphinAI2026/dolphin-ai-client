@@ -4253,6 +4253,9 @@ async def test_open_code_runtime_session_returns_project_initialization_purpose(
     async def fake_open_code_session(*_args, **_kwargs):
         return {"ok": True}
 
+    async def fake_validate_location(*_args, **_kwargs):
+        return None
+
     class FakeDB:
         async def commit(self):
             return None
@@ -4263,6 +4266,11 @@ async def test_open_code_runtime_session_returns_project_initialization_purpose(
     monkeypatch.setattr(code_runtime_routes, "resolve_code_session", fake_resolve)
     monkeypatch.setattr(code_runtime_routes, "_control_plane_request_auth", lambda *_args: (None, None))
     monkeypatch.setattr(code_runtime_routes, "open_code_session", fake_open_code_session)
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "validate_persisted_code_application_location",
+        fake_validate_location,
+    )
 
     result = await open_code_runtime_session("s16", _request(), _ctx(), FakeDB())
 
@@ -4586,6 +4594,116 @@ async def test_create_code_session_from_external_app_rejects_invalid_session_loc
 
 
 @pytest.mark.asyncio
+async def test_create_code_session_rejects_persisted_missing_local_location(db_session, tmp_path):
+    from fastapi import HTTPException
+    from app.models import RegisteredWorkspace
+    from app.routes.code_runtime import (
+        CreateExternalCodeSessionRequest,
+        create_code_session_from_external_app,
+    )
+
+    db_session.add(RegisteredWorkspace(
+        ws_id="missing-local-location",
+        abs_path=str(tmp_path / "missing"),
+        user_id=11,
+        tenant_id=7,
+        workspace_type="code-local-application",
+        apaas_app_id="local-crm",
+        logical_application_id="logical-crm",
+        display_name="CRM",
+    ))
+    await db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        await create_code_session_from_external_app(
+            CreateExternalCodeSessionRequest(
+                logical_application_id="logical-crm",
+                external_application_id="local-crm",
+                execution_location="local",
+            ),
+            _ctx(),
+            db_session,
+        )
+
+    assert exc.value.status_code == 409
+    assert str(exc.value.detail).startswith("CODE_APPLICATION_LOCAL_LOCATION_MISSING:")
+
+
+def test_location_unavailable_code_classifies_unreadable_local_location_as_generic():
+    from app.code_runtime.session_location import code_application_location_unavailable_code
+
+    assert code_application_location_unavailable_code(
+        "local",
+        "unreadable",
+    ) == "CODE_APPLICATION_LOCATION_UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("local_path_state", "expected_code"),
+    [
+        ("absent", "CODE_APPLICATION_REMOTE_LOCATION_UNAVAILABLE"),
+        ("missing", "CODE_APPLICATION_ALL_LOCATIONS_UNAVAILABLE"),
+    ],
+)
+async def test_open_remote_session_maps_runtime_failure_to_stable_location_error(
+    db_session,
+    tmp_path,
+    monkeypatch,
+    local_path_state,
+    expected_code,
+):
+    from fastapi import HTTPException
+    import app.routes.code_runtime as code_runtime_routes
+    from app.models import RegisteredWorkspace
+    from app.routes.code_runtime import open_code_runtime_session
+
+    shell = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        title="Remote CRM",
+        mode="code",
+        status="active",
+        external_application_id="remote-crm",
+        logical_application_id="logical-crm",
+        execution_location="remote",
+    )
+    db_session.add(shell)
+    if local_path_state == "missing":
+        db_session.add(RegisteredWorkspace(
+            ws_id="linked-missing-local",
+            abs_path=str(tmp_path / "missing-linked-local"),
+            user_id=11,
+            tenant_id=7,
+            workspace_type="code-local-application",
+            apaas_app_id="local-crm",
+            logical_application_id="logical-crm",
+            linked_remote_application_id="remote-crm",
+            display_name="CRM",
+        ))
+    await db_session.commit()
+
+    async def unavailable_open(**_kwargs):
+        raise HTTPException(status_code=503, detail="Control Plane unavailable")
+
+    async def control_plane_auth(*_args, **_kwargs):
+        return "Bearer test", "control_plane"
+
+    monkeypatch.setattr(code_runtime_routes, "open_code_session", unavailable_open)
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_control_plane_request_auth",
+        control_plane_auth,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await open_code_runtime_session(shell.public_id, _request(), _ctx(), db_session)
+
+    assert exc.value.status_code == 503
+    assert str(exc.value.detail).startswith(f"{expected_code}:")
+
+
+@pytest.mark.asyncio
 async def test_control_plane_code_sessions_are_isolated_by_remote_tenant(db_session):
     from app.routes.code_runtime import (
         CreateExternalCodeSessionRequest,
@@ -4652,6 +4770,7 @@ async def test_list_code_runtime_rail_history_includes_shell_session_without_bin
         "external_application_id": "crm",
         "logical_application_id": "legacy:crm",
         "execution_location": "remote",
+        "session_purpose": "standard",
         "app_name": "CRM",
         "app_code": "crm",
         "environment_name": "远程环境",
@@ -5422,6 +5541,7 @@ async def test_list_code_runtime_rail_history_returns_opened_app_agent_sessions(
         "external_application_id": "never-opened",
         "logical_application_id": "legacy:never-opened",
         "execution_location": "remote",
+        "session_purpose": "standard",
         "app_name": "未打开",
         "app_code": None,
         "environment_name": "远程环境",
@@ -5580,6 +5700,81 @@ async def test_list_code_runtime_rail_history_queries_only_latest_shell_snapshot
         int(session_id.strip())
         for session_id in matched_session_ids.group(1).split(",")
     } == {shells[-1].id}
+
+
+@pytest.mark.asyncio
+async def test_list_code_runtime_rail_history_keeps_distinct_shell_purposes_for_same_location(
+    db_session,
+):
+    from app.routes.code_runtime import list_code_runtime_rail_history
+
+    standard = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        title="CRM Code",
+        mode="code",
+        status="active",
+        external_application_id="local-crm",
+        external_app_name="CRM",
+        logical_application_id="logical-crm",
+        execution_location="local",
+        session_purpose="standard",
+    )
+    initialization = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        title="项目初始化",
+        mode="code",
+        status="active",
+        external_application_id="local-crm",
+        external_app_name="CRM",
+        logical_application_id="logical-crm",
+        execution_location="local",
+        session_purpose="project_initialization",
+    )
+    db_session.add_all([standard, initialization])
+    await db_session.flush()
+    for shell, runtime_id, title in (
+        (standard, "runtime-standard", "日常开发"),
+        (initialization, "runtime-initialization", "读取项目结构"),
+    ):
+        db_session.add_all([
+            CodeRuntimeBinding(
+                tenant_id=7,
+                user_id=11,
+                session_id=shell.id,
+                external_application_id="local-crm",
+                runtime_base_url="http://runtime.local/workspaces/crm",
+                builder_url="http://runtime.local/workspaces/crm/builder",
+                runtime_session_id=runtime_id,
+                status="ready",
+            ),
+            CodeRuntimeAgentSession(
+                tenant_id=7,
+                user_id=11,
+                session_id=shell.id,
+                external_application_id="local-crm",
+                runtime_session_id=runtime_id,
+                title=title,
+                state="waiting_input",
+            ),
+        ])
+    await db_session.commit()
+
+    result = await list_code_runtime_rail_history(
+        _request(),
+        _ctx(),
+        db_session,
+        source="local",
+    )
+
+    assert {
+        (app["shell_session_id"], app["session_purpose"], app["sessions"][0]["runtimeSessionId"])
+        for app in result["apps"]
+    } == {
+        (standard.public_id, "standard", "runtime-standard"),
+        (initialization.public_id, "project_initialization", "runtime-initialization"),
+    }
 
 
 @pytest.mark.asyncio
@@ -6081,6 +6276,158 @@ async def test_activate_code_runtime_agent_session_serializes_same_binding_until
             "runtime-2",
         ]
         assert snapshots[-1].title == "snapshot:runtime-2"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_host_and_browser_activation_serialize_same_binding_until_snapshot_commit(
+    tmp_path,
+    monkeypatch,
+):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.code_runtime.sandbox_auth import encrypt_runtime_cookie
+    from app.code_runtime.service import create_proxy_cookie_token
+    from starlette.responses import Response
+
+    engine, Session = await _renewal_session_factory(tmp_path)
+    host_started = asyncio.Event()
+    browser_started = asyncio.Event()
+    release_host = asyncio.Event()
+    events: list[str] = []
+
+    async def host_runtime_request(_session, _binding, _method, _path, **_kwargs):
+        events.append("start:host")
+        host_started.set()
+        await release_host.wait()
+        events.append("finish:host")
+        return {"runtimeSessionId": "runtime-host", "title": "host snapshot"}
+
+    async def browser_runtime_request(
+        _session,
+        _binding,
+        authorization,
+        _method,
+        _path,
+        **_kwargs,
+    ):
+        events.append("start:browser")
+        browser_started.set()
+        events.append("finish:browser")
+        return ({"runtimeSessionId": "runtime-browser", "title": "browser snapshot"}, authorization)
+
+    monkeypatch.setattr(code_runtime_routes, "_runtime_json_request_for_session", host_runtime_request)
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_browser_runtime_json_request_for_session",
+        browser_runtime_request,
+    )
+
+    try:
+        async with Session() as setup:
+            shell = AIChatSession(
+                public_id="44444444-4444-4444-4444-444444444444",
+                tenant_id=7,
+                user_id=11,
+                title="CRM Code",
+                mode="code",
+                status="active",
+                external_application_id="crm",
+                external_app_name="CRM",
+            )
+            setup.add(shell)
+            await setup.flush()
+            binding = CodeRuntimeBinding(
+                tenant_id=7,
+                user_id=11,
+                session_id=shell.id,
+                external_application_id="crm",
+                runtime_base_url="https://runtime.test/workspaces/crm",
+                builder_url="https://runtime.test/workspaces/crm/builder",
+                runtime_service_session_enc=encrypt_runtime_cookie("service-cookie"),
+                runtime_session_id="runtime-0",
+                auth_generation=1,
+                status="ready",
+            )
+            setup.add(binding)
+            await setup.flush()
+            setup.add(CodeRuntimeBrowserSession(
+                binding_id=binding.id,
+                browser_session_id="browser-a",
+                runtime_session_cookie_enc=encrypt_runtime_cookie("db-cookie-a"),
+                runtime_session_hash=hashlib.sha256(b"db-cookie-a").hexdigest(),
+                generation=1,
+            ))
+            await setup.commit()
+            shell_ref = shell.public_id
+            shell_id = shell.id
+
+        proxy_token = create_proxy_cookie_token(
+            session_id=shell_ref,
+            user_id=11,
+            tenant_id=7,
+            browser_session_id="browser-a",
+        )
+        browser_request = _request({
+            "authorization": "Bearer builder-token",
+            "cookie": (
+                f"dolphin_code_runtime_{shell_ref}={proxy_token}; "
+                "apaas_sandbox_token=browser-cookie"
+            ),
+        })
+
+        async def activate_host():
+            async with Session() as db:
+                return await code_runtime_routes.activate_code_runtime_agent_session(
+                    shell_ref, "runtime-host", _request(), _ctx(), db,
+                )
+
+        async def activate_browser():
+            async with Session() as db:
+                return await code_runtime_routes.activate_browser_authenticated_agent_session(
+                    shell_ref,
+                    "runtime-browser",
+                    browser_request,
+                    Response(),
+                    _ctx(),
+                    db,
+                )
+
+        host_task = asyncio.create_task(activate_host())
+        await host_started.wait()
+        browser_task = asyncio.create_task(activate_browser())
+        try:
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(browser_started.wait(), timeout=0.1)
+        finally:
+            release_host.set()
+            results = await asyncio.gather(host_task, browser_task, return_exceptions=True)
+
+        assert not [result for result in results if isinstance(result, BaseException)]
+        assert events == [
+            "start:host",
+            "finish:host",
+            "start:browser",
+            "finish:browser",
+        ]
+        async with Session() as verify:
+            binding = (
+                await verify.execute(
+                    select(CodeRuntimeBinding).where(CodeRuntimeBinding.session_id == shell_id)
+                )
+            ).scalar_one()
+            snapshots = (
+                await verify.execute(
+                    select(CodeRuntimeAgentSession)
+                    .where(CodeRuntimeAgentSession.session_id == shell_id)
+                    .order_by(CodeRuntimeAgentSession.runtime_session_id)
+                )
+            ).scalars().all()
+        assert binding.runtime_session_id == "runtime-browser"
+        assert [snapshot.runtime_session_id for snapshot in snapshots] == [
+            "runtime-browser",
+            "runtime-host",
+        ]
     finally:
         await engine.dispose()
 

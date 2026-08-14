@@ -14,6 +14,12 @@ function deferred<T>() {
 }
 
 describe('CodeConversationPage', () => {
+  it('renders the location recovery panel for historical session open failures', () => {
+    expect(pageSource).toContain('import CodeApplicationRecoveryPanel')
+    expect(pageSource).toContain('<CodeApplicationRecoveryPanel')
+    expect(pageSource).toContain('codeApplicationRecoveryStateFromError')
+  })
+
   it('formats the session location without exposing an absolute path', () => {
     expect(formatCodeRailLocationSummary('local', '/srv/private/customer-crm')).toBe('本机 · customer-crm')
     expect(formatCodeRailLocationSummary('local', 'C:\\Users\\alice\\customer-crm\\')).toBe('本机 · customer-crm')
