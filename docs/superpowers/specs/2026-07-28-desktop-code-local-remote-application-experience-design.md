@@ -3,7 +3,7 @@
 **Spec ID**：`2026-07-28-desktop-code-local-remote-application-experience`
 **日期**：2026-07-28
 **修订日期**：2026-08-14
-**状态**：交互方案已确认，待原型修订
+**状态**：交互方案与原型已确认，待实施
 **工程**：`apaas-builder-ai`
 
 ## 1. 背景
