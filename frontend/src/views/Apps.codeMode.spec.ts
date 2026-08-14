@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import actionsSource from '@/components/code/CodeApplicationActions.vue?raw'
 import appsSource from './Apps.vue?raw'
 
 describe('Apps Code mode entry', () => {
@@ -45,6 +46,11 @@ describe('Apps Code mode entry', () => {
     expect(appsSource).toContain('location.external_application_id')
     expect(appsSource).toContain('stageCodeApplicationLocationPreference')
     expect(appsSource).toContain('created.public_id')
+  })
+
+  it('disables every location action and rejects emits while opening', () => {
+    expect(actionsSource).toContain(':disabled="actionOpening"')
+    expect(actionsSource).toContain('if (!canOpenCodeApplicationLocation')
   })
 
   it('keeps location filters visible while application status remains a dropdown filter', () => {

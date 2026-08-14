@@ -39,9 +39,9 @@ function toLocation(
     location,
     location_id: externalId,
     external_application_id: externalId,
-    availability: location === 'remote'
-      ? (sourceAvailable ? 'ready' : 'unavailable')
-      : (application.availability || 'unavailable'),
+    availability: sourceAvailable
+      ? (location === 'remote' ? 'ready' : (application.availability || 'unavailable'))
+      : 'unavailable',
     workspace_id: application.workspace_id ?? null,
     workspace_path: application.local_workspace_path ?? null,
     environment_name: location === 'remote' ? environmentName(application) : null,
@@ -53,6 +53,7 @@ function toUnified(
   local: CodeApplication | undefined,
   remote: CodeApplication | undefined,
   deploymentId: string,
+  localSourceAvailable: boolean,
   remoteSourceAvailable: boolean,
 ): UnifiedCodeApplicationItem {
   const representative = remote || local
@@ -80,12 +81,13 @@ function toUnified(
     roles: representative.roles || 0,
     dicts: representative.dicts || 0,
     association,
-    ...(local ? { local: toLocation(local, 'local') } : {}),
+    ...(local ? { local: toLocation(local, 'local', localSourceAvailable) } : {}),
     ...(remote ? { remote: toLocation(remote, 'remote', remoteSourceAvailable) } : {}),
   }
 }
 
 export interface MergeCodeApplicationLocationsOptions {
+  localSourceAvailable?: boolean
   remoteSourceAvailable?: boolean
 }
 
@@ -95,6 +97,7 @@ export function mergeCodeApplicationLocations(
   deploymentId: string,
   options: MergeCodeApplicationLocationsOptions = {},
 ): UnifiedCodeApplicationItem[] {
+  const localSourceAvailable = options.localSourceAvailable !== false
   const remoteSourceAvailable = options.remoteSourceAvailable !== false
   const remoteByExternalId = new Map<string, CodeApplication>()
   const remoteByLogicalId = new Map<string, CodeApplication>()
@@ -109,12 +112,27 @@ export function mergeCodeApplicationLocations(
   const unified = localApplications.map((local) => {
     const linkedRemoteId = stable(local.linked_remote_application_id)
     const logicalId = stable(local.logical_application_id)
-    const remote = (linkedRemoteId && remoteByExternalId.get(linkedRemoteId))
-      || (logicalId && remoteByLogicalId.get(logicalId))
-      || undefined
+    const linkedRemote = linkedRemoteId ? remoteByExternalId.get(linkedRemoteId) : undefined
+    const logicalRemote = logicalId ? remoteByLogicalId.get(logicalId) : undefined
+    const remote = [linkedRemote, logicalRemote].find((candidate) => {
+      const externalId = stable(candidate?.external_application_id || candidate?.id)
+      return Boolean(candidate && externalId && !consumedRemoteIds.has(externalId))
+    })
     if (remote) consumedRemoteIds.add(stable(remote.external_application_id || remote.id))
-    const item = toUnified(local, remote, deploymentId, remoteSourceAvailable)
-    if (!remote && linkedRemoteId && !remoteSourceAvailable) {
+    const item = toUnified(
+      local,
+      remote,
+      deploymentId,
+      localSourceAvailable,
+      remoteSourceAvailable,
+    )
+    if (
+      !remote
+      && linkedRemoteId
+      && !remoteSourceAvailable
+      && !consumedRemoteIds.has(linkedRemoteId)
+    ) {
+      consumedRemoteIds.add(linkedRemoteId)
       item.association = 'linked'
       item.source = 'linked'
       item.remote = {
@@ -131,7 +149,13 @@ export function mergeCodeApplicationLocations(
   for (const remote of remoteApplications) {
     const externalId = stable(remote.external_application_id || remote.id)
     if (!consumedRemoteIds.has(externalId)) {
-      unified.push(toUnified(undefined, remote, deploymentId, remoteSourceAvailable))
+      unified.push(toUnified(
+        undefined,
+        remote,
+        deploymentId,
+        localSourceAvailable,
+        remoteSourceAvailable,
+      ))
     }
   }
   return unified
@@ -160,10 +184,8 @@ export function resolveCodeApplicationOpenState(
     .filter(location => Boolean(application[location]))
   const readyLocations = existingLocations
     .filter(location => application[location]?.availability === 'ready')
-  const rememberedExists = preferredLocation
-    ? existingLocations.includes(preferredLocation)
-    : false
-  const primaryLocation = rememberedExists
+  const hasRememberedLocation = Boolean(preferredLocation)
+  const primaryLocation = hasRememberedLocation
     ? preferredLocation
     : readyLocations.length === 1
       ? readyLocations[0]
@@ -172,13 +194,45 @@ export function resolveCodeApplicationOpenState(
   return {
     primaryLocation,
     readyLocations,
-    requiresSelection: !rememberedExists && readyLocations.length > 1,
+    requiresSelection: !hasRememberedLocation && readyLocations.length > 1,
     rememberedUnavailable: Boolean(
-      rememberedExists
-      && preferredLocation
+      preferredLocation
       && application[preferredLocation]?.availability !== 'ready',
     ),
   }
+}
+
+export interface CodeApplicationSourceState {
+  loaded: boolean
+  loading: boolean
+  error: string
+}
+
+export function resolveCodeApplicationSourceAvailability(
+  desktop: boolean,
+  states: { local: CodeApplicationSourceState; remote: CodeApplicationSourceState },
+) {
+  const initialLoadComplete = desktop
+    ? states.local.loaded && states.remote.loaded
+    : states.remote.loaded
+  return {
+    local: desktop
+      && initialLoadComplete
+      && !states.local.loading
+      && !states.local.error,
+    remote: initialLoadComplete
+      && !states.remote.loading
+      && !states.remote.error,
+    initialLoadComplete,
+  }
+}
+
+export function canOpenCodeApplicationLocation(
+  application: UnifiedCodeApplicationItem,
+  location: CodeExecutionLocation,
+  opening: boolean,
+): boolean {
+  return !opening && application[location]?.availability === 'ready'
 }
 
 export function codeApplicationAssociationLabel(application: UnifiedCodeApplicationItem): string {

@@ -4,23 +4,23 @@
       v-if="directLocation"
       class="apps-mini-action primary"
       type="button"
-      :disabled="opening"
+      :disabled="actionOpening"
       @click="emitOpen(directLocation)"
     >
-      {{ opening ? '打开中' : `在${locationName(directLocation)}打开` }}
+      {{ actionOpening ? '打开中' : `在${locationName(directLocation)}打开` }}
     </button>
 
     <template v-else>
       <button
         class="apps-mini-action primary"
         type="button"
-        :disabled="!primaryLocation || primaryUnavailable || opening"
+        :disabled="!primaryLocation || primaryUnavailable || actionOpening"
         @click="primaryLocation && emitOpen(primaryLocation)"
       >
         {{ primaryLabel }}
       </button>
-      <el-dropdown trigger="click" placement="bottom-end" @command="emitOpen">
-        <button class="apps-mini-action code-location-more" type="button" title="选择打开位置" aria-label="选择打开位置">
+      <el-dropdown :disabled="actionOpening" trigger="click" placement="bottom-end" @command="emitOpen">
+        <button class="apps-mini-action code-location-more" type="button" title="选择打开位置" aria-label="选择打开位置" :disabled="actionOpening">
           <el-icon><ArrowDown /></el-icon>
         </button>
         <template #dropdown>
@@ -44,10 +44,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ArrowDown } from '@element-plus/icons-vue'
 import type { CodeExecutionLocation } from '@/api/codeRuntime'
 import {
+  canOpenCodeApplicationLocation,
   resolveCodeApplicationOpenState,
   type UnifiedCodeApplicationItem,
 } from './codeApplicationLocations'
@@ -58,6 +59,7 @@ const props = defineProps<{
   opening?: boolean
 }>()
 const emit = defineEmits<{ open: [location: CodeExecutionLocation] }>()
+const openingRequested = ref(false)
 
 const existingLocations = computed(() => (['local', 'remote'] as const)
   .filter(location => Boolean(props.application[location])))
@@ -67,13 +69,21 @@ const openState = computed(() => resolveCodeApplicationOpenState(
 ))
 const primaryLocation = computed(() => openState.value.primaryLocation)
 const primaryUnavailable = computed(() => openState.value.rememberedUnavailable)
-const directLocation = computed(() => existingLocations.value.length === 1 ? primaryLocation.value : null)
+const actionOpening = computed(() => Boolean(props.opening || openingRequested.value))
+const directLocation = computed(() => existingLocations.value.length === 1
+  && !openState.value.rememberedUnavailable
+  ? primaryLocation.value
+  : null)
 const menuLocations = computed(() => existingLocations.value
   .filter(location => location !== primaryLocation.value))
 const primaryLabel = computed(() => {
   if (!primaryLocation.value) return '选择打开位置'
   if (primaryUnavailable.value) return `${locationName(primaryLocation.value)}位置不可用`
-  return props.opening ? '打开中' : `在${locationName(primaryLocation.value)}打开`
+  return actionOpening.value ? '打开中' : `在${locationName(primaryLocation.value)}打开`
+})
+
+watch(() => props.opening, opening => {
+  if (!opening) openingRequested.value = false
 })
 
 function locationName(location: CodeExecutionLocation) {
@@ -81,7 +91,12 @@ function locationName(location: CodeExecutionLocation) {
 }
 
 function emitOpen(location: CodeExecutionLocation) {
-  if (props.application[location]?.availability === 'ready') emit('open', location)
+  if (!canOpenCodeApplicationLocation(props.application, location, actionOpening.value)) return
+  openingRequested.value = true
+  emit('open', location)
+  queueMicrotask(() => {
+    if (!props.opening) openingRequested.value = false
+  })
 }
 </script>
 

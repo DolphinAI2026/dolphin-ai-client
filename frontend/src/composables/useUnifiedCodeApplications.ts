@@ -2,7 +2,10 @@ import { computed, reactive } from 'vue'
 import type { CodeApplication, CodeExecutionLocation } from '@/api/codeRuntime'
 import type { CodeApplicationCacheScope } from '@/stores/codeApplications'
 import { useCodeApplicationsStore } from '@/stores/codeApplications'
-import { mergeCodeApplicationLocations } from '@/components/code/codeApplicationLocations'
+import {
+  mergeCodeApplicationLocations,
+  resolveCodeApplicationSourceAvailability,
+} from '@/components/code/codeApplicationLocations'
 
 interface SourceState {
   items: CodeApplication[]
@@ -29,16 +32,21 @@ export function useUnifiedCodeApplications(options: UnifiedCodeApplicationsOptio
   const sourceState = { local, remote }
   let loadGeneration = 0
 
+  const sourceAvailability = computed(() => resolveCodeApplicationSourceAvailability(
+    options.desktop,
+    { local, remote },
+  ))
   const applications = computed(() => mergeCodeApplicationLocations(
     options.desktop ? local.items : [],
     remote.items,
     options.deploymentId(),
-    { remoteSourceAvailable: !remote.error },
+    {
+      localSourceAvailable: sourceAvailability.value.local,
+      remoteSourceAvailable: sourceAvailability.value.remote,
+    },
   ))
-  const loading = computed(() => {
-    const states = options.desktop ? [local, remote] : [remote]
-    return states.some(state => state.loading) && states.every(state => state.items.length === 0)
-  })
+  const loading = computed(() => !sourceAvailability.value.initialLoadComplete
+    && (local.loading || remote.loading))
 
   async function loadSource(source: CodeExecutionLocation, force = false, generation = loadGeneration) {
     const state = sourceState[source]
