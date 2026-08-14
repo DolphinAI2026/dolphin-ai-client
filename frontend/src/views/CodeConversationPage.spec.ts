@@ -69,6 +69,27 @@ describe('CodeConversationPage', () => {
     expect(pageSource).toContain('commitPendingCodeApplicationLocationPreferenceByShellSessionRef(frame.sessionRef)')
   })
 
+  it('dispatches project initialization only after a trusted pending shell is promoted', () => {
+    const readyHandlerSource = pageSource.slice(
+      pageSource.indexOf("if (message.type === 'builder.ready')"),
+      pageSource.indexOf("if (message.type === 'sandbox.failed')"),
+    )
+    const dispatchHelperSource = pageSource.slice(
+      pageSource.indexOf('function dispatchProjectInitialization'),
+      pageSource.indexOf('function currentCodeRouteLocation'),
+    )
+    const promotedIndex = readyHandlerSource.indexOf('promoteReadyCodeFrame(previousState, frame.key)')
+    const dispatchIndex = readyHandlerSource.indexOf('dispatchProjectInitialization(frame.sessionRef)')
+
+    expect(pageSource).toContain('function isProjectInitializationRoute')
+    expect(pageSource).toContain('function dispatchProjectInitialization')
+    expect(pageSource).toContain('codeRuntimeApi.dispatchProjectInitialization')
+    expect(promotedIndex).toBeGreaterThanOrEqual(0)
+    expect(dispatchIndex).toBeGreaterThan(promotedIndex)
+    expect(dispatchHelperSource).toContain('isProjectInitializationRoute()')
+    expect(readyHandlerSource.slice(dispatchIndex)).toContain('frame.phase === \'active\'')
+  })
+
   it('discards only the pending shell preference on open failure, timeout, sandbox failure, or exit', () => {
     expect(pageSource).toContain('discardPendingCodeApplicationLocationPreferenceByShellSessionRef')
     expect(pageSource).toContain('discardPendingCodeApplicationLocationPreferenceByShellSessionRef(previousState.request?.sessionRef')

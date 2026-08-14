@@ -183,6 +183,7 @@ let runtimeAuthRecoveryPromise: Promise<void> | null = null
 const agentActivationCoordinator = createCodeAgentActivationCoordinator()
 let openInFlightKey = ''
 let runtimeAuthInvalidFrameKey = ''
+const projectInitializationDispatchesInFlight = new Set<string>()
 let pendingReadyTimer: {
   handle: number
   requestId: number
@@ -245,6 +246,23 @@ function currentSessionRef(): string {
 function currentRuntimeAgentId(): string {
   const raw = Array.isArray(route.query.agent) ? route.query.agent[0] : route.query.agent
   return String(raw || '').trim()
+}
+
+function isProjectInitializationRoute(): boolean {
+  const raw = Array.isArray(route.query.projectInitialization)
+    ? route.query.projectInitialization[0]
+    : route.query.projectInitialization
+  return raw === '1'
+}
+
+function dispatchProjectInitialization(sessionRef: string) {
+  if (!isProjectInitializationRoute() || projectInitializationDispatchesInFlight.has(sessionRef)) return
+  projectInitializationDispatchesInFlight.add(sessionRef)
+  void codeRuntimeApi.dispatchProjectInitialization(sessionRef)
+    .catch(() => undefined)
+    .finally(() => {
+      projectInitializationDispatchesInFlight.delete(sessionRef)
+    })
 }
 
 function currentCodeRouteLocation(): CodeFrameRouteLocation {
@@ -875,6 +893,7 @@ function onShellMessage(event: MessageEvent) {
       frameLifecycle.value = promoteReadyCodeFrame(previousState, frame.key)
       if (frameLifecycle.value === previousState) return
       commitPendingCodeApplicationLocationPreferenceByShellSessionRef(frame.sessionRef)
+      dispatchProjectInitialization(frame.sessionRef)
       clearPendingReadyTimer()
       errorMessage.value = ''
       resetWorkspaceOpening()

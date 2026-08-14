@@ -80,6 +80,7 @@ from app.code_runtime.local_runtime import (
     LocalRuntimeClient,
     rebind_registered_local_workspace,
 )
+from app.code_runtime.project_initialization import dispatch_project_initialization_message
 from app.config import APP_VERSION, settings
 from app import runtime
 from app.database import AsyncSessionLocal, get_db
@@ -1792,6 +1793,45 @@ async def create_code_runtime_agent_session(
         "runtime_session_id": runtime_session_id,
         "session": payload,
     }
+
+
+@router.post("/sessions/{session_ref}/project-initialization/dispatch")
+async def dispatch_project_initialization(
+    session_ref: str,
+    request: Request,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    session, binding = await _authorized_code_runtime_binding(db, session_ref, ctx)
+    if session.session_purpose != "project_initialization":
+        raise HTTPException(status_code=400, detail="该 Code 会话不是项目初始化会话")
+
+    async def send_runtime_message(
+        runtime_session_id: str,
+        client_message_id: str,
+        text: str,
+    ) -> Any:
+        return await _runtime_json_request_for_session(
+            session,
+            binding,
+            "POST",
+            f"/api/agent/sessions/{quote(runtime_session_id, safe='')}/messages",
+            request=request,
+            ctx=ctx,
+            db=db,
+            json_body={
+                "clientMessageId": client_message_id,
+                "text": text,
+            },
+        )
+
+    result = await dispatch_project_initialization_message(
+        session,
+        binding,
+        send_runtime_message,
+    )
+    await db.commit()
+    return result.to_dict()
 
 
 @router.post("/sessions/{session_id}/agent-sessions/{runtime_session_id}/activate")

@@ -68,6 +68,7 @@ export interface CodeApplication extends MergedApplication {
   linked_remote_deployment_id?: string | null
   availability?: CodeLocationAvailability
   already_registered?: boolean
+  initialize_project?: boolean
   repository?: Record<string, any> | null
   owner?: Record<string, any> | null
 }
@@ -167,6 +168,14 @@ export interface CodeAgentSessionActivateResponse {
   shell_session_id: string
   runtime_session_id: string
   session?: Record<string, any> | null
+}
+
+export type CodeProjectInitializationDispatchState = 'sent' | 'already_sent' | 'retryable_failed'
+
+export interface CodeProjectInitializationDispatchResponse {
+  state: CodeProjectInitializationDispatchState
+  session_id: string
+  client_message_id: string
 }
 
 export function resolveCodeRuntimeEmbedUrl(url: string, baseUrl = import.meta.env.BASE_URL): string {
@@ -280,6 +289,14 @@ export const codeRuntimeApi = {
     const encodedShellSessionId = encodeURIComponent(shellSessionId)
     return request.post<any, CodeAgentSessionActivateResponse>(
       `/code/sessions/${encodedShellSessionId}/agent-sessions/${encodeURIComponent(runtimeSessionId)}/activate`, undefined, { headers: controlPlaneCodeAuthorization() },
+    )
+  },
+  dispatchProjectInitialization(shellSessionId: string) {
+    const encodedShellSessionId = encodeURIComponent(shellSessionId)
+    return request.post<any, CodeProjectInitializationDispatchResponse>(
+      `/code/sessions/${encodedShellSessionId}/project-initialization/dispatch`,
+      undefined,
+      { headers: controlPlaneCodeAuthorization() },
     )
   },
   deleteAgentSession(shellSessionId: string, runtimeSessionId: string) {

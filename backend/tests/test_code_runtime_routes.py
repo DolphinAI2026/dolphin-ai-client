@@ -3977,6 +3977,165 @@ async def test_create_code_session_from_external_app_resume_recent_scopes_to_loc
     assert resumed["id"] != recheck["id"]
 
 
+async def _seed_project_initialization_runtime(db_session):
+    session = AIChatSession(
+        public_id="44444444-4444-4444-4444-444444444444",
+        tenant_id=7,
+        user_id=11,
+        title="项目初始化",
+        mode="code",
+        status="active",
+        external_application_id="local-crm",
+        external_app_name="CRM",
+        logical_application_id="logical-crm",
+        execution_location="local",
+        session_purpose="project_initialization",
+    )
+    db_session.add(session)
+    await db_session.flush()
+    binding = CodeRuntimeBinding(
+        tenant_id=7,
+        user_id=11,
+        session_id=session.id,
+        external_application_id="local-crm",
+        runtime_base_url="https://runtime.test/workspaces/local-crm",
+        builder_url="https://runtime.test/workspaces/local-crm/builder",
+        runtime_service_session_enc=_runtime_service_session_enc(),
+        runtime_session_id="runtime-project-init",
+        status="ready",
+    )
+    db_session.add(binding)
+    await db_session.commit()
+    return session, binding
+
+
+@pytest.mark.asyncio
+async def test_project_initialization_dispatch_sends_read_only_prompt_and_marks_sent(
+    db_session,
+    monkeypatch,
+):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import dispatch_project_initialization
+
+    session, _binding = await _seed_project_initialization_runtime(db_session)
+    runtime_calls: list[dict[str, object]] = []
+
+    async def send_to_runtime(_session, _binding, method, path, **kwargs):
+        runtime_calls.append({
+            "method": method,
+            "path": path,
+            "body": kwargs["json_body"],
+        })
+        return {}
+
+    monkeypatch.setattr(code_runtime_routes, "_runtime_json_request_for_session", send_to_runtime)
+
+    result = await dispatch_project_initialization(
+        session.public_id,
+        _request(),
+        _ctx(),
+        db_session,
+    )
+
+    assert result["state"] == "sent"
+    assert result["session_id"] == session.public_id
+    assert result["client_message_id"].startswith("msg_project_init_")
+    assert runtime_calls[0]["method"] == "POST"
+    assert runtime_calls[0]["path"] == "/api/agent/sessions/runtime-project-init/messages"
+    message = runtime_calls[0]["body"]
+    assert message["clientMessageId"] == result["client_message_id"]
+    assert "只读" in message["text"]
+    assert "项目结构" in message["text"]
+    assert "README" in message["text"]
+    assert "AGENTS" in message["text"]
+    assert "Git 状态" in message["text"]
+    assert "禁止写入" in message["text"]
+    assert "禁止安装" in message["text"]
+    assert "禁止构建" in message["text"]
+    assert "禁止测试" in message["text"]
+    assert "禁止启动" in message["text"]
+    assert "禁止 Git 修改" in message["text"]
+
+    stored = await db_session.get(AIChatSession, session.id)
+    assert stored.initialization_task_key == result["client_message_id"]
+    assert stored.initialization_task_state == "sent"
+
+
+@pytest.mark.asyncio
+async def test_project_initialization_dispatch_returns_already_sent_without_second_runtime_send(
+    db_session,
+    monkeypatch,
+):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import dispatch_project_initialization
+
+    session, _binding = await _seed_project_initialization_runtime(db_session)
+    runtime_calls: list[dict[str, object]] = []
+
+    async def send_to_runtime(_session, _binding, method, path, **kwargs):
+        runtime_calls.append({"method": method, "path": path, "body": kwargs["json_body"]})
+        return {}
+
+    monkeypatch.setattr(code_runtime_routes, "_runtime_json_request_for_session", send_to_runtime)
+
+    first = await dispatch_project_initialization(session.public_id, _request(), _ctx(), db_session)
+    second = await dispatch_project_initialization(session.public_id, _request(), _ctx(), db_session)
+
+    assert first["state"] == "sent"
+    assert second == {
+        "state": "already_sent",
+        "session_id": session.public_id,
+        "client_message_id": first["client_message_id"],
+    }
+    assert len(runtime_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_project_initialization_dispatch_preserves_session_after_retryable_runtime_failure(
+    db_session,
+    monkeypatch,
+):
+    from fastapi import HTTPException
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import dispatch_project_initialization
+
+    session, binding = await _seed_project_initialization_runtime(db_session)
+    attempts: list[dict[str, object]] = []
+
+    async def fail_runtime(_session, _binding, method, path, **kwargs):
+        attempts.append({"method": method, "path": path, "body": kwargs["json_body"]})
+        raise HTTPException(status_code=503, detail="Runtime unavailable")
+
+    monkeypatch.setattr(code_runtime_routes, "_runtime_json_request_for_session", fail_runtime)
+
+    failed = await dispatch_project_initialization(session.public_id, _request(), _ctx(), db_session)
+
+    assert failed["state"] == "retryable_failed"
+    assert failed["client_message_id"].startswith("msg_project_init_")
+    stored = await db_session.get(AIChatSession, session.id)
+    preserved_binding = await db_session.get(CodeRuntimeBinding, binding.id)
+    assert stored.initialization_task_key == failed["client_message_id"]
+    assert stored.initialization_task_state == "retryable_failed"
+    assert stored.logical_application_id == "logical-crm"
+    assert stored.execution_location == "local"
+    assert stored.session_purpose == "project_initialization"
+    assert preserved_binding.runtime_session_id == "runtime-project-init"
+
+    async def send_to_runtime(_session, _binding, method, path, **kwargs):
+        attempts.append({"method": method, "path": path, "body": kwargs["json_body"]})
+        return {}
+
+    monkeypatch.setattr(code_runtime_routes, "_runtime_json_request_for_session", send_to_runtime)
+    retried = await dispatch_project_initialization(session.public_id, _request(), _ctx(), db_session)
+
+    assert retried["state"] == "sent"
+    assert retried["client_message_id"] == failed["client_message_id"]
+    assert [attempt["body"]["clientMessageId"] for attempt in attempts] == [
+        failed["client_message_id"],
+        failed["client_message_id"],
+    ]
+
+
 @pytest.mark.asyncio
 async def test_create_code_session_from_external_app_resume_recent_uses_sqlite_lock_without_shared_process_lock(
     tmp_path,

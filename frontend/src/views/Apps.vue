@@ -467,6 +467,7 @@ import {
   codeRuntimeApi,
   type CodeApplication,
   type CodeExecutionLocation,
+  type CodeSessionPurpose,
   type LocalApplicationDirectoryMode,
 } from '@/api/codeRuntime'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
@@ -652,7 +653,12 @@ async function handleLocalApplicationCreated(application: CodeApplication) {
   const unified = unifiedCodeApplications.applications.value.find(item => (
     item.local?.external_application_id === application.external_application_id
   ))
-  if (unified) await openCodeApplicationLocation(unified, 'local')
+  if (!unified) return
+  await openCodeApplicationLocation(
+    unified,
+    'local',
+    application.initialize_project ? 'project_initialization' : 'standard',
+  )
 }
 
 function clearCodeCreateQuery() {
@@ -791,7 +797,11 @@ function preferredCodeApplicationLocation(app: MergedApplication) {
   return loadCodeApplicationLocationPreference(codePreferenceScope(app))
 }
 
-async function openCodeApplicationLocation(app: MergedApplication, executionLocation: CodeExecutionLocation) {
+async function openCodeApplicationLocation(
+  app: MergedApplication,
+  executionLocation: CodeExecutionLocation,
+  sessionPurpose: CodeSessionPurpose = 'standard',
+) {
   const unified = asUnifiedCodeApplication(app)
   const location = unified[executionLocation]
   const externalApplicationId = String(location?.external_application_id || '').trim()
@@ -810,10 +820,10 @@ async function openCodeApplicationLocation(app: MergedApplication, executionLoca
       external_application_id: location.external_application_id,
       execution_location: executionLocation,
       session_policy: 'resume_recent',
-      session_purpose: 'standard',
+      session_purpose: sessionPurpose,
       app_name: app.app_name,
       app_code: app.app_code,
-    })
+    }, sessionPurpose === 'project_initialization' ? { title: '项目初始化' } : undefined)
     const shellSessionRef = resolveCodeApplicationShellSessionRef(created)
     if (!shellSessionRef) {
       ElMessage.error('创建 Code 会话后缺少会话标识')
@@ -825,7 +835,14 @@ async function openCodeApplicationLocation(app: MergedApplication, executionLoca
       shellSessionRef,
     )
     window.dispatchEvent(new CustomEvent('code-rail-refresh'))
-    router.push(`/code/${shellSessionRef}`)
+    if (sessionPurpose === 'project_initialization') {
+      router.push({
+        path: `/code/${shellSessionRef}`,
+        query: { projectInitialization: '1' },
+      })
+    } else {
+      router.push(`/code/${shellSessionRef}`)
+    }
   } catch (error: any) {
     if (showCodeApplicationOpenError(app, executionLocation, error)) return
     ElMessage.error(error?.response?.data?.detail || error?.message || '创建 Code 会话失败')
