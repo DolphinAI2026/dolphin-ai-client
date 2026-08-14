@@ -152,6 +152,7 @@ import {
   resolveTrustedShellMessage,
   type ShellFrameEndpoint,
 } from './codeShellProtocol'
+import { createCodeAgentActivationCoordinator } from './codeAgentActivation'
 
 const route = useRoute()
 const router = useRouter()
@@ -179,6 +180,7 @@ let openStatusTimer: number | undefined
 let openStatusPollingSeq = 0
 let openRequestSeq = 0
 let runtimeAuthRecoveryPromise: Promise<void> | null = null
+const agentActivationCoordinator = createCodeAgentActivationCoordinator()
 let openInFlightKey = ''
 let runtimeAuthInvalidFrameKey = ''
 let pendingReadyTimer: {
@@ -294,6 +296,19 @@ function clearRouteAgentQueryIfCurrent(runtimeAgentId: string) {
     path: route.path,
     query: nextAgentQuery(route.query),
   })
+}
+
+function activateCurrentCodeAgentSession(
+  shellSessionRef: string,
+  runtimeAgentId: string,
+  isCurrent: () => boolean,
+  activationSessionRef = shellSessionRef,
+) {
+  return agentActivationCoordinator.activate(
+    shellSessionRef,
+    isCurrent,
+    () => codeRuntimeApi.activateAgentSession(activationSessionRef, runtimeAgentId),
+  )
 }
 
 function stopOpenStatusPolling() {
@@ -466,9 +481,10 @@ async function openCurrentSession() {
       // iframe mounted instead of reopening the workspace through Control Plane.
       if (runtimeAgentId) {
         try {
-          const activated = await awaitCurrentCodeFrameOpenRequest(
+          const activated = await activateCurrentCodeAgentSession(
+            sessionRef,
+            runtimeAgentId,
             isCurrentRequest,
-            () => codeRuntimeApi.activateAgentSession(sessionRef, runtimeAgentId),
           )
           if (activated.status === 'stale' || !isCurrentRequest()) return
         } catch (activationError: any) {
@@ -513,9 +529,11 @@ async function openCurrentSession() {
     }
     if (runtimeAgentId && opened.runtime_session_id !== runtimeAgentId) {
       try {
-        const activated = await awaitCurrentCodeFrameOpenRequest(
+        const activated = await activateCurrentCodeAgentSession(
+          sessionRef,
+          runtimeAgentId,
           isCurrentRequest,
-          () => codeRuntimeApi.activateAgentSession(opened.session_id, runtimeAgentId),
+          opened.session_id,
         )
         if (activated.status === 'stale' || !isCurrentRequest()) return
       } catch (activationError: any) {

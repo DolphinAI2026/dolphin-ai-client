@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { createCodeAgentActivationCoordinator } from './codeAgentActivation'
 import { awaitCurrentCodeFrameOpenRequest } from './codeFrameLifecycle'
 import pageSource from './CodeConversationPage.vue?raw'
 
@@ -179,29 +180,38 @@ describe('CodeConversationPage', () => {
   })
 
   it('opens the sandbox before activating the route agent so restore is not overwritten', () => {
+    const openSource = pageSource.slice(
+      pageSource.indexOf('async function openCurrentSession()'),
+      pageSource.indexOf('function queuePendingFrame'),
+    )
+    const openIndex = openSource.indexOf('codeRuntimeApi.openSession(sessionRef)')
+    const openedActivationIndex = openSource.lastIndexOf('activateCurrentCodeAgentSession(')
+
     expect(pageSource).toContain('function currentRuntimeAgentId()')
     expect(pageSource).toContain('function currentSessionRef(): string')
-    expect(pageSource).toContain('codeRuntimeApi.openSession(sessionRef)')
-    expect(pageSource).toContain('codeRuntimeApi.activateAgentSession(opened.session_id, runtimeAgentId)')
-    expect(pageSource).toContain('runtimeAgentId && opened.runtime_session_id !== runtimeAgentId')
-    expect(pageSource.indexOf('codeRuntimeApi.openSession(sessionRef)'))
-      .toBeLessThan(pageSource.indexOf('codeRuntimeApi.activateAgentSession(opened.session_id, runtimeAgentId)'))
-    expect(pageSource.indexOf('codeRuntimeApi.activateAgentSession(opened.session_id, runtimeAgentId)'))
-      .toBeLessThan(pageSource.indexOf('queuePendingFrame(opened.embed_url)'))
+    expect(openSource).toContain('runtimeAgentId && opened.runtime_session_id !== runtimeAgentId')
+    expect(openedActivationIndex).toBeGreaterThan(openIndex)
+    expect(openedActivationIndex).toBeLessThan(openSource.indexOf('queuePendingFrame(opened.embed_url)'))
   })
 
-  it('gates open and cached/runtime activation completion before applying request side effects', () => {
+  it('routes cached and opened agent activation through one serial coordinator', () => {
     const openSource = pageSource.slice(
       pageSource.indexOf('async function openCurrentSession()'),
       pageSource.indexOf('function queuePendingFrame'),
     )
 
     expect(openSource).toContain('awaitCurrentCodeFrameOpenRequest')
-    expect(openSource.match(/awaitCurrentCodeFrameOpenRequest/g)).toHaveLength(4)
+    expect(openSource.match(/awaitCurrentCodeFrameOpenRequest/g)).toHaveLength(2)
     expect(openSource.match(/\.status === 'stale' \|\| !isCurrentRequest\(\)/g)).toHaveLength(4)
     expect(openSource).toContain('() => codeRuntimeApi.openSession(sessionRef)')
-    expect(openSource).toContain('() => codeRuntimeApi.activateAgentSession(sessionRef, runtimeAgentId)')
-    expect(openSource).toContain('() => codeRuntimeApi.activateAgentSession(opened.session_id, runtimeAgentId)')
+    expect(openSource).toMatch(
+      /activateCurrentCodeAgentSession\(\s*sessionRef,\s*runtimeAgentId,\s*isCurrentRequest,?\s*\)/,
+    )
+    expect(openSource).toMatch(
+      /activateCurrentCodeAgentSession\(\s*sessionRef,\s*runtimeAgentId,\s*isCurrentRequest,\s*opened\.session_id,\s*\)/,
+    )
+    expect(openSource.match(/activateCurrentCodeAgentSession/g)).toHaveLength(2)
+    expect(openSource).not.toContain('codeRuntimeApi.activateAgentSession')
   })
 
   it('ignores stale open completion before stopping polling, activating, or replacing the current frame', async () => {
@@ -274,6 +284,78 @@ describe('CodeConversationPage', () => {
     await agent1Request
 
     expect(activeAgent).toBe('agent-2')
+  })
+
+  it('serializes same-shell activation so the latest selection is the last runtime side effect', async () => {
+    const coordinator = createCodeAgentActivationCoordinator()
+    const firstActivation = deferred<void>()
+    const calls: string[] = []
+    let currentRequestId = 1
+    let activeAgent = ''
+
+    const activateAndApply = async (requestId: number, agentId: string) => {
+      const result = await coordinator.activate(
+        'shell-1',
+        () => requestId === currentRequestId,
+        async () => {
+          calls.push(`start:${agentId}`)
+          if (agentId === 'agent-1') await firstActivation.promise
+          calls.push(`finish:${agentId}`)
+          return agentId
+        },
+      )
+      if (result.status === 'current') activeAgent = result.value
+    }
+
+    const firstRequest = activateAndApply(1, 'agent-1')
+    currentRequestId = 2
+    const secondRequest = activateAndApply(2, 'agent-2')
+
+    expect(calls).toEqual(['start:agent-1'])
+    firstActivation.resolve()
+    await Promise.all([firstRequest, secondRequest])
+
+    expect(calls).toEqual([
+      'start:agent-1',
+      'finish:agent-1',
+      'start:agent-2',
+      'finish:agent-2',
+    ])
+    expect(activeAgent).toBe('agent-2')
+  })
+
+  it('skips an activation that becomes stale before its same-shell queue turn', async () => {
+    const coordinator = createCodeAgentActivationCoordinator()
+    const firstActivation = deferred<void>()
+    const calls: string[] = []
+    let currentRequestId = 1
+
+    const activate = (requestId: number, agentId: string) => coordinator.activate(
+      'shell-1',
+      () => requestId === currentRequestId,
+      async () => {
+        calls.push(agentId)
+        if (agentId === 'agent-1') await firstActivation.promise
+        return agentId
+      },
+    )
+
+    const firstRequest = activate(1, 'agent-1')
+    currentRequestId = 2
+    const staleQueuedRequest = activate(2, 'agent-2')
+    currentRequestId = 3
+    const latestRequest = activate(3, 'agent-3')
+
+    firstActivation.resolve()
+    const [, staleResult, latestResult] = await Promise.all([
+      firstRequest,
+      staleQueuedRequest,
+      latestRequest,
+    ])
+
+    expect(calls).toEqual(['agent-1', 'agent-3'])
+    expect(staleResult).toEqual({ status: 'stale' })
+    expect(latestResult).toEqual({ status: 'current', value: 'agent-3' })
   })
 
   it('drops stale route agent query when the runtime session no longer exists', () => {

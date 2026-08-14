@@ -5322,6 +5322,133 @@ async def test_activate_code_runtime_agent_session_proxies_to_runtime_and_update
 
 
 @pytest.mark.asyncio
+async def test_activate_code_runtime_agent_session_serializes_same_binding_until_snapshot_commit(
+    tmp_path,
+    monkeypatch,
+):
+    import app.routes.code_runtime as code_runtime_routes
+
+    engine, Session = await _renewal_session_factory(tmp_path)
+    first_started = asyncio.Event()
+    second_started = asyncio.Event()
+    release_first = asyncio.Event()
+    events: list[str] = []
+
+    async def fake_runtime_request(
+        _session,
+        _binding,
+        _method,
+        path,
+        **_kwargs,
+    ):
+        runtime_id = path.split("/")[-2]
+        events.append(f"start:{runtime_id}")
+        if runtime_id == "runtime-1":
+            first_started.set()
+            await release_first.wait()
+        else:
+            second_started.set()
+        events.append(f"finish:{runtime_id}")
+        return {
+            "runtimeSessionId": runtime_id,
+            "title": f"snapshot:{runtime_id}",
+            "updatedAt": (
+                "2026-08-14T10:00:00Z"
+                if runtime_id == "runtime-1"
+                else "2026-08-14T10:01:00Z"
+            ),
+        }
+
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_runtime_json_request_for_session",
+        fake_runtime_request,
+    )
+
+    try:
+        async with Session() as setup:
+            shell = AIChatSession(
+                public_id="33333333-3333-3333-3333-333333333333",
+                tenant_id=7,
+                user_id=11,
+                title="CRM Code",
+                mode="code",
+                status="active",
+                external_application_id="crm",
+                external_app_name="CRM",
+            )
+            setup.add(shell)
+            await setup.flush()
+            setup.add(CodeRuntimeBinding(
+                tenant_id=7,
+                user_id=11,
+                session_id=shell.id,
+                external_application_id="crm",
+                runtime_base_url="http://runtime.local/workspaces/crm",
+                builder_url="http://runtime.local/workspaces/crm/builder",
+                runtime_service_session_enc=_runtime_service_session_enc(),
+                runtime_session_id="runtime-0",
+                status="ready",
+            ))
+            await setup.commit()
+            shell_ref = shell.public_id
+            shell_id = shell.id
+
+        async def activate(runtime_id: str):
+            async with Session() as db:
+                return await code_runtime_routes.activate_code_runtime_agent_session(
+                    shell_ref,
+                    runtime_id,
+                    _request(),
+                    _ctx(),
+                    db,
+                )
+
+        first_task = asyncio.create_task(activate("runtime-1"))
+        await first_started.wait()
+        second_task = asyncio.create_task(activate("runtime-2"))
+        try:
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(second_started.wait(), timeout=0.1)
+        finally:
+            release_first.set()
+            results = await asyncio.gather(first_task, second_task, return_exceptions=True)
+
+        assert not [result for result in results if isinstance(result, BaseException)]
+        assert events == [
+            "start:runtime-1",
+            "finish:runtime-1",
+            "start:runtime-2",
+            "finish:runtime-2",
+        ]
+
+        async with Session() as verify:
+            binding = (
+                await verify.execute(
+                    select(CodeRuntimeBinding).where(
+                        CodeRuntimeBinding.session_id == shell_id
+                    )
+                )
+            ).scalar_one()
+            snapshots = (
+                await verify.execute(
+                    select(CodeRuntimeAgentSession)
+                    .where(CodeRuntimeAgentSession.session_id == shell_id)
+                    .order_by(CodeRuntimeAgentSession.runtime_session_id)
+                )
+            ).scalars().all()
+
+        assert binding.runtime_session_id == "runtime-2"
+        assert [snapshot.runtime_session_id for snapshot in snapshots] == [
+            "runtime-1",
+            "runtime-2",
+        ]
+        assert snapshots[-1].title == "snapshot:runtime-2"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_create_code_runtime_agent_session_proxies_to_runtime_and_updates_binding(db_session, monkeypatch):
     import httpx
     import app.routes.code_runtime as code_runtime_routes

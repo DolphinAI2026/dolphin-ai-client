@@ -65,6 +65,7 @@ from app.code_runtime.sandbox_auth import (
     validate_expired_proxy_cookie_token,
 )
 from app.code_runtime.sandbox_metrics import sandbox_auth_metrics
+from app.code_runtime.agent_activation import code_runtime_agent_activation_transaction
 from app.code_runtime.execution_target import is_desktop_agent_runtime_target
 from app.code_runtime.session_location import (
     CodeApplicationLocationRequestError,
@@ -1802,20 +1803,26 @@ async def activate_code_runtime_agent_session(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
-    encoded_id = quote(str(runtime_session_id), safe="")
-    payload = await _runtime_json_request_for_session(
-        session,
-        binding,
-        "POST",
-        f"/api/agent/sessions/{encoded_id}/activate",
-        request=request,
-        ctx=ctx,
-        db=db,
-    )
-    activated_id = str((payload or {}).get("runtimeSessionId") or runtime_session_id)
-    binding.runtime_session_id = activated_id
-    await _remember_runtime_agent_session(db, session, binding, activated_id, payload)
-    await db.commit()
+    async with code_runtime_agent_activation_transaction(db, binding.id) as locked_binding:
+        encoded_id = quote(str(runtime_session_id), safe="")
+        payload = await _runtime_json_request_for_session(
+            session,
+            locked_binding,
+            "POST",
+            f"/api/agent/sessions/{encoded_id}/activate",
+            request=request,
+            ctx=ctx,
+            db=db,
+        )
+        activated_id = str((payload or {}).get("runtimeSessionId") or runtime_session_id)
+        locked_binding.runtime_session_id = activated_id
+        await _remember_runtime_agent_session(
+            db,
+            session,
+            locked_binding,
+            activated_id,
+            payload,
+        )
     return {
         "shell_session_id": ensure_code_session_public_id(session),
         "runtime_session_id": activated_id,
