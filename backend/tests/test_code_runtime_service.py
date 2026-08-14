@@ -1379,7 +1379,7 @@ async def test_create_code_application_uses_local_mode_without_control_plane(mon
 
 
 @pytest.mark.asyncio
-async def test_create_code_application_registers_local_workspace(
+async def test_create_code_application_registers_existing_local_workspace(
     db_session,
     tmp_path,
     monkeypatch,
@@ -1395,6 +1395,8 @@ async def test_create_code_application_registers_local_workspace(
 
     monkeypatch.setattr(service.httpx, "AsyncClient", UnexpectedClient)
     project_path = tmp_path / "sales-local"
+    project_path.mkdir()
+    (project_path / "README.md").write_text("existing", encoding="utf-8")
     ctx = SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7)
 
     result = await service.create_code_application(
@@ -1402,6 +1404,8 @@ async def test_create_code_application_registers_local_workspace(
         app_code="sales-local",
         local_application=True,
         local_workspace_path=str(project_path),
+        directory_mode="existing_directory",
+        initialize_project=True,
         db=db_session,
         ctx=ctx,
     )
@@ -1418,7 +1422,25 @@ async def test_create_code_application_registers_local_workspace(
     assert result["workspace_id"] == workspace.ws_id
     assert workspace.workspace_type == "code-local-application"
     assert workspace.display_name == "本地销售助手"
-    assert (project_path / ".git").is_dir()
+    assert workspace.logical_application_id == result["logical_application_id"]
+    assert result["availability"] == "ready"
+    assert result["already_registered"] is False
+    assert (project_path / "README.md").read_text(encoding="utf-8") == "existing"
+    assert not (project_path / ".git").exists()
+
+    reused = await service.create_code_application(
+        app_name="重复请求",
+        app_code="sales-local-again",
+        local_application=True,
+        local_workspace_path=str(project_path.parent / "." / project_path.name),
+        directory_mode="existing_directory",
+        db=db_session,
+        ctx=ctx,
+    )
+
+    assert reused["external_application_id"] == result["external_application_id"]
+    assert reused["logical_application_id"] == result["logical_application_id"]
+    assert reused["already_registered"] is True
 
 
 @pytest.mark.asyncio

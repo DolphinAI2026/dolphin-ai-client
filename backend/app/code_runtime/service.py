@@ -33,6 +33,7 @@ from app.code_runtime.local_runtime import (
     ensure_registered_local_workspace,
     local_workspace_path_text,
 )
+from app.code_runtime.application_locations import local_workspace_availability
 from app.code_runtime.execution_target import ExecutionTarget
 from app.models import Application, RegisteredWorkspace
 from app.models.ai_chat import (
@@ -905,6 +906,10 @@ async def create_code_application(
     seed_project_id: str | None = None,
     local_application: bool = False,
     local_workspace_path: str | None = None,
+    directory_mode: Literal["new_directory", "existing_directory"] = "new_directory",
+    initialize_project: bool = False,
+    linked_remote_application_id: str | None = None,
+    linked_remote_deployment_id: str | None = None,
     db: AsyncSession | None = None,
     ctx: Any | None = None,
     authorization_header: str | None = None,
@@ -931,12 +936,24 @@ async def create_code_application(
             application_id=str(data["applicationId"]),
             display_name=name,
             workspace_path=local_workspace_path or default_local_workspace_path(code),
+            directory_mode=directory_mode,
+            logical_application_id=f"local:{data['applicationId']}",
+            linked_remote_application_id=linked_remote_application_id,
+            linked_remote_deployment_id=linked_remote_deployment_id,
         )
+        already_registered = workspace.apaas_app_id != data["applicationId"]
+        data["applicationId"] = workspace.apaas_app_id or data["applicationId"]
         normalized = _normalize_code_application(data)
         normalized["source"] = "desktop-local"
         normalized["remote_status"] = None
         normalized["local_workspace_path"] = workspace.abs_path
         normalized["workspace_id"] = workspace.ws_id
+        normalized["logical_application_id"] = workspace.logical_application_id
+        normalized["linked_remote_application_id"] = workspace.linked_remote_application_id
+        normalized["linked_remote_deployment_id"] = workspace.linked_remote_deployment_id
+        normalized["availability"] = local_workspace_availability(workspace.abs_path)
+        normalized["already_registered"] = already_registered
+        normalized["initialize_project"] = bool(initialize_project)
         return normalized
 
     if local_code_applications_enabled():

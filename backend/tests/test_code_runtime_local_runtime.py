@@ -357,27 +357,100 @@ async def test_register_existing_workspace_rejects_path_owned_by_another_user(
             workspace_path=workspace_path,
         )
 
-    assert exc.value.status_code == 403
-    assert "LOCAL_APPLICATION_WORKSPACE_FORBIDDEN" in str(exc.value.detail)
+    assert exc.value.status_code == 409
+    assert "LOCAL_APPLICATION_PATH_ALREADY_BOUND" in str(exc.value.detail)
     assert foreign.user_id == 12
 
 
 @pytest.mark.asyncio
-async def test_rebind_workspace_keeps_local_application_identity(
+async def test_register_existing_non_git_directory_does_not_initialize_git(
+    db,
+    ctx,
+    tmp_path,
+):
+    workspace_path = tmp_path / "existing-project"
+    workspace_path.mkdir()
+    (workspace_path / "README.md").write_text("already here", encoding="utf-8")
+
+    workspace = await ensure_registered_local_workspace(
+        db,
+        ctx,
+        application_id="local-existing-project",
+        display_name="Existing project",
+        workspace_path=workspace_path,
+        directory_mode="existing_directory",
+    )
+
+    assert workspace.abs_path == str(workspace_path.resolve())
+    assert workspace.logical_application_id == "local:local-existing-project"
+    assert (workspace_path / "README.md").read_text(encoding="utf-8") == "already here"
+    assert not (workspace_path / ".git").exists()
+
+
+@pytest.mark.asyncio
+async def test_register_new_directory_non_git_only_creates_directory(
+    db,
+    ctx,
+    tmp_path,
+):
+    workspace_path = tmp_path / "new-project"
+
+    workspace = await ensure_registered_local_workspace(
+        db,
+        ctx,
+        application_id="local-new-project",
+        display_name="New project",
+        workspace_path=workspace_path,
+        directory_mode="new_directory",
+    )
+
+    assert workspace.abs_path == str(workspace_path.resolve())
+    assert workspace_path.is_dir()
+    assert not (workspace_path / ".git").exists()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_path_reuses_owned_registered_application(
+    db,
+    ctx,
+    tmp_path,
+):
+    workspace_path = tmp_path / "existing-project"
+    workspace_path.mkdir()
+    original = await ensure_registered_local_workspace(
+        db,
+        ctx,
+        application_id="local-original",
+        display_name="Original",
+        workspace_path=workspace_path,
+        directory_mode="existing_directory",
+    )
+
+    duplicate = await ensure_registered_local_workspace(
+        db,
+        ctx,
+        application_id="local-duplicate",
+        display_name="Duplicate",
+        workspace_path=workspace_path.parent / "." / workspace_path.name,
+        directory_mode="existing_directory",
+    )
+
+    assert duplicate.id == original.id
+    assert duplicate.apaas_app_id == "local-original"
+    assert duplicate.logical_application_id == "local:local-original"
+
+
+@pytest.mark.asyncio
+async def test_register_existing_rebind_keeps_local_application_identity_without_git(
     db,
     ctx,
     git_repo,
 ):
     workspace = await _create_workspace(db, git_repo)
     code_session = await _create_code_session(db, workspace_id=workspace.ws_id)
-    replacement = git_repo.parent / "replacement-repo"
+    replacement = git_repo.parent / "replacement-project"
     replacement.mkdir()
-    subprocess.run(
-        ["git", "init", str(replacement)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    (replacement / "README.md").write_text("existing", encoding="utf-8")
 
     rebound = await rebind_registered_local_workspace(
         db,
@@ -390,6 +463,7 @@ async def test_rebind_workspace_keeps_local_application_identity(
     assert rebound.ws_id == workspace.ws_id
     assert rebound.apaas_app_id == "local-app-1"
     assert rebound.abs_path == str(replacement)
+    assert not (replacement / ".git").exists()
 
 
 @pytest.mark.asyncio

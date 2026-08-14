@@ -11,6 +11,7 @@ export const CODE_RUNTIME_WORKSPACE_OPEN_TIMEOUT_MS = 690_000
 
 export type CodeExecutionLocation = 'local' | 'remote'
 export type CodeLocationAvailability = 'ready' | 'missing' | 'unreadable' | 'unavailable'
+export type LocalApplicationDirectoryMode = 'new_directory' | 'existing_directory'
 
 export interface CodeApplicationLocation {
   location: CodeExecutionLocation
@@ -58,6 +59,11 @@ export interface CodeApplication extends MergedApplication {
   app_type: 'ai-code'
   local_workspace_path?: string | null
   workspace_id?: string | null
+  logical_application_id?: string | null
+  linked_remote_application_id?: string | null
+  linked_remote_deployment_id?: string | null
+  availability?: CodeLocationAvailability
+  already_registered?: boolean
   repository?: Record<string, any> | null
   owner?: Record<string, any> | null
 }
@@ -76,6 +82,10 @@ export interface CreateCodeApplicationRequest {
   seed_project_id?: string | null
   local_application?: boolean
   local_workspace_path?: string | null
+  directory_mode?: LocalApplicationDirectoryMode
+  initialize_project?: boolean
+  linked_remote_application_id?: string | null
+  linked_remote_deployment_id?: string | null
 }
 
 export interface CodeRuntimeOpenResponse {

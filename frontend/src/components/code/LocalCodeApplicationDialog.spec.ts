@@ -3,6 +3,7 @@ import dialogSource from './LocalCodeApplicationDialog.vue?raw'
 import {
   createLocalApplicationCode,
   joinLocalProjectPath,
+  localApplicationProjectPath,
   validateLocalApplicationCode,
 } from './localApplicationForm'
 
@@ -14,18 +15,24 @@ describe('LocalCodeApplicationDialog', () => {
       .toBe('C:\\Users\\dev\\Dolphin\\sales-app')
     expect(joinLocalProjectPath('/home/dev/projects/', 'sales-app'))
       .toBe('/home/dev/projects/sales-app')
+    expect(localApplicationProjectPath('existing_directory', '/home/dev/projects/sales-app', 'ignored'))
+      .toBe('/home/dev/projects/sales-app')
     expect(validateLocalApplicationCode('sales-app')).toBe('')
     expect(validateLocalApplicationCode('销售助手')).not.toBe('')
   })
 
-  it('uses one dialog with a system parent-directory picker', () => {
+  it('uses one dialog with mutually exclusive new and existing directory modes', () => {
     expect(dialogSource).toContain('data-testid="local-app-name"')
     expect(dialogSource).toContain('data-testid="local-app-code"')
     expect(dialogSource).toContain('data-testid="local-app-project-path"')
-    expect(dialogSource).toContain("pickDirectory('选择本地应用保存位置')")
+    expect(dialogSource).toContain('新建项目')
+    expect(dialogSource).toContain('打开已有项目')
+    expect(dialogSource).toContain("pickDirectory(directoryMode.value === 'existing_directory'")
     expect(dialogSource).toContain('local_application: true')
-    expect(dialogSource).toContain('local_workspace_path: projectPath.value')
-    expect(dialogSource).toContain('创建并打开')
+    expect(dialogSource).toContain('directory_mode: directoryMode.value')
+    expect(dialogSource).toContain('initialize_project: initializeProject.value')
+    expect(dialogSource).toContain('local_workspace_path: selectedProjectPath.value')
+    expect(dialogSource).toContain('创建并打开项目')
     expect(dialogSource).not.toContain('ElMessageBox.prompt')
   })
 })

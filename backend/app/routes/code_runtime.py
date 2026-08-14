@@ -110,6 +110,10 @@ class CreateCodeApplicationRequest(BaseModel):
     seed_project_id: Optional[str] = None
     local_application: bool = False
     local_workspace_path: Optional[str] = None
+    directory_mode: Literal["new_directory", "existing_directory"] = "new_directory"
+    initialize_project: bool = False
+    linked_remote_application_id: Optional[str] = None
+    linked_remote_deployment_id: Optional[str] = None
 
 
 class RebindLocalCodeWorkspaceRequest(BaseModel):
@@ -634,17 +638,28 @@ async def create_code_runtime_application(
         authorization, auth_provider = None, None
     else:
         authorization, auth_provider = await _control_plane_request_auth(request, ctx, db)
+    create_kwargs: dict[str, Any] = {
+        "app_name": body.app_name,
+        "app_code": body.app_code,
+        "seed_project_id": body.seed_project_id,
+        "local_application": body.local_application,
+        "local_workspace_path": body.local_workspace_path,
+        "db": db,
+        "ctx": ctx,
+        "authorization_header": authorization,
+        "delegated_context": ctx,
+        "auth_provider": auth_provider,
+    }
+    if body.directory_mode != "new_directory":
+        create_kwargs["directory_mode"] = body.directory_mode
+    if body.initialize_project:
+        create_kwargs["initialize_project"] = True
+    if body.linked_remote_application_id:
+        create_kwargs["linked_remote_application_id"] = body.linked_remote_application_id
+    if body.linked_remote_deployment_id:
+        create_kwargs["linked_remote_deployment_id"] = body.linked_remote_deployment_id
     return await create_code_application(
-        app_name=body.app_name,
-        app_code=body.app_code,
-        seed_project_id=body.seed_project_id,
-        local_application=body.local_application,
-        local_workspace_path=body.local_workspace_path,
-        db=db,
-        ctx=ctx,
-        authorization_header=authorization,
-        delegated_context=ctx,
-        auth_provider=auth_provider,
+        **create_kwargs,
     )
 
 
