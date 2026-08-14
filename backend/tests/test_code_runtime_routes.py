@@ -3977,7 +3977,13 @@ async def test_create_code_session_from_external_app_resume_recent_scopes_to_loc
     assert resumed["id"] != recheck["id"]
 
 
-async def _seed_project_initialization_runtime(db_session):
+async def _seed_project_initialization_runtime(
+    db_session,
+    *,
+    logical_application_id="logical-crm",
+    execution_location="local",
+    binding_status="ready",
+):
     session = AIChatSession(
         public_id="44444444-4444-4444-4444-444444444444",
         tenant_id=7,
@@ -3987,8 +3993,8 @@ async def _seed_project_initialization_runtime(db_session):
         status="active",
         external_application_id="local-crm",
         external_app_name="CRM",
-        logical_application_id="logical-crm",
-        execution_location="local",
+        logical_application_id=logical_application_id,
+        execution_location=execution_location,
         session_purpose="project_initialization",
     )
     db_session.add(session)
@@ -4002,7 +4008,7 @@ async def _seed_project_initialization_runtime(db_session):
         builder_url="https://runtime.test/workspaces/local-crm/builder",
         runtime_service_session_enc=_runtime_service_session_enc(),
         runtime_session_id="runtime-project-init",
-        status="ready",
+        status=binding_status,
     )
     db_session.add(binding)
     await db_session.commit()
@@ -4039,7 +4045,10 @@ async def test_project_initialization_dispatch_sends_read_only_prompt_and_marks_
 
     assert result["state"] == "sent"
     assert result["session_id"] == session.public_id
-    assert result["client_message_id"].startswith("msg_project_init_")
+    expected_digest = hashlib.sha256(
+        f"project_initialization:logical-crm:local:s{session.id}".encode("utf-8")
+    ).hexdigest()[:32]
+    assert result["client_message_id"] == f"msg_project_init_{expected_digest}"
     assert runtime_calls[0]["method"] == "POST"
     assert runtime_calls[0]["path"] == "/api/agent/sessions/runtime-project-init/messages"
     message = runtime_calls[0]["body"]
@@ -4059,6 +4068,96 @@ async def test_project_initialization_dispatch_sends_read_only_prompt_and_marks_
     stored = await db_session.get(AIChatSession, session.id)
     assert stored.initialization_task_key == result["client_message_id"]
     assert stored.initialization_task_state == "sent"
+
+
+@pytest.mark.asyncio
+async def test_project_initialization_dispatch_treats_completed_task_as_already_sent(
+    db_session,
+    monkeypatch,
+):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import dispatch_project_initialization
+
+    session, _binding = await _seed_project_initialization_runtime(db_session)
+    session.initialization_task_key = "msg_project_init_completed_task"
+    session.initialization_task_state = "completed"
+    await db_session.commit()
+
+    async def unexpected_runtime_send(*_args, **_kwargs):
+        raise AssertionError("completed project initialization must not send again")
+
+    monkeypatch.setattr(code_runtime_routes, "_runtime_json_request_for_session", unexpected_runtime_send)
+
+    result = await dispatch_project_initialization(session.public_id, _request(), _ctx(), db_session)
+
+    assert result == {
+        "state": "already_sent",
+        "session_id": session.public_id,
+        "client_message_id": "msg_project_init_completed_task",
+    }
+    stored = await db_session.get(AIChatSession, session.id)
+    assert stored.initialization_task_key == "msg_project_init_completed_task"
+    assert stored.initialization_task_state == "completed"
+
+
+@pytest.mark.asyncio
+async def test_project_initialization_dispatch_requires_ready_runtime_binding(
+    db_session,
+    monkeypatch,
+):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import dispatch_project_initialization
+
+    session, _binding = await _seed_project_initialization_runtime(
+        db_session,
+        binding_status="pending",
+    )
+
+    async def unexpected_runtime_send(*_args, **_kwargs):
+        raise AssertionError("a non-ready binding must not send a runtime message")
+
+    monkeypatch.setattr(code_runtime_routes, "_runtime_json_request_for_session", unexpected_runtime_send)
+
+    result = await dispatch_project_initialization(session.public_id, _request(), _ctx(), db_session)
+
+    assert result["state"] == "retryable_failed"
+    stored = await db_session.get(AIChatSession, session.id)
+    assert stored.initialization_task_state == "retryable_failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("logical_application_id", "execution_location"),
+    [
+        (None, "local"),
+        ("logical-crm", "remote"),
+    ],
+)
+async def test_project_initialization_dispatch_requires_local_logical_application_identity(
+    db_session,
+    monkeypatch,
+    logical_application_id,
+    execution_location,
+):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import dispatch_project_initialization
+
+    session, _binding = await _seed_project_initialization_runtime(
+        db_session,
+        logical_application_id=logical_application_id,
+        execution_location=execution_location,
+    )
+
+    async def unexpected_runtime_send(*_args, **_kwargs):
+        raise AssertionError("an invalid initialization identity must not send a runtime message")
+
+    monkeypatch.setattr(code_runtime_routes, "_runtime_json_request_for_session", unexpected_runtime_send)
+
+    result = await dispatch_project_initialization(session.public_id, _request(), _ctx(), db_session)
+
+    assert result["state"] == "retryable_failed"
+    stored = await db_session.get(AIChatSession, session.id)
+    assert stored.initialization_task_state == "retryable_failed"
 
 
 @pytest.mark.asyncio
@@ -4134,6 +4233,40 @@ async def test_project_initialization_dispatch_preserves_session_after_retryable
         failed["client_message_id"],
         failed["client_message_id"],
     ]
+
+
+@pytest.mark.asyncio
+async def test_open_code_runtime_session_returns_project_initialization_purpose(monkeypatch):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import open_code_runtime_session
+
+    session = SimpleNamespace(
+        id=42,
+        app_id=None,
+        external_application_id="local-crm",
+        session_purpose="project_initialization",
+    )
+
+    async def fake_resolve(*_args, **_kwargs):
+        return session
+
+    async def fake_open_code_session(*_args, **_kwargs):
+        return {"ok": True}
+
+    class FakeDB:
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+    monkeypatch.setattr(code_runtime_routes, "resolve_code_session", fake_resolve)
+    monkeypatch.setattr(code_runtime_routes, "_control_plane_request_auth", lambda *_args: (None, None))
+    monkeypatch.setattr(code_runtime_routes, "open_code_session", fake_open_code_session)
+
+    result = await open_code_runtime_session("s16", _request(), _ctx(), FakeDB())
+
+    assert result["session_purpose"] == "project_initialization"
 
 
 @pytest.mark.asyncio

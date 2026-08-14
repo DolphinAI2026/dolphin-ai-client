@@ -94,6 +94,10 @@
         <span>{{ errorMessage }}</span>
         <button type="button" @click="retryFailedSession">重试</button>
       </div>
+      <div v-if="projectInitializationRetrySessionRef" class="code-initialization-toast" role="status">
+        <span>{{ projectInitializationRetryMessage }}</span>
+        <button type="button" @click="retryProjectInitialization">重试</button>
+      </div>
       <div v-if="frameSwitching" class="code-frame-interaction-guard">
         <div class="code-switching" aria-live="polite">正在切换 Code 工作台...</div>
       </div>
@@ -153,6 +157,7 @@ import {
   type ShellFrameEndpoint,
 } from './codeShellProtocol'
 import { createCodeAgentActivationCoordinator } from './codeAgentActivation'
+import { createProjectInitializationDispatcher } from './codeProjectInitialization'
 
 const route = useRoute()
 const router = useRouter()
@@ -183,7 +188,9 @@ let runtimeAuthRecoveryPromise: Promise<void> | null = null
 const agentActivationCoordinator = createCodeAgentActivationCoordinator()
 let openInFlightKey = ''
 let runtimeAuthInvalidFrameKey = ''
-const projectInitializationDispatchesInFlight = new Set<string>()
+const projectInitializationDispatcher = createProjectInitializationDispatcher()
+const projectInitializationRetrySessionRef = projectInitializationDispatcher.retrySessionRef
+const projectInitializationRetryMessage = projectInitializationDispatcher.retryMessage
 let pendingReadyTimer: {
   handle: number
   requestId: number
@@ -248,21 +255,12 @@ function currentRuntimeAgentId(): string {
   return String(raw || '').trim()
 }
 
-function isProjectInitializationRoute(): boolean {
-  const raw = Array.isArray(route.query.projectInitialization)
-    ? route.query.projectInitialization[0]
-    : route.query.projectInitialization
-  return raw === '1'
+function dispatchProjectInitialization(frame: CodeFrame) {
+  projectInitializationDispatcher.dispatch(frame)
 }
 
-function dispatchProjectInitialization(sessionRef: string) {
-  if (!isProjectInitializationRoute() || projectInitializationDispatchesInFlight.has(sessionRef)) return
-  projectInitializationDispatchesInFlight.add(sessionRef)
-  void codeRuntimeApi.dispatchProjectInitialization(sessionRef)
-    .catch(() => undefined)
-    .finally(() => {
-      projectInitializationDispatchesInFlight.delete(sessionRef)
-    })
+function retryProjectInitialization() {
+  projectInitializationDispatcher.retry(frames.value)
 }
 
 function currentCodeRouteLocation(): CodeFrameRouteLocation {
@@ -527,6 +525,12 @@ async function openCurrentSession() {
     )
     if (openedResult.status === 'stale' || !isCurrentRequest()) return
     const opened = openedResult.value
+    projectInitializationDispatcher.rememberSessionPurpose(
+      opened.session_purpose,
+      sessionRef,
+      opened.session_id,
+      opened.route_id,
+    )
     stopOpenStatusPolling()
     if (opened.external_application_id.startsWith('local-')) {
       localWorkspaceOpening.value = true
@@ -893,7 +897,7 @@ function onShellMessage(event: MessageEvent) {
       frameLifecycle.value = promoteReadyCodeFrame(previousState, frame.key)
       if (frameLifecycle.value === previousState) return
       commitPendingCodeApplicationLocationPreferenceByShellSessionRef(frame.sessionRef)
-      dispatchProjectInitialization(frame.sessionRef)
+      dispatchProjectInitialization(frame)
       clearPendingReadyTimer()
       errorMessage.value = ''
       resetWorkspaceOpening()
@@ -903,7 +907,10 @@ function onShellMessage(event: MessageEvent) {
 
     // 沙箱仍保留时，活动 iframe 也可能重载 Builder 文档；新文档初始为
     // 未激活状态，需要重放宿主状态才能恢复输入。
-    if (frame.phase === 'active') void nextTick(publishCodeFrameShellState)
+    if (frame.phase === 'active') {
+      dispatchProjectInitialization(frame)
+      void nextTick(publishCodeFrameShellState)
+    }
     return
   }
 
@@ -1283,6 +1290,7 @@ onBeforeUnmount(() => {
 }
 
 .code-error-toast,
+.code-initialization-toast,
 .code-switching {
   position: absolute;
   z-index: 4;
@@ -1305,6 +1313,46 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.code-initialization-toast {
+  position: absolute;
+  z-index: 4;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(520px, calc(100% - 48px));
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid var(--warning, #d99b13);
+  border-radius: var(--r-2, 6px);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm, 0 4px 14px rgba(15, 23, 42, 0.08));
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.code-initialization-toast span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-initialization-toast button {
+  height: 22px;
+  flex: 0 0 auto;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
 }
 
 .code-error-toast span {

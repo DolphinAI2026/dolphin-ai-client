@@ -907,6 +907,9 @@ async def open_code_runtime_session(
         return {
             **result,
             **_resolved_code_sandbox_cache_config(),
+            "session_purpose": str(
+                getattr(session, "session_purpose", "standard") or "standard"
+            ),
         }
 
 

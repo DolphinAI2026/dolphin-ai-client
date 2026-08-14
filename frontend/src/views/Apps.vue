@@ -835,14 +835,7 @@ async function openCodeApplicationLocation(
       shellSessionRef,
     )
     window.dispatchEvent(new CustomEvent('code-rail-refresh'))
-    if (sessionPurpose === 'project_initialization') {
-      router.push({
-        path: `/code/${shellSessionRef}`,
-        query: { projectInitialization: '1' },
-      })
-    } else {
-      router.push(`/code/${shellSessionRef}`)
-    }
+    router.push(`/code/${shellSessionRef}`)
   } catch (error: any) {
     if (showCodeApplicationOpenError(app, executionLocation, error)) return
     ElMessage.error(error?.response?.data?.detail || error?.message || '创建 Code 会话失败')
