@@ -190,6 +190,7 @@
                 :preferred-location="preferredCodeApplicationLocation(app)"
                 :opening="openingCodeApplicationId === String(app.id)"
                 @open="location => openCodeApplicationLocation(app, location)"
+                @recover="location => showCodeApplicationRecovery(app, location)"
               />
               <button v-else class="apps-mini-action" type="button" @click="openDialog(app)">
                 <AppIcon name="message" :size="13" />
@@ -266,6 +267,7 @@
                 :preferred-location="preferredCodeApplicationLocation(app)"
                 :opening="openingCodeApplicationId === String(app.id)"
                 @open="location => openCodeApplicationLocation(app, location)"
+                @recover="location => showCodeApplicationRecovery(app, location)"
               />
               <button v-else class="apps-mini-action primary" type="button" @click="openDialog(app)">
                 <AppIcon name="message" :size="13" />
@@ -319,6 +321,17 @@
           />
         </div>
       </section>
+
+      <CodeApplicationRecoveryPanel
+        v-if="isCodeMode && codeApplicationRecovery"
+        :state="codeApplicationRecovery.state"
+        :original-location="codeApplicationRecovery.originalLocation"
+        :alternative-location="codeApplicationRecovery.alternativeLocation"
+        :opening="openingCodeApplicationId === String(codeApplicationRecovery.application.id)"
+        @retry="retryCodeApplicationRecovery"
+        @open-other="openCodeApplicationRecoveryAlternative"
+        @back="closeCodeApplicationRecovery"
+      />
     </main>
 
     <LocalCodeApplicationDialog
@@ -468,6 +481,7 @@ import BaseBadge from '@/components/BaseBadge.vue'
 import BaseTag from '@/components/BaseTag.vue'
 import AddCodeApplicationMenu from '@/components/code/AddCodeApplicationMenu.vue'
 import CodeApplicationActions from '@/components/code/CodeApplicationActions.vue'
+import CodeApplicationRecoveryPanel, { type CodeApplicationRecoveryState } from '@/components/code/CodeApplicationRecoveryPanel.vue'
 import LocalCodeApplicationDialog from '@/components/code/LocalCodeApplicationDialog.vue'
 import {
   codeApplicationAssociationLabel,
@@ -509,6 +523,12 @@ const localApplicationDirectoryMode = ref<LocalApplicationDirectoryMode>('new_di
 const codeLocationFilter = ref<CodeApplicationLocationFilter>('all')
 const codeDeploymentId = ref(typeof window === 'undefined' ? 'web' : window.location.origin)
 const openingCodeApplicationId = ref('')
+const codeApplicationRecovery = ref<{
+  application: MergedApplication
+  state: CodeApplicationRecoveryState
+  originalLocation: CodeExecutionLocation
+  alternativeLocation: CodeExecutionLocation | null
+} | null>(null)
 const handledCodeCreateIntent = ref('')
 let refreshAppsSeq = 0
 
@@ -773,17 +793,21 @@ async function openCodeApplicationLocation(app: MergedApplication, executionLoca
   const location = unified[executionLocation]
   const externalApplicationId = String(location?.external_application_id || '').trim()
   if (!externalApplicationId) {
-    ElMessage.warning('所选位置缺少 applicationId')
+    showCodeApplicationRecovery(app, executionLocation)
     return
   }
   if (location?.availability !== 'ready') {
-    ElMessage.warning(executionLocation === 'local' ? '本机位置当前不可用' : '远程位置当前不可用')
+    showCodeApplicationRecovery(app, executionLocation)
     return
   }
   openingCodeApplicationId.value = String(app.id)
   try {
     const created = await codeRuntimeApi.createSessionFromExternalApp({
+      logical_application_id: unified.logical_application_id,
       external_application_id: location.external_application_id,
+      execution_location: executionLocation,
+      session_policy: 'resume_recent',
+      session_purpose: 'standard',
       app_name: app.app_name,
       app_code: app.app_code,
     })
@@ -795,10 +819,63 @@ async function openCodeApplicationLocation(app: MergedApplication, executionLoca
     window.dispatchEvent(new CustomEvent('code-rail-refresh'))
     router.push(`/code/${created.public_id}`)
   } catch (error: any) {
+    if (showCodeApplicationOpenError(app, executionLocation, error)) return
     ElMessage.error(error?.response?.data?.detail || error?.message || '创建 Code 会话失败')
   } finally {
     openingCodeApplicationId.value = ''
   }
+}
+
+function codeApplicationRecoveryState(app: MergedApplication, originalLocation: CodeExecutionLocation): CodeApplicationRecoveryState {
+  const unified = asUnifiedCodeApplication(app)
+  const alternativeLocation = originalLocation === 'local' ? 'remote' : 'local'
+  const alternativeReady = unified[alternativeLocation]?.availability === 'ready'
+  const allUnavailable = (['local', 'remote'] as const).every(location => unified[location]?.availability !== 'ready')
+  if (preferredCodeApplicationLocation(app) === originalLocation && alternativeReady) return 'remembered_unavailable'
+  if (allUnavailable) return 'all_unavailable'
+  return originalLocation === 'local' ? 'local_missing' : 'remote_unavailable'
+}
+
+function showCodeApplicationRecovery(app: MergedApplication, originalLocation: CodeExecutionLocation) {
+  const unified = asUnifiedCodeApplication(app)
+  const alternativeLocation = originalLocation === 'local' ? 'remote' : 'local'
+  codeApplicationRecovery.value = {
+    application: app,
+    state: codeApplicationRecoveryState(app, originalLocation),
+    originalLocation,
+    alternativeLocation: unified[alternativeLocation]?.availability === 'ready' ? alternativeLocation : null,
+  }
+}
+
+function closeCodeApplicationRecovery() { codeApplicationRecovery.value = null }
+
+function retryCodeApplicationRecovery() {
+  const recovery = codeApplicationRecovery.value
+  if (recovery) void openCodeApplicationLocation(recovery.application, recovery.originalLocation)
+}
+
+function openCodeApplicationRecoveryAlternative() {
+  const recovery = codeApplicationRecovery.value
+  if (!recovery?.alternativeLocation) return
+  void openCodeApplicationLocation(recovery.application, recovery.alternativeLocation)
+}
+
+function showCodeApplicationOpenError(app: MergedApplication, executionLocation: CodeExecutionLocation, error: any): boolean {
+  const detail = String(error?.response?.data?.detail || error?.message || '')
+  const code = [
+    'CODE_APPLICATION_LOCATION_REQUIRED',
+    'CODE_APPLICATION_LOCATION_UNAVAILABLE',
+    'CODE_APPLICATION_LOCAL_LOCATION_MISSING',
+    'CODE_APPLICATION_REMOTE_LOCATION_UNAVAILABLE',
+    'CODE_APPLICATION_ALL_LOCATIONS_UNAVAILABLE',
+  ].find(candidate => detail.includes(candidate))
+  if (!code) return false
+  if (code === 'CODE_APPLICATION_LOCATION_REQUIRED') {
+    ElMessage.error('应用位置需要重新选择')
+    return true
+  }
+  showCodeApplicationRecovery(app, executionLocation)
+  return true
 }
 
 function openApp(app: MergedApplication) {
@@ -807,7 +884,7 @@ function openApp(app: MergedApplication) {
     const preferred = preferredCodeApplicationLocation(app)
     const openState = resolveCodeApplicationOpenState(unified, preferred)
     if (openState.rememberedUnavailable) {
-      ElMessage.warning(`${preferred === 'local' ? '本机' : '远程'}位置不可用，请主动选择其他位置`)
+      showCodeApplicationRecovery(app, preferred!)
       return
     }
     if (!openState.primaryLocation) {

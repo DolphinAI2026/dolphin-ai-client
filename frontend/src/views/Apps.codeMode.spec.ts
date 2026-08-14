@@ -48,6 +48,22 @@ describe('Apps Code mode entry', () => {
     expect(appsSource).toContain('created.public_id')
   })
 
+  it('opens a selected application location with the complete resumable session contract', () => {
+    expect(appsSource).toContain('logical_application_id: unified.logical_application_id')
+    expect(appsSource).toContain('external_application_id: location.external_application_id')
+    expect(appsSource).toContain('execution_location: executionLocation')
+    expect(appsSource).toContain("session_policy: 'resume_recent'")
+    expect(appsSource).toContain("session_purpose: 'standard'")
+  })
+
+  it('shows location recovery instead of automatically falling back from an unavailable preference', () => {
+    expect(appsSource).toContain('CodeApplicationRecoveryPanel')
+    expect(appsSource).toContain('showCodeApplicationRecovery')
+    expect(appsSource).toContain('@recover="location => showCodeApplicationRecovery(app, location)"')
+    expect(appsSource).toContain('@open-other="openCodeApplicationRecoveryAlternative"')
+    expect(appsSource).not.toContain('请主动选择其他位置')
+  })
+
   it('disables every location action and rejects emits while opening', () => {
     expect(actionsSource).toContain(':disabled="actionOpening"')
     expect(actionsSource).toContain('if (!canOpenCodeApplicationLocation')

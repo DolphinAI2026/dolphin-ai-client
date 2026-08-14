@@ -53,6 +53,19 @@ describe('CodeConversationPage', () => {
     expect(pageSource).toContain('frame.key')
   })
 
+  it('commits only the promoted pending shell preference after trusted readiness', () => {
+    expect(pageSource).toContain('commitPendingCodeApplicationLocationPreferenceByShellSessionRef')
+    expect(pageSource).toContain('promoteReadyCodeFrame(previousState, frame.key)')
+    expect(pageSource).toContain('commitPendingCodeApplicationLocationPreferenceByShellSessionRef(frame.sessionRef)')
+  })
+
+  it('discards only the pending shell preference on open failure, timeout, sandbox failure, or exit', () => {
+    expect(pageSource).toContain('discardPendingCodeApplicationLocationPreferenceByShellSessionRef')
+    expect(pageSource).toContain('discardPendingCodeApplicationLocationPreferenceByShellSessionRef(previousState.request?.sessionRef')
+    expect(pageSource).toContain('discardPendingCodeApplicationLocationPreferenceByShellSessionRef(pending.sessionRef)')
+    expect(pageSource).toContain('onBeforeUnmount')
+  })
+
   it('replays the current shell state when an active sandbox reports builder.ready again', () => {
     const readyHandlerSource = pageSource.slice(
       pageSource.indexOf("if (message.type === 'builder.ready')"),

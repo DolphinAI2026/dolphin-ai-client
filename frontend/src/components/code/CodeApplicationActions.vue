@@ -14,8 +14,8 @@
       <button
         class="apps-mini-action primary"
         type="button"
-        :disabled="!primaryLocation || primaryUnavailable || actionOpening"
-        @click="primaryLocation && emitOpen(primaryLocation)"
+        :disabled="!primaryLocation || actionOpening"
+        @click="requestPrimaryOpen"
       >
         {{ primaryLabel }}
       </button>
@@ -58,7 +58,10 @@ const props = defineProps<{
   preferredLocation?: CodeExecutionLocation | null
   opening?: boolean
 }>()
-const emit = defineEmits<{ open: [location: CodeExecutionLocation] }>()
+const emit = defineEmits<{
+  open: [location: CodeExecutionLocation]
+  recover: [location: CodeExecutionLocation]
+}>()
 const openingRequested = ref(false)
 
 const existingLocations = computed(() => (['local', 'remote'] as const)
@@ -97,6 +100,16 @@ function emitOpen(location: CodeExecutionLocation) {
   queueMicrotask(() => {
     if (!props.opening) openingRequested.value = false
   })
+}
+
+function requestPrimaryOpen() {
+  const location = primaryLocation.value
+  if (!location || actionOpening.value) return
+  if (primaryUnavailable.value) {
+    emit('recover', location)
+    return
+  }
+  emitOpen(location)
 }
 </script>
 

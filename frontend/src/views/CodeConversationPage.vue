@@ -119,6 +119,10 @@ import { codeRuntimeApi } from '@/api/codeRuntime'
 import { nextAgentQuery } from '@/composables/railSessions'
 import AppIcon from '@/components/common/AppIcon.vue'
 import CodeWorkspaceOpening from '@/components/code/CodeWorkspaceOpening.vue'
+import {
+  commitPendingCodeApplicationLocationPreferenceByShellSessionRef,
+  discardPendingCodeApplicationLocationPreferenceByShellSessionRef,
+} from '@/components/code/codeApplicationLocationPreference'
 import { pickDirectory } from '@/utils/desktop'
 import type { CodeWorkspaceOpenPhase } from '@/api/codeRuntime'
 import {
@@ -423,6 +427,7 @@ async function openCurrentSession() {
   openInFlightKey = openKey
   const requestSeq = ++openRequestSeq
   runtimeAuthInvalidFrameKey = ''
+  discardPendingCodeApplicationLocationPreferenceForLeavingShell()
   frameLifecycle.value = beginCodeFrameOpen(frameLifecycle.value, {
     requestId: requestSeq,
     sessionRef,
@@ -625,11 +630,22 @@ function failCurrentFrameOpen(failure: CodeFrameFailureInput): boolean {
   const previousState = frameLifecycle.value
   const nextState = failCodeFrameOpen(previousState, failure)
   if (nextState === previousState) return false
+  discardPendingCodeApplicationLocationPreferenceByShellSessionRef(previousState.request?.sessionRef || '')
   clearPendingReadyTimer()
   frameLifecycle.value = nextState
   errorMessage.value = failure.message
   restoreActiveRouteAfterFailure()
   return true
+}
+
+function discardPendingCodeApplicationLocationPreferenceForLeavingShell() {
+  const pending = frameLifecycle.value.pending
+  if (pending) {
+    discardPendingCodeApplicationLocationPreferenceByShellSessionRef(pending.sessionRef)
+    return
+  }
+  const request = frameLifecycle.value.request
+  if (request) discardPendingCodeApplicationLocationPreferenceByShellSessionRef(request.sessionRef)
 }
 
 function retryFailedSession() {
@@ -771,6 +787,7 @@ function closeHostedActivityDrawer() {
 }
 
 function resetCodeFrames() {
+  discardPendingCodeApplicationLocationPreferenceForLeavingShell()
   resetWorkspaceOpening()
   clearPendingReadyTimer()
   clearHostedActivityModal()
@@ -814,6 +831,7 @@ function onShellMessage(event: MessageEvent) {
       const previousState = frameLifecycle.value
       frameLifecycle.value = promoteReadyCodeFrame(previousState, frame.key)
       if (frameLifecycle.value === previousState) return
+      commitPendingCodeApplicationLocationPreferenceByShellSessionRef(frame.sessionRef)
       clearPendingReadyTimer()
       errorMessage.value = ''
       resetWorkspaceOpening()
@@ -899,6 +917,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  discardPendingCodeApplicationLocationPreferenceForLeavingShell()
   stopOpenStatusPolling()
   clearPendingReadyTimer()
   publishCodeFrameDeactivation()
