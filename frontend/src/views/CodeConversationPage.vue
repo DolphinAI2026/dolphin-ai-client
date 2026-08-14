@@ -98,6 +98,9 @@
         <span>{{ projectInitializationRetryMessage }}</span>
         <button type="button" @click="retryProjectInitialization">重试</button>
       </div>
+      <div v-if="sessionLocationSummary" class="code-session-location-summary" aria-live="polite">
+        {{ sessionLocationSummary }}
+      </div>
       <div v-if="frameSwitching" class="code-frame-interaction-guard">
         <div class="code-switching" aria-live="polite">正在切换 Code 工作台...</div>
       </div>
@@ -121,6 +124,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { codeRuntimeApi } from '@/api/codeRuntime'
 import { nextAgentQuery } from '@/composables/railSessions'
+import { findCodeRailHistoryApp, formatCodeRailLocationSummary } from '@/components/v2/codeRailHistory'
 import AppIcon from '@/components/common/AppIcon.vue'
 import CodeWorkspaceOpening from '@/components/code/CodeWorkspaceOpening.vue'
 import {
@@ -180,10 +184,12 @@ const localWorkspaceOpening = ref(false)
 const workspaceOpeningPhase = ref<CodeWorkspaceOpenPhase>('checking_project')
 const workspaceOpeningStartedAt = ref(Date.now())
 const workspaceRecoveryBusy = ref(false)
+const sessionLocationSummary = ref('')
 let railRefreshTimer: number | undefined
 let openStatusTimer: number | undefined
 let openStatusPollingSeq = 0
 let openRequestSeq = 0
+let sessionLocationRequestSeq = 0
 let runtimeAuthRecoveryPromise: Promise<void> | null = null
 const agentActivationCoordinator = createCodeAgentActivationCoordinator()
 let openInFlightKey = ''
@@ -434,6 +440,8 @@ async function openCurrentSession() {
   clearPendingReadyTimer()
   if (isCreateApplicationRoute.value) {
     openRequestSeq += 1
+    sessionLocationRequestSeq += 1
+    sessionLocationSummary.value = ''
     resetCodeFrames()
     loading.value = false
     errorMessage.value = ''
@@ -442,12 +450,15 @@ async function openCurrentSession() {
   const sessionRef = currentSessionRef()
   if (!sessionRef) {
     openRequestSeq += 1
+    sessionLocationRequestSeq += 1
+    sessionLocationSummary.value = ''
     openInFlightKey = ''
     runtimeAuthInvalidFrameKey = ''
     errorMessage.value = '缺少 Code 会话'
     resetCodeFrames()
     return
   }
+  void loadSessionLocationSummary(sessionRef)
   const routeLocation = currentCodeRouteLocation()
   const openKey = `${sessionRef}:${codeRouteLocationKey(routeLocation)}`
   if (loading.value && openInFlightKey === openKey) return
@@ -604,6 +615,25 @@ async function openCurrentSession() {
       loading.value = false
       if (openInFlightKey === openKey) openInFlightKey = ''
     }
+  }
+}
+
+async function loadSessionLocationSummary(sessionRef: string) {
+  const requestSeq = ++sessionLocationRequestSeq
+  sessionLocationSummary.value = ''
+  try {
+    const history = await codeRuntimeApi.listRailHistory()
+    if (requestSeq !== sessionLocationRequestSeq) return
+    const app = findCodeRailHistoryApp(history, sessionRef)
+    sessionLocationSummary.value = app
+      ? formatCodeRailLocationSummary(
+        app.execution_location,
+        app.workspace_path,
+        app.environment_name,
+      )
+      : ''
+  } catch {
+    if (requestSeq === sessionLocationRequestSeq) sessionLocationSummary.value = ''
   }
 }
 
@@ -1307,6 +1337,25 @@ onBeforeUnmount(() => {
   color: var(--text-2);
   font-size: 12px;
   line-height: 18px;
+}
+
+.code-session-location-summary {
+  position: absolute;
+  z-index: 3;
+  right: 16px;
+  bottom: 12px;
+  max-width: calc(100% - 32px);
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 16px;
+  overflow: hidden;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .code-error-toast {

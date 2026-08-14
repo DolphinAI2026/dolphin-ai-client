@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createCodeAgentActivationCoordinator } from './codeAgentActivation'
 import { awaitCurrentCodeFrameOpenRequest } from './codeFrameLifecycle'
+import { formatCodeRailLocationSummary } from '@/components/v2/codeRailHistory'
 import pageSource from './CodeConversationPage.vue?raw'
 import projectInitializationSource from './codeProjectInitialization.ts?raw'
 
@@ -13,6 +14,21 @@ function deferred<T>() {
 }
 
 describe('CodeConversationPage', () => {
+  it('formats the session location without exposing an absolute path', () => {
+    expect(formatCodeRailLocationSummary('local', '/srv/private/customer-crm')).toBe('本机 · customer-crm')
+    expect(formatCodeRailLocationSummary('local', 'C:\\Users\\alice\\customer-crm\\')).toBe('本机 · customer-crm')
+    expect(formatCodeRailLocationSummary('remote', null, '开发环境')).toBe('远程 · 开发环境')
+    expect(formatCodeRailLocationSummary('remote')).toBe('远程 · 远程环境')
+  })
+
+  it('shows a fixed session location summary without exposing local paths', () => {
+    expect(pageSource).toContain('sessionLocationSummary')
+    expect(pageSource).toContain('loadSessionLocationSummary')
+    expect(pageSource).toContain('formatCodeRailLocationSummary')
+    expect(pageSource).toContain('codeRuntimeApi.listRailHistory')
+    expect(pageSource).toContain('sessionLocationSummary.value =')
+  })
+
   it('opens a Dolphin Code session and renders the d-ai-code iframe', () => {
     expect(pageSource).toContain("from '@/api/codeRuntime'")
     expect(pageSource).toContain('codeRuntimeApi.openSession')

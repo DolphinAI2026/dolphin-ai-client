@@ -10,6 +10,7 @@ export const CODE_RUNTIME_ACTIVATION_RETRY_DELAYS_MS = [] as const
 export const CODE_RUNTIME_WORKSPACE_OPEN_TIMEOUT_MS = 690_000
 
 export type CodeExecutionLocation = 'local' | 'remote'
+export type CodeRailHistorySource = CodeExecutionLocation | 'all'
 export type CodeSessionPolicy = 'resume_recent' | 'create_new'
 export type CodeSessionPurpose = 'standard' | 'project_initialization' | 'project_recheck'
 export type CodeLocationAvailability = 'ready' | 'missing' | 'unreadable' | 'unavailable'
@@ -152,8 +153,12 @@ export interface CodeAgentSessionRecord {
 export interface CodeRailHistoryApp {
   shell_session_id: string
   external_application_id: string
+  logical_application_id: string
+  execution_location: CodeExecutionLocation
   app_name?: string | null
   app_code?: string | null
+  workspace_path?: string | null
+  environment_name?: string | null
   runtime_session_id?: string | null
   sessions: CodeAgentSessionRecord[]
   error?: string | null
@@ -268,7 +273,7 @@ export const codeRuntimeApi = {
       { local_workspace_path: localWorkspacePath },
     )
   },
-  listRailHistory(source: CodeApplicationSource = 'remote', scope: 'user' | 'tenant' = 'user') {
+  listRailHistory(source: CodeRailHistorySource = 'all', scope: 'user' | 'tenant' = 'user') {
     return request.get<any, CodeRailHistoryResponse>('/code/rail/history', {
       params: { source, scope },
       ...(source === 'local' ? {} : { headers: controlPlaneCodeAuthorization() }),

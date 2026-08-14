@@ -4650,11 +4650,98 @@ async def test_list_code_runtime_rail_history_includes_shell_session_without_bin
     assert app == {
         "shell_session_id": app["shell_session_id"],
         "external_application_id": "crm",
+        "logical_application_id": "legacy:crm",
+        "execution_location": "remote",
         "app_name": "CRM",
         "app_code": "crm",
+        "environment_name": "远程环境",
         "runtime_session_id": None,
         "sessions": [],
     }
+
+
+@pytest.mark.asyncio
+async def test_list_code_runtime_rail_history_returns_logical_application_location_contract(db_session):
+    from app.routes.code_runtime import list_code_runtime_rail_history
+
+    db_session.add_all([
+        AIChatSession(
+            tenant_id=7,
+            user_id=11,
+            title="本机 CRM",
+            mode="code",
+            status="active",
+            external_application_id="local-crm",
+            external_app_name="CRM",
+            logical_application_id="logical-crm",
+            execution_location="local",
+        ),
+        AIChatSession(
+            tenant_id=7,
+            user_id=11,
+            title="远程 CRM",
+            mode="code",
+            status="active",
+            external_application_id="remote-crm",
+            external_app_name="CRM",
+            logical_application_id="logical-crm",
+            execution_location="remote",
+        ),
+        AIChatSession(
+            tenant_id=7,
+            user_id=11,
+            title="旧本机应用",
+            mode="code",
+            status="active",
+            external_application_id="local-legacy",
+        ),
+    ])
+    await db_session.commit()
+
+    result = await list_code_runtime_rail_history(
+        _request(),
+        _ctx(),
+        db_session,
+        source="all",
+    )
+
+    apps = {app["external_application_id"]: app for app in result["apps"]}
+    assert apps["local-crm"]["logical_application_id"] == "logical-crm"
+    assert apps["local-crm"]["execution_location"] == "local"
+    assert apps["remote-crm"]["logical_application_id"] == "logical-crm"
+    assert apps["remote-crm"]["execution_location"] == "remote"
+    assert apps["local-legacy"]["logical_application_id"] == "legacy:local-legacy"
+    assert apps["local-legacy"]["execution_location"] == "local"
+
+
+def test_rail_history_logical_application_source_contract_accepts_only_history_all():
+    from app.routes.code_runtime import router
+
+    source_fields = {}
+    for route in router.routes:
+        if (
+            route.path not in {"/code/applications", "/code/rail/history"}
+            or "GET" not in route.methods
+        ):
+            continue
+        source_fields[route.path] = next(
+            field for field in route.dependant.query_params if field.name == "source"
+        )
+
+    rail_value, rail_errors = source_fields["/code/rail/history"].validate(
+        "all",
+        {},
+        loc=("query", "source"),
+    )
+    _applications_value, applications_errors = source_fields["/code/applications"].validate(
+        "all",
+        {},
+        loc=("query", "source"),
+    )
+
+    assert rail_value == "all"
+    assert rail_errors is None
+    assert applications_errors
 
 
 @pytest.mark.asyncio
@@ -4807,8 +4894,11 @@ async def test_desktop_rail_history_uses_remote_builder_shells_and_caches_openab
         "apps": [{
             "shell_session_id": remote_shell_id,
             "external_application_id": "remote-crm",
+            "logical_application_id": "legacy:remote-crm",
+            "execution_location": "remote",
             "app_name": "远端 CRM",
             "app_code": "remote_crm",
+            "environment_name": "远程环境",
             "runtime_session_id": None,
             "sessions": [],
         }],
@@ -5078,8 +5168,11 @@ async def test_list_code_runtime_rail_history_returns_opened_app_agent_sessions(
     assert apps_by_external_id["never-opened"] == {
         "shell_session_id": unopened_shell_id,
         "external_application_id": "never-opened",
+        "logical_application_id": "legacy:never-opened",
+        "execution_location": "remote",
         "app_name": "未打开",
         "app_code": None,
+        "environment_name": "远程环境",
         "runtime_session_id": None,
         "sessions": [],
     }

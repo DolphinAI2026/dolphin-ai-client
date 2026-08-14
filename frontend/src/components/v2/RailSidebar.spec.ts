@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import railSidebarSource from './RailSidebar.vue?raw'
 import { railTenantHome } from './RailSidebar.vue'
+import { groupCodeRailHistoryByApplication } from './codeRailHistory'
+import type { CodeRailHistoryResponse } from '@/api/codeRuntime'
 
 describe('RailSidebar brand mark', () => {
   it('uses the Ruijing whale mark in the rail logo', () => {
@@ -28,11 +30,69 @@ describe('RailSidebar product availability', () => {
 // SP2b(2026-06-25): rail 会话统一单一来源 aiChatApi; Code 模式复用同一
 // 会话分组，只是按 mode=code 拉取并路由到 /code。
 describe('RailSidebar unified session source (SP2b)', () => {
+  it('keeps same-name logical applications separate while grouping local and remote locations', () => {
+    const history: CodeRailHistoryResponse = {
+      apps: [
+        {
+          shell_session_id: 'local-shell',
+          external_application_id: 'local-crm',
+          logical_application_id: 'crm-primary',
+          execution_location: 'local',
+          app_name: 'CRM',
+          workspace_path: '/home/user/workspaces/customer-crm',
+          sessions: [],
+        },
+        {
+          shell_session_id: 'remote-shell',
+          external_application_id: 'remote-crm',
+          logical_application_id: 'crm-primary',
+          execution_location: 'remote',
+          app_name: 'CRM',
+          environment_name: '开发环境',
+          sessions: [],
+        },
+        {
+          shell_session_id: 'other-shell',
+          external_application_id: 'other-crm',
+          logical_application_id: 'crm-secondary',
+          execution_location: 'remote',
+          app_name: 'CRM',
+          environment_name: '测试环境',
+          sessions: [],
+        },
+      ],
+    }
+
+    const groups = groupCodeRailHistoryByApplication(history)
+    const primary = groups.find(group => group.logicalApplicationId === 'crm-primary')
+    const secondary = groups.find(group => group.logicalApplicationId === 'crm-secondary')
+
+    expect(groups).toHaveLength(2)
+    expect(primary?.availableLocations).toEqual(['local', 'remote'])
+    expect(primary?.items.map(session => session.locationSummary)).toEqual([
+      '本机 · customer-crm',
+      '远程 · 开发环境',
+    ])
+    expect(primary?.locationSessions.local?.shellSessionId).toBe('local-shell')
+    expect(primary?.locationSessions.remote?.shellSessionId).toBe('remote-shell')
+    expect(secondary?.availableLocations).toEqual(['remote'])
+    expect(secondary?.locationSessions.local).toBeUndefined()
+  })
+
+  it('groups Code history by logical application identity and renders fixed location labels', () => {
+    expect(railSidebarSource).toContain("from './codeRailHistory'")
+    expect(railSidebarSource).toContain('groupCodeRailHistoryByApplication')
+    expect(railSidebarSource).toContain('g.availableLocations')
+    expect(railSidebarSource).toContain('s.locationSummary')
+    expect(railSidebarSource).toContain('g.localShellSessionId')
+    expect(railSidebarSource).toContain('g.remoteShellSessionId')
+  })
+
   it('uses a single aiChatApi session source (no codingApi)', () => {
     expect(railSidebarSource).toContain("from '@/api/aiChat'")
     expect(railSidebarSource).toContain('aiChatApi.listSessions(')
     expect(railSidebarSource).toContain('codeRuntimeApi.listRailHistory')
-    expect(railSidebarSource).toContain('normalizeCodeRailHistory')
+    expect(railSidebarSource).toContain('codeRailHistorySessions')
     expect(railSidebarSource).toContain("sessions.filter(s => s.mode !== 'code')")
     expect(railSidebarSource).not.toContain("from '@/api/coding'")
     expect(railSidebarSource).not.toContain('codingApi.getConversations()')
@@ -46,7 +106,7 @@ describe('RailSidebar unified session source (SP2b)', () => {
   it('delegates normalization + routing to the railSessions composable', () => {
     expect(railSidebarSource).toContain("from '@/composables/railSessions'")
     expect(railSidebarSource).toContain('normalizeAiSessions')
-    expect(railSidebarSource).toContain('normalizeCodeRailHistory')
+    expect(railSidebarSource).toContain('groupCodeRailHistoryByApplication')
     expect(railSidebarSource).toContain('railSessionTarget(')
     expect(railSidebarSource).toContain('nextAgentQuery')
   })
@@ -78,7 +138,7 @@ describe('RailSidebar unified session source (SP2b)', () => {
   })
 
   it('keeps the application-scoped sessions returned by Code rail history', () => {
-    expect(railSidebarSource).toContain('codeRuntimeApi.listRailHistory(codeApplicationSource.value)')
+    expect(railSidebarSource).toContain('codeRuntimeApi.listRailHistory()')
     expect(railSidebarSource).toContain('codeRailHistory.value = history')
     expect(railSidebarSource).not.toContain('hydrateCodeRailHistory')
     expect(railSidebarSource).not.toContain('codeRuntimeApi.listAgentSessions')

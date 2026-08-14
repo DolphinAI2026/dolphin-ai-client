@@ -10,6 +10,7 @@ import time
 import zlib
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Annotated, Any, Literal, Optional
 from urllib.parse import parse_qsl, quote, unquote_plus, urlsplit
 
@@ -85,7 +86,7 @@ from app.config import APP_VERSION, settings
 from app import runtime
 from app.database import AsyncSessionLocal, get_db
 from app.deps import AuthContext, get_auth_context
-from app.models import Application, User
+from app.models import Application, RegisteredWorkspace, User
 from app.models.tenant import Tenant
 from app.models.ai_chat import (
     AIChatSession,
@@ -569,6 +570,12 @@ async def _desktop_remote_rail_history(
             session.external_application_id = external_application_id
             session.external_app_name = str(app.get("app_name") or "").strip() or None
             session.external_app_code = str(app.get("app_code") or "").strip() or None
+        logical_application_id = str(app.get("logical_application_id") or "").strip()
+        if logical_application_id:
+            session.logical_application_id = logical_application_id
+        execution_location = str(app.get("execution_location") or "").strip().lower()
+        if execution_location in {"local", "remote"}:
+            session.execution_location = execution_location
         local_sessions[shell_id] = session
     await db.flush()
 
@@ -599,11 +606,19 @@ async def _desktop_remote_rail_history(
         if not shell_id or session is None:
             continue
         binding = bindings_by_session_id.get(int(session.id))
+        location = derive_session_location(session)
+        if location is None:
+            continue
         apps.append({
             "shell_session_id": shell_id,
             "external_application_id": session.external_application_id or "",
+            "logical_application_id": location["logical_application_id"],
+            "execution_location": location["execution_location"],
             "app_name": session.external_app_name or session.title,
             "app_code": session.external_app_code,
+            "environment_name": str(
+                app.get("environment_name") or app.get("environmentName") or "远程环境"
+            ).strip() or "远程环境",
             "runtime_session_id": binding.runtime_session_id if binding else None,
             "sessions": [],
         })
@@ -1573,7 +1588,7 @@ async def list_code_runtime_rail_history(
     request: Request,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    source: Literal["local", "remote"] = "remote",
+    source: Literal["local", "remote", "all"] = "remote",
     scope: Literal["user", "tenant"] = "user",
 ):
     started = time.monotonic()
@@ -1581,7 +1596,7 @@ async def list_code_runtime_rail_history(
     if tenant_history and not _can_view_tenant_code_history(ctx):
         raise HTTPException(status_code=403, detail="仅租户管理员可查看租户级 Code 历史")
     if (
-        source == "remote"
+        source in {"remote", "all"}
         and runtime.is_desktop()
         and ctx.user.account_source == "control_plane"
     ):
@@ -1599,7 +1614,8 @@ async def list_code_runtime_rail_history(
             "success",
             time.monotonic() - started,
         )
-        return result
+        if source == "remote":
+            return result
 
     try:
         external_application_id = func.coalesce(
@@ -1664,6 +1680,48 @@ async def list_code_runtime_rail_history(
             )
         ).all()
 
+        locations_by_session_id: dict[int, dict[str, str]] = {}
+        local_external_ids: set[str] = set()
+        for session, binding in rows:
+            external_id = str(
+                (binding.external_application_id if binding else None)
+                or session.external_application_id
+                or ""
+            ).strip()
+            location = derive_session_location(SimpleNamespace(
+                external_application_id=external_id,
+                logical_application_id=session.logical_application_id,
+                execution_location=session.execution_location,
+            ))
+            if location is None:
+                continue
+            locations_by_session_id[int(session.id)] = location
+            if location["execution_location"] == "local" and external_id:
+                local_external_ids.add(external_id)
+
+        workspace_paths: dict[str, str] = {}
+        if local_external_ids:
+            workspace_scope = [RegisteredWorkspace.tenant_id == ctx.tenant_id]
+            if not tenant_history:
+                workspace_scope.append(RegisteredWorkspace.user_id == ctx.user.id)
+            workspace_rows = (
+                await db.execute(
+                    select(RegisteredWorkspace)
+                    .where(
+                        *workspace_scope,
+                        RegisteredWorkspace.apaas_app_id.in_(local_external_ids),
+                    )
+                    .order_by(
+                        RegisteredWorkspace.last_opened_at.desc(),
+                        RegisteredWorkspace.id.desc(),
+                    )
+                )
+            ).scalars().all()
+            for workspace in workspace_rows:
+                external_id = str(workspace.apaas_app_id or "").strip()
+                if external_id and external_id not in workspace_paths:
+                    workspace_paths[external_id] = workspace.abs_path
+
         shell_session_ids = [int(session.id) for session, _binding in rows]
         snapshot_rows = []
         if shell_session_ids:
@@ -1706,15 +1764,26 @@ async def list_code_runtime_rail_history(
                 or session.external_application_id
                 or ""
             ).strip()
+            location = locations_by_session_id.get(int(session.id))
+            if location is None:
+                continue
 
             app: dict[str, Any] = {
                 "shell_session_id": ensure_code_session_public_id(session),
                 "external_application_id": external_id,
+                "logical_application_id": location["logical_application_id"],
+                "execution_location": location["execution_location"],
                 "app_name": session.external_app_name or session.title,
                 "app_code": session.external_app_code,
                 "runtime_session_id": binding.runtime_session_id if binding else None,
                 "sessions": [],
             }
+            if location["execution_location"] == "local":
+                workspace_path = workspace_paths.get(external_id)
+                if workspace_path:
+                    app["workspace_path"] = workspace_path
+            else:
+                app["environment_name"] = "远程环境"
             if tenant_history:
                 app["user_id"] = int(session.user_id)
                 app["user_name"] = user_names.get(int(session.user_id), str(session.user_id))
