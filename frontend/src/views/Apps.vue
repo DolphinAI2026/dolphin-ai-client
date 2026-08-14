@@ -481,13 +481,16 @@ import BaseBadge from '@/components/BaseBadge.vue'
 import BaseTag from '@/components/BaseTag.vue'
 import AddCodeApplicationMenu from '@/components/code/AddCodeApplicationMenu.vue'
 import CodeApplicationActions from '@/components/code/CodeApplicationActions.vue'
-import CodeApplicationRecoveryPanel, { type CodeApplicationRecoveryState } from '@/components/code/CodeApplicationRecoveryPanel.vue'
+import CodeApplicationRecoveryPanel from '@/components/code/CodeApplicationRecoveryPanel.vue'
 import LocalCodeApplicationDialog from '@/components/code/LocalCodeApplicationDialog.vue'
 import {
   codeApplicationAssociationLabel,
   codeApplicationLocationLabel,
   filterUnifiedCodeApplications,
+  resolveCodeApplicationLocationRecovery,
   resolveCodeApplicationOpenState,
+  resolveCodeApplicationShellSessionRef,
+  type CodeApplicationRecoveryState,
   type CodeApplicationLocationFilter,
   type UnifiedCodeApplicationItem,
 } from '@/components/code/codeApplicationLocations'
@@ -811,13 +814,18 @@ async function openCodeApplicationLocation(app: MergedApplication, executionLoca
       app_name: app.app_name,
       app_code: app.app_code,
     })
+    const shellSessionRef = resolveCodeApplicationShellSessionRef(created)
+    if (!shellSessionRef) {
+      ElMessage.error('创建 Code 会话后缺少会话标识')
+      return
+    }
     stageCodeApplicationLocationPreference(
       codePreferenceScope(app),
       executionLocation,
-      created.public_id,
+      shellSessionRef,
     )
     window.dispatchEvent(new CustomEvent('code-rail-refresh'))
-    router.push(`/code/${created.public_id}`)
+    router.push(`/code/${shellSessionRef}`)
   } catch (error: any) {
     if (showCodeApplicationOpenError(app, executionLocation, error)) return
     ElMessage.error(error?.response?.data?.detail || error?.message || '创建 Code 会话失败')
@@ -826,24 +834,23 @@ async function openCodeApplicationLocation(app: MergedApplication, executionLoca
   }
 }
 
-function codeApplicationRecoveryState(app: MergedApplication, originalLocation: CodeExecutionLocation): CodeApplicationRecoveryState {
+function showCodeApplicationRecovery(
+  app: MergedApplication,
+  originalLocation: CodeExecutionLocation,
+  errorCode = '',
+) {
   const unified = asUnifiedCodeApplication(app)
-  const alternativeLocation = originalLocation === 'local' ? 'remote' : 'local'
-  const alternativeReady = unified[alternativeLocation]?.availability === 'ready'
-  const allUnavailable = (['local', 'remote'] as const).every(location => unified[location]?.availability !== 'ready')
-  if (preferredCodeApplicationLocation(app) === originalLocation && alternativeReady) return 'remembered_unavailable'
-  if (allUnavailable) return 'all_unavailable'
-  return originalLocation === 'local' ? 'local_missing' : 'remote_unavailable'
-}
-
-function showCodeApplicationRecovery(app: MergedApplication, originalLocation: CodeExecutionLocation) {
-  const unified = asUnifiedCodeApplication(app)
-  const alternativeLocation = originalLocation === 'local' ? 'remote' : 'local'
+  const recovery = resolveCodeApplicationLocationRecovery(
+    unified,
+    originalLocation,
+    errorCode,
+    preferredCodeApplicationLocation(app),
+  )
   codeApplicationRecovery.value = {
     application: app,
-    state: codeApplicationRecoveryState(app, originalLocation),
+    state: recovery.state,
     originalLocation,
-    alternativeLocation: unified[alternativeLocation]?.availability === 'ready' ? alternativeLocation : null,
+    alternativeLocation: recovery.alternativeLocation,
   }
 }
 
@@ -874,7 +881,7 @@ function showCodeApplicationOpenError(app: MergedApplication, executionLocation:
     ElMessage.error('应用位置需要重新选择')
     return true
   }
-  showCodeApplicationRecovery(app, executionLocation)
+  showCodeApplicationRecovery(app, executionLocation, code)
   return true
 }
 

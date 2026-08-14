@@ -21,8 +21,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { CodeExecutionLocation } from '@/api/codeRuntime'
+import type { CodeApplicationRecoveryState } from './codeApplicationLocations'
 
-export type CodeApplicationRecoveryState = 'local_missing' | 'remote_unavailable' | 'remembered_unavailable' | 'all_unavailable'
 const props = defineProps<{ state: CodeApplicationRecoveryState; originalLocation: CodeExecutionLocation; alternativeLocation?: CodeExecutionLocation | null; opening?: boolean }>()
 const emit = defineEmits<{ retry: []; 'open-other': []; back: [] }>()
 const title = computed(() => props.state === 'local_missing' ? '本机应用目录不可用' : props.state === 'remote_unavailable' ? '远程应用位置暂不可用' : props.state === 'all_unavailable' ? '应用当前位置都不可用' : '已记住的运行位置不可用')

@@ -8,7 +8,10 @@ describe('Apps Code mode entry', () => {
     expect(appsSource).toContain("from '@/api/codeRuntime'")
     expect(appsSource).toContain('isCodeRoutePath(route.path)')
     expect(appsSource).toContain('codeRuntimeApi.createSessionFromExternalApp')
-    expect(appsSource).toContain('`/code/${created.public_id}`')
+    expect(appsSource).toContain('resolveCodeApplicationShellSessionRef')
+    expect(appsSource).toContain('const shellSessionRef = resolveCodeApplicationShellSessionRef(created)')
+    expect(appsSource).toContain('stageCodeApplicationLocationPreference(\n      codePreferenceScope(app),\n      executionLocation,\n      shellSessionRef,')
+    expect(appsSource).toContain('router.push(`/code/${shellSessionRef}`)')
   })
 
   it('refreshes the outer rail after opening a Code application', () => {
@@ -45,7 +48,7 @@ describe('Apps Code mode entry', () => {
     expect(appsSource).toContain('CodeApplicationActions')
     expect(appsSource).toContain('location.external_application_id')
     expect(appsSource).toContain('stageCodeApplicationLocationPreference')
-    expect(appsSource).toContain('created.public_id')
+    expect(appsSource).toContain('shellSessionRef')
   })
 
   it('opens a selected application location with the complete resumable session contract', () => {

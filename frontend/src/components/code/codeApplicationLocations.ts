@@ -176,6 +176,61 @@ export interface CodeApplicationOpenState {
   rememberedUnavailable: boolean
 }
 
+export type CodeApplicationRecoveryState =
+  | 'local_missing'
+  | 'remote_unavailable'
+  | 'remembered_unavailable'
+  | 'all_unavailable'
+
+export interface CodeApplicationLocationRecovery {
+  state: CodeApplicationRecoveryState
+  alternativeLocation: CodeExecutionLocation | null
+}
+
+export function resolveCodeApplicationShellSessionRef(session: {
+  route_id?: unknown
+  public_id?: unknown
+  id?: unknown
+}): string {
+  return stable(session.route_id) || stable(session.public_id) || stable(session.id)
+}
+
+export function resolveCodeApplicationLocationRecovery(
+  application: UnifiedCodeApplicationItem,
+  failedLocation: CodeExecutionLocation,
+  errorCode = '',
+  rememberedLocation: CodeExecutionLocation | null = null,
+): CodeApplicationLocationRecovery {
+  const alternativeLocation = failedLocation === 'local' ? 'remote' : 'local'
+  const alternativeReady = application[alternativeLocation]?.availability === 'ready'
+  if (errorCode === 'CODE_APPLICATION_ALL_LOCATIONS_UNAVAILABLE') {
+    return { state: 'all_unavailable', alternativeLocation: null }
+  }
+  if (errorCode === 'CODE_APPLICATION_LOCAL_LOCATION_MISSING') {
+    return { state: 'local_missing', alternativeLocation: null }
+  }
+  if (errorCode === 'CODE_APPLICATION_REMOTE_LOCATION_UNAVAILABLE') {
+    return { state: 'remote_unavailable', alternativeLocation: null }
+  }
+  if (errorCode === 'CODE_APPLICATION_LOCATION_UNAVAILABLE') {
+    return {
+      state: failedLocation === 'local' ? 'local_missing' : 'remote_unavailable',
+      alternativeLocation: alternativeReady ? alternativeLocation : null,
+    }
+  }
+
+  const allUnavailable = (['local', 'remote'] as const)
+    .every(location => application[location]?.availability !== 'ready')
+  if (rememberedLocation === failedLocation && alternativeReady) {
+    return { state: 'remembered_unavailable', alternativeLocation }
+  }
+  if (allUnavailable) return { state: 'all_unavailable', alternativeLocation: null }
+  return {
+    state: failedLocation === 'local' ? 'local_missing' : 'remote_unavailable',
+    alternativeLocation: null,
+  }
+}
+
 export function resolveCodeApplicationOpenState(
   application: UnifiedCodeApplicationItem,
   preferredLocation: CodeExecutionLocation | null,

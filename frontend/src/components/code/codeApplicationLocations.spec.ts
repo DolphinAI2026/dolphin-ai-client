@@ -4,6 +4,8 @@ import {
   canOpenCodeApplicationLocation,
   filterUnifiedCodeApplications,
   mergeCodeApplicationLocations,
+  resolveCodeApplicationLocationRecovery,
+  resolveCodeApplicationShellSessionRef,
   resolveCodeApplicationOpenState,
   resolveCodeApplicationSourceAvailability,
 } from './codeApplicationLocations'
@@ -234,5 +236,59 @@ describe('unified Code application locations', () => {
 
     expect(canOpenCodeApplicationLocation(localOnly, 'local', false)).toBe(true)
     expect(canOpenCodeApplicationLocation(localOnly, 'local', true)).toBe(false)
+  })
+
+  it('uses route_id as the canonical shell ref when it differs from public_id', () => {
+    expect(resolveCodeApplicationShellSessionRef({
+      public_id: 'legacy-public-id',
+      route_id: 'canonical-route-id',
+      id: 42,
+    })).toBe('canonical-route-id')
+  })
+
+  it('maps server location errors without trusting a stale ready cache', () => {
+    const [linked] = mergeCodeApplicationLocations(
+      [application('local-crm', 'desktop-local', {
+        logical_application_id: 'logical-crm',
+        linked_remote_application_id: 'remote-crm',
+        availability: 'ready',
+      })],
+      [application('remote-crm', 'd-ai-code')],
+      'deployment-a',
+    )
+
+    expect(resolveCodeApplicationLocationRecovery(
+      linked,
+      'local',
+      'CODE_APPLICATION_ALL_LOCATIONS_UNAVAILABLE',
+    )).toEqual({ state: 'all_unavailable', alternativeLocation: null })
+    expect(resolveCodeApplicationLocationRecovery(
+      linked,
+      'local',
+      'CODE_APPLICATION_LOCAL_LOCATION_MISSING',
+    )).toEqual({ state: 'local_missing', alternativeLocation: null })
+    expect(resolveCodeApplicationLocationRecovery(
+      linked,
+      'remote',
+      'CODE_APPLICATION_REMOTE_LOCATION_UNAVAILABLE',
+    )).toEqual({ state: 'remote_unavailable', alternativeLocation: null })
+  })
+
+  it('offers another location only for generic unavailability when that cached location is ready', () => {
+    const [linked] = mergeCodeApplicationLocations(
+      [application('local-crm', 'desktop-local', {
+        logical_application_id: 'logical-crm',
+        linked_remote_application_id: 'remote-crm',
+        availability: 'ready',
+      })],
+      [application('remote-crm', 'd-ai-code')],
+      'deployment-a',
+    )
+
+    expect(resolveCodeApplicationLocationRecovery(
+      linked,
+      'local',
+      'CODE_APPLICATION_LOCATION_UNAVAILABLE',
+    )).toEqual({ state: 'local_missing', alternativeLocation: 'remote' })
   })
 })
