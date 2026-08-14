@@ -1636,7 +1636,13 @@ async def list_code_runtime_rail_history(
         if source == "local" or (
             source == "all" and uses_authoritative_desktop_remote
         ):
-            source_filters.append(external_application_id.like("local-%"))
+            source_filters.append(or_(
+                AIChatSession.execution_location == "local",
+                and_(
+                    AIChatSession.execution_location.is_(None),
+                    external_application_id.like("local-%"),
+                ),
+            ))
         user_scope = [] if tenant_history else [AIChatSession.user_id == ctx.user.id]
         representative_shells = (
             select(

@@ -5129,6 +5129,98 @@ async def test_desktop_all_rail_history_does_not_revive_remote_cache_missing_fro
 
 
 @pytest.mark.asyncio
+async def test_desktop_all_rail_history_includes_explicit_local_with_nonlegacy_id(
+    db_session,
+    monkeypatch,
+):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import list_code_runtime_rail_history
+
+    monkeypatch.setenv("DESKTOP_MODE", "1")
+    ctx = SimpleNamespace(
+        tenant_id=0,
+        user=SimpleNamespace(id=11, account_source="control_plane"),
+        control_plane_tenant_id="tenant-1",
+    )
+    db_session.add(AIChatSession(
+        tenant_id=0,
+        control_plane_tenant_id="tenant-1",
+        user_id=11,
+        title="共享 CRM",
+        mode="code",
+        status="active",
+        external_application_id="shared-crm",
+        execution_location="local",
+    ))
+    await db_session.commit()
+
+    async def authoritative_remote_history(*_args):
+        return {"apps": []}
+
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_desktop_remote_rail_history",
+        authoritative_remote_history,
+    )
+
+    result = await list_code_runtime_rail_history(
+        _request(),
+        ctx,
+        db_session,
+        source="all",
+    )
+
+    assert [
+        app["external_application_id"] for app in result["apps"]
+    ] == ["shared-crm"]
+
+
+@pytest.mark.asyncio
+async def test_desktop_all_rail_history_excludes_explicit_remote_with_local_looking_id(
+    db_session,
+    monkeypatch,
+):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import list_code_runtime_rail_history
+
+    monkeypatch.setenv("DESKTOP_MODE", "1")
+    ctx = SimpleNamespace(
+        tenant_id=0,
+        user=SimpleNamespace(id=11, account_source="control_plane"),
+        control_plane_tenant_id="tenant-1",
+    )
+    db_session.add(AIChatSession(
+        tenant_id=0,
+        control_plane_tenant_id="tenant-1",
+        user_id=11,
+        title="远端 CRM",
+        mode="code",
+        status="active",
+        external_application_id="local-looking-remote",
+        execution_location="remote",
+    ))
+    await db_session.commit()
+
+    async def authoritative_remote_history(*_args):
+        return {"apps": []}
+
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_desktop_remote_rail_history",
+        authoritative_remote_history,
+    )
+
+    result = await list_code_runtime_rail_history(
+        _request(),
+        ctx,
+        db_session,
+        source="all",
+    )
+
+    assert result == {"apps": []}
+
+
+@pytest.mark.asyncio
 async def test_list_code_runtime_rail_history_excludes_builder_workspace_code_sessions(db_session):
     from app.routes.code_runtime import list_code_runtime_rail_history
 
