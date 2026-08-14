@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any, Literal, TypedDict
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from app.code_runtime.application_locations import CodeExecutionLocation
 
@@ -30,6 +37,120 @@ class CodeSessionLocationRequest(TypedDict):
     execution_location: CodeExecutionLocation
     session_policy: CodeSessionPolicy
     session_purpose: CodeSessionPurpose
+
+
+@dataclass(frozen=True)
+class CodeSessionCreationScope:
+    tenant_type: Literal["control_plane", "local"]
+    tenant_id: str
+    user_id: int
+    logical_application_id: str
+    execution_location: CodeExecutionLocation
+    session_purpose: CodeSessionPurpose
+
+
+def code_session_creation_scope(
+    *,
+    tenant_type: Literal["control_plane", "local"],
+    tenant_id: object,
+    user_id: object,
+    logical_application_id: str,
+    execution_location: CodeExecutionLocation,
+    session_purpose: CodeSessionPurpose,
+) -> CodeSessionCreationScope:
+    return CodeSessionCreationScope(
+        tenant_type=tenant_type,
+        tenant_id=_text(tenant_id),
+        user_id=int(user_id),
+        logical_application_id=logical_application_id,
+        execution_location=execution_location,
+        session_purpose=session_purpose,
+    )
+
+
+def _scope_payload(scope: CodeSessionCreationScope) -> str:
+    return json.dumps(
+        (
+            scope.tenant_type,
+            scope.tenant_id,
+            scope.user_id,
+            scope.logical_application_id,
+            scope.execution_location,
+            scope.session_purpose,
+        ),
+        separators=(",", ":"),
+    )
+
+
+def _scope_hash(scope: CodeSessionCreationScope) -> bytes:
+    return hashlib.sha256(_scope_payload(scope).encode("utf-8")).digest()
+
+
+def _postgresql_advisory_lock_id(scope: CodeSessionCreationScope) -> int:
+    return int.from_bytes(_scope_hash(scope)[:8], byteorder="big", signed=True)
+
+
+def _mysql_lock_name(scope: CodeSessionCreationScope) -> str:
+    return f"code-session:{_scope_hash(scope).hex()[:48]}"
+
+
+@asynccontextmanager
+async def code_session_creation_database_lock(
+    db: AsyncSession,
+    scope: CodeSessionCreationScope,
+) -> AsyncIterator[None]:
+    """Serialize resume_recent creation and close its transaction on every path."""
+
+    dialect_name = db.bind.dialect.name if db.bind is not None else ""
+    mysql_connection: AsyncConnection | None = None
+    mysql_lock_acquired = False
+    mysql_lock_name = ""
+    try:
+        if dialect_name == "sqlite":
+            await db.execute(text("BEGIN IMMEDIATE"))
+        elif dialect_name == "postgresql":
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(:lock_id)"),
+                {"lock_id": _postgresql_advisory_lock_id(scope)},
+            )
+        elif dialect_name == "mysql":
+            if db.bind is None or not hasattr(db.bind, "connect"):
+                raise RuntimeError("MySQL Code session lock requires an AsyncEngine-bound session")
+            mysql_connection = await db.bind.connect()
+            mysql_lock_name = _mysql_lock_name(scope)
+            acquired = (
+                await mysql_connection.execute(
+                    text("SELECT GET_LOCK(:lock_name, :timeout_seconds)"),
+                    {"lock_name": mysql_lock_name, "timeout_seconds": 30},
+                )
+            ).scalar_one()
+            if int(acquired or 0) != 1:
+                raise RuntimeError("Timed out acquiring Code session creation lock")
+            mysql_lock_acquired = True
+        else:
+            raise RuntimeError(
+                f"Code session creation locking is unsupported for database dialect: {dialect_name or 'unknown'}"
+            )
+        yield
+    except BaseException:
+        await db.rollback()
+        raise
+    else:
+        try:
+            await db.commit()
+        except BaseException:
+            await db.rollback()
+            raise
+    finally:
+        if mysql_connection is not None:
+            try:
+                if mysql_lock_acquired:
+                    await mysql_connection.execute(
+                        text("SELECT RELEASE_LOCK(:lock_name)"),
+                        {"lock_name": mysql_lock_name},
+                    )
+            finally:
+                await mysql_connection.close()
 
 
 def _text(value: object) -> str:

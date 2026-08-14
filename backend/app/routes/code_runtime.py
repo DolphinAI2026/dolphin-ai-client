@@ -68,7 +68,10 @@ from app.code_runtime.sandbox_metrics import sandbox_auth_metrics
 from app.code_runtime.execution_target import is_desktop_agent_runtime_target
 from app.code_runtime.session_location import (
     CodeApplicationLocationRequestError,
+    CodeSessionCreationScope,
     backfill_session_location,
+    code_session_creation_database_lock,
+    code_session_creation_scope,
     derive_session_location,
     normalize_code_session_location_request,
 )
@@ -153,7 +156,7 @@ async def sandbox_auth_state_endpoint() -> dict[str, str]:
 
 _control_plane_user_locks: dict[int, asyncio.Lock] = {}
 _code_session_open_locks: dict[str, asyncio.Lock] = {}
-_code_session_creation_locks: dict[tuple[str, str, int, str, str, str], asyncio.Lock] = {}
+_code_session_creation_locks: dict[CodeSessionCreationScope, asyncio.Lock] = {}
 _local_code_open_phases: dict[tuple[int, int, str], str] = {}
 
 
@@ -174,29 +177,11 @@ def _code_session_open_lock(session_ref: str) -> asyncio.Lock:
     return lock
 
 
-def _code_session_creation_lock(
-    ctx: AuthContext,
-    logical_application_id: str,
-    execution_location: str,
-    session_purpose: str,
-) -> asyncio.Lock:
-    control_plane_tenant_id = _control_plane_code_tenant_id(ctx)
-    tenant_scope = (
-        ("control_plane", control_plane_tenant_id)
-        if control_plane_tenant_id
-        else ("local", str(ctx.tenant_id))
-    )
-    key = (
-        *tenant_scope,
-        int(ctx.user.id),
-        logical_application_id,
-        execution_location,
-        session_purpose,
-    )
-    lock = _code_session_creation_locks.get(key)
+def _code_session_creation_lock(scope: CodeSessionCreationScope) -> asyncio.Lock:
+    lock = _code_session_creation_locks.get(scope)
     if lock is None:
         lock = asyncio.Lock()
-        _code_session_creation_locks[key] = lock
+        _code_session_creation_locks[scope] = lock
     return lock
 
 
@@ -750,18 +735,20 @@ async def create_code_session_from_external_app(
     app_code = str(body.app_code or "").strip() or None
     title = str(body.title or "").strip() or f"{app_name or app_code or external_id} Code"
 
-    creation_lock = None
-    if location_request["session_policy"] == "resume_recent":
-        creation_lock = _code_session_creation_lock(
-            ctx,
-            location_request["logical_application_id"],
-            location_request["execution_location"],
-            location_request["session_purpose"],
-        )
-        await creation_lock.acquire()
-    try:
+    control_plane_tenant_id = _control_plane_code_tenant_id(ctx)
+    creation_scope = code_session_creation_scope(
+        tenant_type="control_plane" if control_plane_tenant_id else "local",
+        tenant_id=control_plane_tenant_id or ctx.tenant_id,
+        user_id=ctx.user.id,
+        logical_application_id=location_request["logical_application_id"],
+        execution_location=location_request["execution_location"],
+        session_purpose=location_request["session_purpose"],
+    )
+    is_resume_recent = location_request["session_policy"] == "resume_recent"
+
+    async def create_or_resume() -> dict:
         existing = None
-        if location_request["session_policy"] == "resume_recent":
+        if is_resume_recent:
             candidates = (
                 await db.execute(
                     select(AIChatSession)
@@ -823,13 +810,16 @@ async def create_code_session_from_external_app(
                 existing.execution_location = location_request["execution_location"]
                 changed = True
             if changed:
-                await db.commit()
+                if is_resume_recent:
+                    await db.flush()
+                else:
+                    await db.commit()
                 await db.refresh(existing)
             return _session_to_dict(existing)
 
         session = AIChatSession(
             tenant_id=ctx.tenant_id,
-            control_plane_tenant_id=_control_plane_code_tenant_id(ctx),
+            control_plane_tenant_id=control_plane_tenant_id,
             user_id=ctx.user.id,
             app_id=None,
             external_application_id=external_id,
@@ -844,12 +834,18 @@ async def create_code_session_from_external_app(
             selected_llm_config_id=body.selected_llm_config_id if body.selected_llm_config_id else None,
         )
         db.add(session)
-        await db.commit()
+        if is_resume_recent:
+            await db.flush()
+        else:
+            await db.commit()
         await db.refresh(session)
         return _session_to_dict(session)
-    finally:
-        if creation_lock is not None:
-            creation_lock.release()
+
+    if not is_resume_recent:
+        return await create_or_resume()
+    async with _code_session_creation_lock(creation_scope):
+        async with code_session_creation_database_lock(db, creation_scope):
+            return await create_or_resume()
 
 
 @router.post("/sessions/{session_ref}/open")

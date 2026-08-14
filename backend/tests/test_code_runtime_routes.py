@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.models import Application
@@ -3978,14 +3978,20 @@ async def test_create_code_session_from_external_app_resume_recent_scopes_to_loc
 
 
 @pytest.mark.asyncio
-async def test_create_code_session_from_external_app_resume_recent_concurrently_reuses_one_session(tmp_path):
-    from app.routes.code_runtime import (
-        CreateExternalCodeSessionRequest,
-        create_code_session_from_external_app,
+async def test_create_code_session_from_external_app_resume_recent_uses_sqlite_lock_without_shared_process_lock(
+    tmp_path,
+    monkeypatch,
+):
+    from app.routes import code_runtime
+
+    monkeypatch.setattr(
+        code_runtime,
+        "_code_session_creation_lock",
+        lambda *_args: asyncio.Lock(),
     )
 
     engine, Session = await _renewal_session_factory(tmp_path)
-    request = CreateExternalCodeSessionRequest(
+    request = code_runtime.CreateExternalCodeSessionRequest(
         logical_application_id="logical-crm",
         external_application_id="local-crm",
         execution_location="local",
@@ -3995,7 +4001,11 @@ async def test_create_code_session_from_external_app_resume_recent_concurrently_
 
     async def create_session():
         async with Session() as session:
-            return await create_code_session_from_external_app(request, _ctx(), session)
+            return await code_runtime.create_code_session_from_external_app(
+                request,
+                _ctx(),
+                session,
+            )
 
     try:
         first, second = await asyncio.gather(create_session(), create_session())
@@ -4017,6 +4027,69 @@ async def test_create_code_session_from_external_app_resume_recent_concurrently_
 
     assert first["id"] == second["id"]
     assert len(rows) == 1
+
+
+def test_code_session_location_mysql_lock_name_is_deterministic_and_within_limit():
+    from app.code_runtime.session_location import (
+        _mysql_lock_name,
+        code_session_creation_scope,
+    )
+
+    scope = code_session_creation_scope(
+        tenant_type="local",
+        tenant_id="7",
+        user_id=11,
+        logical_application_id="logical-crm",
+        execution_location="local",
+        session_purpose="standard",
+    )
+    other_scope = code_session_creation_scope(
+        tenant_type="local",
+        tenant_id="7",
+        user_id=11,
+        logical_application_id="logical-crm",
+        execution_location="remote",
+        session_purpose="standard",
+    )
+
+    assert _mysql_lock_name(scope) == _mysql_lock_name(scope)
+    assert _mysql_lock_name(scope) != _mysql_lock_name(other_scope)
+    assert len(_mysql_lock_name(scope)) <= 64
+
+
+@pytest.mark.asyncio
+async def test_code_session_location_database_lock_rolls_back_when_commit_fails(tmp_path):
+    from app.code_runtime.session_location import (
+        code_session_creation_database_lock,
+        code_session_creation_scope,
+    )
+
+    class FailingCommitSession(AsyncSession):
+        async def commit(self):
+            raise RuntimeError("commit failed")
+
+    engine, _ = await _renewal_session_factory(tmp_path)
+    Session = async_sessionmaker(
+        engine,
+        expire_on_commit=False,
+        class_=FailingCommitSession,
+    )
+    scope = code_session_creation_scope(
+        tenant_type="local",
+        tenant_id="7",
+        user_id=11,
+        logical_application_id="logical-crm",
+        execution_location="local",
+        session_purpose="standard",
+    )
+    try:
+        async with Session() as session:
+            with pytest.raises(RuntimeError, match="commit failed"):
+                async with code_session_creation_database_lock(session, scope):
+                    await session.execute(text("SELECT 1"))
+            assert not session.in_transaction()
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
