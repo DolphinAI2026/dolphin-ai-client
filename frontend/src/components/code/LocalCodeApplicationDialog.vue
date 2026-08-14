@@ -80,6 +80,7 @@ import {
   createLocalApplicationCode,
   describeLocalApplicationError,
   localApplicationProjectPath,
+  shouldApplyDefaultWorkspace,
   validateLocalApplicationCode,
 } from './localApplicationForm'
 
@@ -107,6 +108,7 @@ const suffix = ref('')
 const loadingWorkspace = ref(false)
 const submitting = ref(false)
 const submitError = ref('')
+let defaultWorkspaceRequestId = 0
 
 const nameError = computed(() => {
   const name = appName.value.trim()
@@ -136,6 +138,8 @@ watch(() => props.modelValue, visible => {
 })
 
 watch(directoryMode, mode => {
+  defaultWorkspaceRequestId += 1
+  loadingWorkspace.value = false
   initializeProject.value = mode === 'existing_directory'
   selectedDirectory.value = ''
   submitError.value = ''
@@ -156,16 +160,21 @@ async function resetForm() {
 
 async function loadDefaultWorkspace() {
   if (directoryMode.value !== 'new_directory') return
+  const requestId = ++defaultWorkspaceRequestId
   loadingWorkspace.value = true
   try {
     const defaults = await codeRuntimeApi.defaultWorkspace(appCode.value)
-    selectedDirectory.value = String(defaults.workspace_root || '').trim()
+    if (shouldApplyDefaultWorkspace(requestId, defaultWorkspaceRequestId, directoryMode.value)) {
+      selectedDirectory.value = String(defaults.workspace_root || '').trim()
+    }
   } catch (error: any) {
-    submitError.value = describeLocalApplicationError(
-      error?.response?.data?.detail || error?.message || '默认保存位置加载失败',
-    )
+    if (shouldApplyDefaultWorkspace(requestId, defaultWorkspaceRequestId, directoryMode.value)) {
+      submitError.value = describeLocalApplicationError(
+        error?.response?.data?.detail || error?.message || '默认保存位置加载失败',
+      )
+    }
   } finally {
-    loadingWorkspace.value = false
+    if (requestId === defaultWorkspaceRequestId) loadingWorkspace.value = false
   }
 }
 
@@ -173,7 +182,10 @@ async function chooseDirectory() {
   const selected = await pickDirectory(directoryMode.value === 'existing_directory'
     ? '选择已有项目目录'
     : '选择新项目的父目录')
-  if (selected) selectedDirectory.value = selected
+  if (selected) {
+    defaultWorkspaceRequestId += 1
+    selectedDirectory.value = selected
+  }
 }
 
 async function submit() {

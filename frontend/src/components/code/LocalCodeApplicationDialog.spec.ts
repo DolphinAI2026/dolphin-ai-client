@@ -4,6 +4,7 @@ import {
   createLocalApplicationCode,
   joinLocalProjectPath,
   localApplicationProjectPath,
+  shouldApplyDefaultWorkspace,
   validateLocalApplicationCode,
 } from './localApplicationForm'
 
@@ -34,5 +35,24 @@ describe('LocalCodeApplicationDialog', () => {
     expect(dialogSource).toContain('local_workspace_path: selectedProjectPath.value')
     expect(dialogSource).toContain('创建并打开项目')
     expect(dialogSource).not.toContain('ElMessageBox.prompt')
+  })
+
+  it('does not apply a late new-directory default after existing-directory selection', async () => {
+    let latestRequest = 1
+    const requestId = latestRequest
+    let resolveDefault!: (value: string) => void
+    const lateDefault = new Promise<string>(resolve => { resolveDefault = resolve })
+    let selectedDirectory = '/projects/existing-crm'
+
+    latestRequest += 1
+    lateDefault.then(path => {
+      if (shouldApplyDefaultWorkspace(requestId, latestRequest, 'existing_directory')) {
+        selectedDirectory = path
+      }
+    })
+    resolveDefault('/projects/default-parent')
+    await lateDefault
+
+    expect(selectedDirectory).toBe('/projects/existing-crm')
   })
 })

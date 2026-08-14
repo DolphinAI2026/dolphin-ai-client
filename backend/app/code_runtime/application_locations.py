@@ -72,8 +72,34 @@ def prepare_local_application_workspace(
     normalized = normalize_local_workspace_path(raw_path)
     path = Path(normalized)
     if directory_mode == "new_directory" and not path.exists():
+        parent = path.parent
+        if not parent.exists():
+            raise LocalApplicationPathError(
+                "LOCAL_APPLICATION_PATH_NOT_FOUND",
+                "本地项目父目录不存在",
+            )
+        if not parent.is_dir():
+            raise LocalApplicationPathError(
+                "LOCAL_APPLICATION_PATH_NOT_DIRECTORY",
+                "本地项目父路径不是目录",
+            )
         try:
-            path.mkdir(parents=True, exist_ok=False)
+            if not os.access(parent, os.R_OK | os.X_OK):
+                raise PermissionError
+            with os.scandir(parent):
+                pass
+        except PermissionError as exc:
+            raise LocalApplicationPathError(
+                "LOCAL_APPLICATION_PATH_UNREADABLE",
+                "本地项目父目录不可读",
+            ) from exc
+        except OSError as exc:
+            raise LocalApplicationPathError(
+                "LOCAL_APPLICATION_PATH_UNREADABLE",
+                "本地项目父目录不可读",
+            ) from exc
+        try:
+            path.mkdir(exist_ok=False)
         except PermissionError as exc:
             raise LocalApplicationPathError(
                 "LOCAL_APPLICATION_PATH_UNREADABLE",

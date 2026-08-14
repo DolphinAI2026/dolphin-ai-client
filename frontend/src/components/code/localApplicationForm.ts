@@ -45,6 +45,14 @@ export function localApplicationProjectPath(
     : joinLocalProjectPath(selectedDirectory, appCode)
 }
 
+export function shouldApplyDefaultWorkspace(
+  requestId: number,
+  latestRequestId: number,
+  directoryMode: LocalApplicationDirectoryMode,
+): boolean {
+  return requestId === latestRequestId && directoryMode === 'new_directory'
+}
+
 export function describeLocalApplicationError(detail: unknown): string {
   const text = String(detail || '').trim()
   const code = Object.keys(LOCAL_APPLICATION_PATH_MESSAGES).find(candidate => text.includes(candidate))

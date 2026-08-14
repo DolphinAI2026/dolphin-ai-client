@@ -410,6 +410,30 @@ async def test_register_new_directory_non_git_only_creates_directory(
 
 
 @pytest.mark.asyncio
+async def test_register_new_directory_missing_parent_does_not_create_any_directory(
+    db,
+    ctx,
+    tmp_path,
+):
+    parent = tmp_path / "missing-parent"
+    workspace_path = parent / "new-project"
+
+    with pytest.raises(HTTPException) as exc:
+        await ensure_registered_local_workspace(
+            db,
+            ctx,
+            application_id="local-new-project",
+            display_name="New project",
+            workspace_path=workspace_path,
+            directory_mode="new_directory",
+        )
+
+    assert exc.value.status_code == 409
+    assert "LOCAL_APPLICATION_PATH_NOT_FOUND" in str(exc.value.detail)
+    assert not parent.exists()
+
+
+@pytest.mark.asyncio
 async def test_duplicate_path_reuses_owned_registered_application(
     db,
     ctx,
