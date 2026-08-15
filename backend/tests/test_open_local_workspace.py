@@ -55,6 +55,55 @@ async def test_open_local_creates_and_dedups(client, tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_open_local_rejects_same_device_path_for_another_tenant(tmp_path, monkeypatch):
+    from fastapi import HTTPException
+
+    import app.routes.coding as coding_mod
+    from app.code_runtime.application_locations import local_workspace_path_digest
+    from app.coding.workspace_access import workspace_mgr
+    from app.deps import AuthContext
+    from app.models import RegisteredWorkspace, User
+    from app.routes.coding import OpenLocalWorkspaceRequest, open_local_workspace
+
+    monkeypatch.setattr(coding_mod, "_is_sensitive_dir", lambda _path: False)
+    engine = create_async_engine(
+        "sqlite+aiosqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    Session = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    request = OpenLocalWorkspaceRequest(abs_path=str(tmp_path))
+    first_ctx = AuthContext(
+        user=User(id=1, username="first"),
+        tenant_id=1,
+        tenant_role="tenant_admin",
+        org_permissions={"*": True},
+    )
+    second_ctx = AuthContext(
+        user=User(id=2, username="second"),
+        tenant_id=2,
+        tenant_role="tenant_admin",
+        org_permissions={"*": True},
+    )
+    try:
+        async with Session() as db:
+            await open_local_workspace(request, first_ctx, db)
+        async with Session() as db:
+            row = (await db.execute(select(RegisteredWorkspace))).scalar_one()
+            assert row.path_identity_digest == local_workspace_path_digest(tmp_path)
+        async with Session() as db:
+            with pytest.raises(HTTPException) as exc_info:
+                await open_local_workspace(request, second_ctx, db)
+        assert exc_info.value.status_code == 409
+        assert "LOCAL_APPLICATION_PATH_ALREADY_BOUND" in str(exc_info.value.detail)
+    finally:
+        workspace_mgr._external_paths.clear()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_open_local_rejects_sensitive(client):
     r = await client.post("/api/coding/workspace/open-local", json={"abs_path": str(Path.home())})
     assert r.status_code == 400

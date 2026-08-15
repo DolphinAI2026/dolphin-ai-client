@@ -12,6 +12,14 @@ export function railTenantHome(
 ): string {
   return desktop ? railModeMeta[mode].home : railDefaultProductHome(availability)
 }
+
+export function createLatestRailNavigationIntent() {
+  let current = 0
+  return {
+    begin: () => ++current,
+    isCurrent: (intent: number) => intent === current,
+  }
+}
 </script>
 
 <script setup lang="ts">
@@ -46,6 +54,7 @@ import {
   CODE_APPLICATION_SOURCE_CHANGED_EVENT,
   codeRuntimeApi,
   type CodeApplicationSource,
+  type CodeExecutionLocation,
 } from '@/api/codeRuntime'
 import { getControlPlaneCodeSession } from '@/utils/controlPlaneCodeSession'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -53,7 +62,6 @@ import SystemAssistantSessionSections from '@/components/v2/SystemAssistantSessi
 import {
   groupRailSessionsByApplication,
   normalizeAiSessions,
-  normalizeCodeRailHistory,
   nextAgentQuery,
   railSessionTarget,
   isRailSessionActive,
@@ -63,6 +71,11 @@ import {
   type RailSessionGroup,
 } from '@/composables/railSessions'
 import type { CodeAgentSessionRecord, CodeRailHistoryResponse } from '@/api/codeRuntime'
+import {
+  codeRailHistorySessions,
+  groupCodeRailHistoryByApplication,
+  type CodeRailSessionGroup,
+} from './codeRailHistory'
 import ruijingWhaleMarkUrl from '@/assets/brand/ruijing-whale-mark.svg'
 
 interface NavItem { key: string; label: string; icon: string; path: string; badge?: number }
@@ -108,14 +121,14 @@ const appNameById = ref<Map<number, string>>(new Map())
 const systemAssistantSessions = computed<RailSession[]>(() =>
   sortRailSessionsByUpdatedAt(normalizeAiSessions(systemAssistantSessionData.value)),
 )
-const systemAssistantApplicationGroups = computed<RailSessionGroup[]>(() =>
-  groupRailSessionsByApplication(normalizeCodeRailHistory(codeRailHistory.value), 'code'),
+const systemAssistantApplicationGroups = computed<CodeRailSessionGroup[]>(() =>
+  groupCodeRailHistoryByApplication(codeRailHistory.value),
 )
 
 // 非系统助手入口仍使用当前模式对应的单一会话源。
 const railSessions = computed<RailSession[]>(() => {
   return currentMode.value === 'code'
-    ? normalizeCodeRailHistory(codeRailHistory.value)
+    ? codeRailHistorySessions(codeRailHistory.value)
     : normalizeAiSessions(aiSessions.value, appNameById.value)
 })
 
@@ -170,7 +183,7 @@ async function loadRailSessions() {
     if (mode === 'code') {
       const [systemResult, applicationResult] = await Promise.allSettled([
         aiChatApi.listSessions({ mode: 'code', assistant_profile: 'system_assistant' }),
-        codeRuntimeApi.listRailHistory(codeApplicationSource.value),
+        codeRuntimeApi.listRailHistory(),
       ])
       if (seq !== railSessionsSeq || mode !== currentMode.value) return
       systemAssistantSessionData.value = systemResult.status === 'fulfilled'
@@ -260,7 +273,11 @@ function toggleGroup(label: string) {
 
 const creatingCodeAgentSession = ref(false)
 const creatingBuilderSession = ref(false)
-const sessionGroups = computed<RailSessionGroup[]>(() => {
+const railNavigationIntent = createLatestRailNavigationIntent()
+const sessionGroups = computed<(RailSessionGroup | CodeRailSessionGroup)[]>(() => {
+  if (effectiveGroupBy.value === 'app' && currentMode.value === 'code') {
+    return groupCodeRailHistoryByApplication(codeRailHistory.value)
+  }
   if (effectiveGroupBy.value === 'app') {
     return groupRailSessionsByApplication(railSessions.value, currentMode.value)
   }
@@ -282,19 +299,40 @@ const sessionGroups = computed<RailSessionGroup[]>(() => {
 })
 
 async function openSession(session: RailSession) {
+  const intent = railNavigationIntent.begin()
   if (currentMode.value === 'code' && session.source !== 'code-agent' && session.source !== 'code-shell') {
-    router.push({ path: '/code/system-assistant', query: { ...route.query, session: String(session.id) } })
+    if (railNavigationIntent.isCurrent(intent)) {
+      router.push({ path: '/code/system-assistant', query: { ...route.query, session: String(session.id) } })
+    }
     return
   }
-  if (currentMode.value === 'code' && session.source === 'code-agent' && session.shellSessionId && session.runtimeSessionId) {
-    try {
-      await codeRuntimeApi.activateAgentSession(session.shellSessionId, session.runtimeSessionId)
-    } catch { /* iframe will surface runtime errors on open */ }
-  }
+  if (!railNavigationIntent.isCurrent(intent)) return
   router.push(railSessionTarget(currentMode.value, session, route.query))
 }
 
+function sessionGroupKey(group: RailSessionGroup | CodeRailSessionGroup): string {
+  return 'logicalApplicationId' in group
+    ? `application:${group.logicalApplicationId}`
+    : group.label
+}
+
+function openCodeLocationSession(
+  group: RailSessionGroup | CodeRailSessionGroup,
+  location: CodeExecutionLocation,
+) {
+  if (!('locationSessions' in group)) return
+  const session = group.locationSessions[location]
+  if (session) void openSession(session)
+}
+
+function codeGroupStandardShellSessionId(
+  group: RailSessionGroup | CodeRailSessionGroup,
+): string | undefined {
+  return 'standardShellSessionId' in group ? group.standardShellSessionId : undefined
+}
+
 function createSystemAssistantSession() {
+  railNavigationIntent.begin()
   const query = { ...route.query }
   delete query.session
   router.push({ path: '/code/system-assistant', query })
@@ -385,27 +423,49 @@ async function createBuilderSession(appId?: number | null) {
   }
 }
 
-async function createCodeAgentSession(shellSessionId?: string | null) {
+async function createCodeAgentSession(
+  shellSessionId?: string | null,
+  group?: RailSessionGroup | CodeRailSessionGroup,
+) {
   if (creatingCodeAgentSession.value) return
   const isCodeMode = currentMode.value === 'code'
   if (!isCodeMode) return
-  if (!shellSessionId) {
-    ElMessage.warning('请先打开一个 Code 应用')
-    return
-  }
-
+  const intent = railNavigationIntent.begin()
   creatingCodeAgentSession.value = true
   try {
-    const result = await codeRuntimeApi.createAgentSession(shellSessionId)
+    let targetShellSessionId = shellSessionId || ''
+    if (!targetShellSessionId && group && 'locationSessions' in group) {
+      const representative = group.locationSessions.local || group.locationSessions.remote
+      if (representative) {
+        const standardShell = await codeRuntimeApi.createSessionFromExternalApp({
+          logical_application_id: representative.logicalApplicationId,
+          external_application_id: representative.externalApplicationId,
+          execution_location: representative.executionLocation,
+          session_policy: 'resume_recent',
+          session_purpose: 'standard',
+          app_name: representative.appName,
+        })
+        targetShellSessionId = String(
+          standardShell.route_id || standardShell.public_id || standardShell.id || '',
+        )
+      }
+    }
+    if (!targetShellSessionId) {
+      ElMessage.warning('请先打开一个 Code 应用')
+      return
+    }
+    if (!railNavigationIntent.isCurrent(intent)) return
+    const result = await codeRuntimeApi.createAgentSession(targetShellSessionId)
+    if (!railNavigationIntent.isCurrent(intent)) return
     if (result.runtime_session_id) {
-      upsertOptimisticCodeAgentSession(shellSessionId, result.runtime_session_id, result.session)
+      upsertOptimisticCodeAgentSession(targetShellSessionId, result.runtime_session_id, result.session)
       router.push({
-        path: `/code/${result.shell_session_id || shellSessionId}`,
+        path: `/code/${result.shell_session_id || targetShellSessionId}`,
         query: nextAgentQuery(route.query, result.runtime_session_id),
       })
     } else {
       router.push({
-        path: `/code/${shellSessionId}`,
+        path: `/code/${targetShellSessionId}`,
         query: nextAgentQuery(route.query),
       })
     }
@@ -681,18 +741,21 @@ async function selectTenant(value: string) {
 }
 
 function go(path: string) {
+  railNavigationIntent.begin()
   tenantMenuOpen.value = false
   userMenuOpen.value = false
   router.push(path)
 }
 
 function goNav(item: NavItem) {
+  railNavigationIntent.begin()
   tenantMenuOpen.value = false
   router.push(item.path)
 }
 
 function switchMode(mode: AppMode) {
   if (mode === currentMode.value) return
+  railNavigationIntent.begin()
   modeStore.setMode(mode)
   tenantMenuOpen.value = false
   router.push(MODE_META[mode].home)
@@ -885,26 +948,42 @@ function renderIcon(name: string): string {
           </div>
         </div>
         <div class="rail-sess-list">
-          <div v-for="g in sessionGroups" :key="g.label" class="rail-sess-group">
+          <div v-for="g in sessionGroups" :key="sessionGroupKey(g)" class="rail-sess-group">
             <div class="rail-sess-label-row">
-              <button type="button" class="rail-sess-label" @click="toggleGroup(g.label)">
-                <span class="rail-sess-chev" :class="{ collapsed: collapsedGroups.has(g.label) }" v-html="renderIcon('chevronDown')" />
+              <button type="button" class="rail-sess-label" @click="toggleGroup(sessionGroupKey(g))">
+                <span class="rail-sess-chev" :class="{ collapsed: collapsedGroups.has(sessionGroupKey(g)) }" v-html="renderIcon('chevronDown')" />
                 <span class="rail-sess-glabel">{{ g.label }}</span>
+                <span
+                  v-if="currentMode === 'code' && effectiveGroupBy === 'app' && 'availableLocations' in g"
+                  class="rail-sess-locations"
+                >{{ g.availableLocations.map(location => location === 'local' ? '本机' : '远程').join('、') }}</span>
                 <span class="rail-sess-cnt">{{ g.items.length }}</span>
               </button>
               <button
-                v-if="effectiveGroupBy === 'app' && ((currentMode === 'code' && g.shellSessionId) || (currentMode === 'builder' && g.appId))"
+                v-if="currentMode === 'code' && effectiveGroupBy === 'app' && 'localShellSessionId' in g && g.localShellSessionId"
+                type="button"
+                class="rail-sess-location-open"
+                @click.stop="openCodeLocationSession(g, 'local')"
+              >本机打开</button>
+              <button
+                v-if="currentMode === 'code' && effectiveGroupBy === 'app' && 'remoteShellSessionId' in g && g.remoteShellSessionId"
+                type="button"
+                class="rail-sess-location-open"
+                @click.stop="openCodeLocationSession(g, 'remote')"
+              >远程打开</button>
+              <button
+                v-if="effectiveGroupBy === 'app' && ((currentMode === 'code' && ('locationSessions' in g)) || (currentMode === 'builder' && g.appId))"
                 type="button"
                 class="rail-sess-group-new"
                 title="新建对话"
                 aria-label="新建对话"
                 :disabled="currentMode === 'code' ? creatingCodeAgentSession : creatingBuilderSession"
-                @click.stop="currentMode === 'code' ? createCodeAgentSession(g.shellSessionId) : createBuilderSession(g.appId)"
+                @click.stop="currentMode === 'code' ? createCodeAgentSession(codeGroupStandardShellSessionId(g), g) : createBuilderSession(g.appId)"
               >
                 <span v-html="renderIcon('plus')" />
               </button>
             </div>
-            <template v-if="!collapsedGroups.has(g.label)">
+            <template v-if="!collapsedGroups.has(sessionGroupKey(g))">
               <div
                 v-for="s in g.items"
                 :key="s.id"
@@ -919,6 +998,7 @@ function renderIcon(name: string): string {
                   :title="sessionRunning(s) ? '执行中' : ''"
                 />
                 <span class="rail-sess-title">{{ s.title || '未命名会话' }}</span>
+                <span v-if="currentMode === 'code' && 'locationSummary' in s" class="rail-sess-location">{{ s.locationSummary }}</span>
                 <button class="rail-sess-del" type="button" title="删除会话" aria-label="删除会话" @click.stop="deleteRailSession(s)">
                   <span v-html="renderIcon('trash')" />
                 </button>
@@ -2196,6 +2276,9 @@ html[data-theme="dark"] .rail-item { color: #a8b5c8; }
 .rail-sess-group { margin: 0 0 5px; }
 .rail-sess-label { min-height: 28px; padding: 4px 5px; color: #68768a; font-size: 12px; }
 .rail-sess-cnt { min-width: 18px; text-align: right; }
+.rail-sess-locations, .rail-sess-location { flex: 0 0 auto; color: var(--text-3, #7f8b9d); font-size: 10px; font-weight: 500; }
+.rail-sess-location-open { flex: 0 0 auto; border: 0; border-radius: 5px; padding: 3px 5px; color: var(--brand); background: var(--brand-soft); font: inherit; font-size: 10px; cursor: pointer; }
+.rail-sess-location-open:hover { background: var(--surface-3, rgba(127,127,127,.12)); }
 .rail-sess-item { position: relative; min-height: 30px; padding: 4px 5px 4px 8px; border-radius: 7px; color: #68768a; }
 .rail-sess-state { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: #c2cad6; }
 .rail-sess-state.running { background: #2f65d5; box-shadow: 0 0 0 3px rgba(47, 101, 213, .12); animation: rail-session-pulse 1.6s ease-in-out infinite; }

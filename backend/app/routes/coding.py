@@ -32,6 +32,10 @@ from app.apaas_client import APaaSClient
 from app.config import settings
 from app.project_access import require_project_access
 from app.routes.applications.extension import _ensure_env_token
+from app.code_runtime.application_locations import (
+    local_workspace_path_digest,
+    local_workspace_path_identity,
+)
 from app.coding.workspace_access import (
     _decorate_workspace_access,
     _ensure_workspace_access,
@@ -610,17 +614,42 @@ async def open_local_workspace(
     if _is_sensitive_dir(p):
         raise HTTPException(status_code=400, detail="该目录是系统/家目录根，过于宽泛，请选具体项目文件夹")
     resolved_abs = str(p.resolve())
-    existing = (await db.execute(
-        select(RegisteredWorkspace).where(
-            RegisteredWorkspace.tenant_id == ctx.tenant_id,
-            RegisteredWorkspace.abs_path == resolved_abs,
+    path_digest = local_workspace_path_digest(resolved_abs)
+    candidates = (await db.execute(select(RegisteredWorkspace))).scalars().all()
+    matching: list[RegisteredWorkspace] = []
+    for candidate in candidates:
+        if candidate.path_identity_digest == path_digest:
+            matching.append(candidate)
+            continue
+        try:
+            if local_workspace_path_identity(candidate.abs_path) == local_workspace_path_identity(resolved_abs):
+                matching.append(candidate)
+        except (OSError, ValueError):
+            continue
+    if len(matching) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail="LOCAL_APPLICATION_PATH_ALREADY_BOUND: 本地项目目录存在重复历史绑定",
         )
-    )).scalar_one_or_none()
+    existing = matching[0] if matching else None
     if existing:
+        if existing.tenant_id != int(ctx.tenant_id) or existing.user_id != int(ctx.user.id):
+            raise HTTPException(
+                status_code=409,
+                detail="LOCAL_APPLICATION_PATH_ALREADY_BOUND: 本地项目目录已绑定给其他用户或租户",
+            )
         existing.last_opened_at = datetime.utcnow()
+        existing.path_identity_digest = path_digest
         if apaas_app_id is not None:
             existing.apaas_app_id = apaas_app_id
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError as exc:
+            await db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="LOCAL_APPLICATION_PATH_ALREADY_BOUND: 本地项目目录已绑定给其他应用",
+            ) from exc
         ws_id = existing.ws_id
         display_name = existing.display_name
         apaas_app_id = existing.apaas_app_id
@@ -628,7 +657,8 @@ async def open_local_workspace(
         ws_id = f"{ctx.user.id}_{uuid.uuid4().hex[:8]}"
         display_name = p.name
         db.add(RegisteredWorkspace(
-            ws_id=ws_id, abs_path=resolved_abs, user_id=ctx.user.id, tenant_id=ctx.tenant_id,
+            ws_id=ws_id, abs_path=resolved_abs, path_identity_digest=path_digest,
+            user_id=ctx.user.id, tenant_id=ctx.tenant_id,
             workspace_type="external", apaas_app_id=apaas_app_id,
             display_name=display_name,
         ))
@@ -636,12 +666,24 @@ async def open_local_workspace(
             await db.commit()
         except IntegrityError:
             await db.rollback()
-            existing = (await db.execute(
-                select(RegisteredWorkspace).where(
-                    RegisteredWorkspace.tenant_id == ctx.tenant_id,
-                    RegisteredWorkspace.abs_path == resolved_abs,
+            concurrent = (
+                await db.execute(
+                    select(RegisteredWorkspace).where(
+                        RegisteredWorkspace.path_identity_digest == path_digest
+                    )
                 )
-            )).scalar_one()
+            ).scalars().all()
+            if len(concurrent) != 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="LOCAL_APPLICATION_PATH_ALREADY_BOUND: 本地项目目录已绑定给其他应用",
+                )
+            existing = concurrent[0]
+            if existing.tenant_id != int(ctx.tenant_id) or existing.user_id != int(ctx.user.id):
+                raise HTTPException(
+                    status_code=409,
+                    detail="LOCAL_APPLICATION_PATH_ALREADY_BOUND: 本地项目目录已绑定给其他用户或租户",
+                )
             ws_id = existing.ws_id
             display_name = existing.display_name
             apaas_app_id = existing.apaas_app_id

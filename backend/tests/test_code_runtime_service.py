@@ -1253,6 +1253,10 @@ async def test_list_code_applications_restores_local_workspaces(
         "dicts": 0,
         "local_workspace_path": str(local_path.resolve()),
         "workspace_id": "11_local",
+        "logical_application_id": None,
+        "linked_remote_application_id": None,
+        "linked_remote_deployment_id": None,
+        "availability": "ready",
         "repository": None,
         "owner": None,
         "created_at": result["items"][0]["created_at"],
@@ -1379,7 +1383,7 @@ async def test_create_code_application_uses_local_mode_without_control_plane(mon
 
 
 @pytest.mark.asyncio
-async def test_create_code_application_registers_local_workspace(
+async def test_create_code_application_registers_existing_local_workspace(
     db_session,
     tmp_path,
     monkeypatch,
@@ -1395,6 +1399,8 @@ async def test_create_code_application_registers_local_workspace(
 
     monkeypatch.setattr(service.httpx, "AsyncClient", UnexpectedClient)
     project_path = tmp_path / "sales-local"
+    project_path.mkdir()
+    (project_path / "README.md").write_text("existing", encoding="utf-8")
     ctx = SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7)
 
     result = await service.create_code_application(
@@ -1402,6 +1408,8 @@ async def test_create_code_application_registers_local_workspace(
         app_code="sales-local",
         local_application=True,
         local_workspace_path=str(project_path),
+        directory_mode="existing_directory",
+        initialize_project=True,
         db=db_session,
         ctx=ctx,
     )
@@ -1418,7 +1426,65 @@ async def test_create_code_application_registers_local_workspace(
     assert result["workspace_id"] == workspace.ws_id
     assert workspace.workspace_type == "code-local-application"
     assert workspace.display_name == "本地销售助手"
-    assert (project_path / ".git").is_dir()
+    assert workspace.logical_application_id == result["logical_application_id"]
+    assert result["availability"] == "ready"
+    assert result["already_registered"] is False
+    assert (project_path / "README.md").read_text(encoding="utf-8") == "existing"
+    assert not (project_path / ".git").exists()
+
+    reused = await service.create_code_application(
+        app_name="重复请求",
+        app_code="sales-local-again",
+        local_application=True,
+        local_workspace_path=str(project_path.parent / "." / project_path.name),
+        directory_mode="existing_directory",
+        db=db_session,
+        ctx=ctx,
+    )
+
+    assert reused["external_application_id"] == result["external_application_id"]
+    assert reused["logical_application_id"] == result["logical_application_id"]
+    assert reused["already_registered"] is True
+
+
+@pytest.mark.asyncio
+async def test_list_code_applications_projects_persisted_local_location_contract(
+    db_session,
+    tmp_path,
+):
+    from app.code_runtime import service
+    from app.models import RegisteredWorkspace
+
+    missing_workspace = tmp_path / "missing-local-workspace"
+    db_session.add(RegisteredWorkspace(
+        ws_id="workspace-local-sales",
+        abs_path=str(missing_workspace),
+        user_id=11,
+        tenant_id=7,
+        workspace_type="code-local-application",
+        apaas_app_id="local-sales",
+        logical_application_id="logical-sales",
+        linked_remote_application_id="remote-sales",
+        linked_remote_deployment_id="deployment-sales",
+        display_name="本机销售助手",
+    ))
+    await db_session.commit()
+
+    result = await service.list_code_applications(
+        source="local",
+        db=db_session,
+        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
+    )
+
+    assert result["items"] == [{
+        **result["items"][0],
+        "logical_application_id": "logical-sales",
+        "linked_remote_application_id": "remote-sales",
+        "linked_remote_deployment_id": "deployment-sales",
+        "local_workspace_path": str(missing_workspace),
+        "workspace_id": "workspace-local-sales",
+        "availability": "missing",
+    }]
 
 
 @pytest.mark.asyncio
@@ -2178,7 +2244,7 @@ async def test_open_code_session_can_ignore_control_plane_runtime_base_url(
 
 
 @pytest.mark.asyncio
-async def test_open_local_code_session_uses_desktop_runtime_without_control_plane(
+async def test_open_local_code_session_defers_agent_creation_to_serialized_route(
     db_session,
     monkeypatch,
 ):
@@ -2227,15 +2293,6 @@ async def test_open_local_code_session_uses_desktop_runtime_without_control_plan
         unexpected_control_plane,
     )
 
-    async def create_runtime_agent_session(*_args):
-        return "local-runtime-session"
-
-    monkeypatch.setattr(
-        service,
-        "_create_desktop_runtime_agent_session",
-        create_runtime_agent_session,
-    )
-
     result = await open_code_session(
         db=db_session,
         session_id=session.id,
@@ -2245,7 +2302,7 @@ async def test_open_local_code_session_uses_desktop_runtime_without_control_plan
 
     assert manager_calls == 1
     assert result["external_application_id"] == "local-desktop-app"
-    assert result["runtime_session_id"] == "local-runtime-session"
+    assert result["runtime_session_id"] is None
 
 
 @pytest.mark.asyncio
@@ -2322,18 +2379,6 @@ async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_en
         "verify_control_plane_application_access",
         unexpected_control_plane,
     )
-    created_with: list[tuple[str, str]] = []
-
-    async def fake_create_agent_session(runtime_base_url: str, token: str) -> str:
-        created_with.append((runtime_base_url, token))
-        return "desktop-runtime-session-1"
-
-    monkeypatch.setattr(
-        service,
-        "_create_desktop_runtime_agent_session",
-        fake_create_agent_session,
-    )
-
     result = await open_code_session(
         db=db_session,
         session_id=session.id,
@@ -2364,27 +2409,25 @@ async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_en
     assert provider_options_seen["cache_dir"] == "/tmp/desktop-data/model-catalog-cache"
     assert bootstrap_calls == 0
     assert binding.execution_target == "desktop_agent_runtime"
-    assert binding.runtime_session_id == "desktop-runtime-session-1"
+    assert binding.runtime_session_id is None
     assert hashlib.sha256(
         decrypt_runtime_cookie(binding.desktop_agent_runtime_token_enc).encode("ascii")
     ).digest() == hashlib.sha256(entry_token.encode("ascii")).digest()
-    assert created_with == [("http://127.0.0.1:19090", entry_token)]
     ownership = (
         await db_session.execute(
             select(CodeRuntimeAgentSession).where(
-                CodeRuntimeAgentSession.session_id == session.id,
-                CodeRuntimeAgentSession.runtime_session_id == "desktop-runtime-session-1",
+                CodeRuntimeAgentSession.session_id == session.id
             )
         )
-    ).scalar_one()
-    assert ownership.conversation_id is None
+    ).scalars().all()
+    assert ownership == []
     if entry_token in repr(result):
         pytest.fail("desktop runtime entry token leaked into public response")
     assert "desktop_agent_runtime_token_enc" not in result
 
 
 @pytest.mark.asyncio
-async def test_desktop_runtime_creates_one_agent_session_per_shell_and_reuses_it(
+async def test_desktop_runtime_prepares_one_binding_per_shell_without_changing_runtime_current(
     db_session,
     monkeypatch,
 ):
@@ -2433,13 +2476,6 @@ async def test_desktop_runtime_creates_one_agent_session_per_shell_and_reuses_it
                 "desktop-entry-token",
             )
 
-    created: list[str] = []
-
-    async def fake_create_agent_session(_runtime_base_url: str, _token: str) -> str:
-        runtime_session_id = f"desktop-runtime-session-{len(created) + 1}"
-        created.append(runtime_session_id)
-        return runtime_session_id
-
     monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_URL", "http://127.0.0.1:9988")
     monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_TOKEN", "manager-token")
     monkeypatch.setenv("DOLPHIN_DESKTOP_DATA_DIR", "/tmp/desktop-data")
@@ -2454,12 +2490,6 @@ async def test_desktop_runtime_creates_one_agent_session_per_shell_and_reuses_it
         "verify_control_plane_application_access",
         unexpected_control_plane,
     )
-    monkeypatch.setattr(
-        service,
-        "_create_desktop_runtime_agent_session",
-        fake_create_agent_session,
-    )
-
     first_open = await open_code_session(
         db=db_session,
         session_id=first.id,
@@ -2477,29 +2507,25 @@ async def test_desktop_runtime_creates_one_agent_session_per_shell_and_reuses_it
     )
     await db_session.commit()
 
-    assert created == ["desktop-runtime-session-1", "desktop-runtime-session-2"]
     assert len({options["local_proxy_url"] for options in provider_options_seen}) == 1
     assert len({options["local_proxy_token"] for options in provider_options_seen}) == 1
-    assert first_open["runtime_session_id"] == "desktop-runtime-session-1"
-    assert second_open["runtime_session_id"] == "desktop-runtime-session-2"
-    assert reopened_first["runtime_session_id"] == "desktop-runtime-session-1"
+    assert first_open["runtime_session_id"] is None
+    assert second_open["runtime_session_id"] is None
+    assert reopened_first["runtime_session_id"] is None
     ownership = (
         await db_session.execute(
             select(CodeRuntimeAgentSession).order_by(CodeRuntimeAgentSession.session_id)
         )
     ).scalars().all()
-    assert [(record.session_id, record.runtime_session_id) for record in ownership] == [
-        (first.id, "desktop-runtime-session-1"),
-        (second.id, "desktop-runtime-session-2"),
-    ]
+    assert ownership == []
     bindings = (
         await db_session.execute(
             select(CodeRuntimeBinding).order_by(CodeRuntimeBinding.session_id)
         )
     ).scalars().all()
     assert [(binding.session_id, binding.runtime_session_id) for binding in bindings] == [
-        (first.id, "desktop-runtime-session-1"),
-        (second.id, "desktop-runtime-session-2"),
+        (first.id, None),
+        (second.id, None),
     ]
 
 
@@ -3370,3 +3396,72 @@ async def test_short_code_route_rejects_another_control_plane_tenant(db_session)
             ctx=ctx,
             workspace_open=lambda *_args: pytest.fail("must not open another tenant workspace"),
         )
+
+
+def test_local_application_location_normalizes_identity_and_availability(tmp_path):
+    from app.code_runtime.application_locations import (
+        build_local_application_location,
+        local_location_id,
+        local_workspace_availability,
+        normalize_local_workspace_path,
+    )
+
+    workspace = tmp_path / "sales" / "workspace"
+    workspace.mkdir(parents=True)
+    alternate_path = workspace.parent / "." / workspace.name
+    missing_path = tmp_path / "sales" / "missing"
+
+    normalized = str(workspace.resolve())
+    assert normalize_local_workspace_path(alternate_path) == normalized
+    assert local_location_id(alternate_path) == local_location_id(workspace)
+    assert local_workspace_availability(workspace) == "ready"
+    assert local_workspace_availability(missing_path) == "missing"
+    assert build_local_application_location(
+        workspace_id="workspace-7",
+        workspace_path=alternate_path,
+    ) == {
+        "location": "local",
+        "location_id": local_location_id(workspace),
+        "availability": "ready",
+        "workspace_id": "workspace-7",
+        "workspace_path": normalized,
+        "environment_name": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_legacy_code_session_derives_location_and_backfills_on_write(db_session):
+    from app.code_runtime.session_location import (
+        backfill_session_location,
+        derive_session_location,
+    )
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="local-sales",
+        title="Legacy local session",
+        mode="code",
+        status="active",
+    )
+    db_session.add(session)
+    await db_session.flush()
+
+    assert derive_session_location(session) == {
+        "execution_location": "local",
+        "logical_application_id": "legacy:local-sales",
+    }
+    assert backfill_session_location(session) == {
+        "execution_location": "local",
+        "logical_application_id": "legacy:local-sales",
+    }
+    assert session.execution_location == "local"
+    assert session.logical_application_id == "legacy:local-sales"
+
+    session_id = session.id
+    await db_session.commit()
+    db_session.expire_all()
+    stored = await db_session.get(AIChatSession, session_id)
+    assert stored is not None
+    assert stored.execution_location == "local"
+    assert stored.logical_application_id == "legacy:local-sales"

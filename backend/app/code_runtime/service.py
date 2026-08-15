@@ -33,6 +33,7 @@ from app.code_runtime.local_runtime import (
     ensure_registered_local_workspace,
     local_workspace_path_text,
 )
+from app.code_runtime.application_locations import local_workspace_availability
 from app.code_runtime.execution_target import ExecutionTarget
 from app.models import Application, RegisteredWorkspace
 from app.models.ai_chat import (
@@ -57,36 +58,6 @@ _DESKTOP_RUNTIME_ENVIRONMENT_KEYS = (
     "DOLPHIN_DESKTOP_DATA_DIR",
     "DOLPHIN_AGENT_RUNTIME_PATH",
 )
-
-
-async def _create_desktop_runtime_agent_session(
-    runtime_base_url: str,
-    entry_token: str,
-) -> str:
-    """Create one Runtime agent session without exposing the desktop entry token."""
-    try:
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=5, read=30, write=10, pool=10)
-        ) as client:
-            response = await client.post(
-                f"{runtime_base_url.rstrip('/')}/api/agent/sessions",
-                headers={"Authorization": f"Bearer {entry_token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail="本地 Runtime 无法创建 agent session") from exc
-
-    if response.status_code != 200:
-        raise HTTPException(status_code=502, detail="本地 Runtime 创建 agent session 失败")
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        raise HTTPException(status_code=502, detail="本地 Runtime agent session 响应无效") from exc
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=502, detail="本地 Runtime agent session 响应无效")
-    runtime_session_id = str(payload.get("runtimeSessionId") or "").strip()
-    if not runtime_session_id:
-        raise HTTPException(status_code=502, detail="本地 Runtime 未返回 agent session 标识")
-    return runtime_session_id
 
 
 async def _remember_runtime_agent_session(
@@ -811,6 +782,7 @@ async def list_code_applications(
                 continue
             created_at = workspace.created_at.isoformat() if workspace.created_at else None
             updated_at = workspace.last_opened_at.isoformat() if workspace.last_opened_at else created_at
+            availability = local_workspace_availability(workspace_path)
             items.append({
                 "id": application_id,
                 "external_application_id": application_id,
@@ -828,6 +800,10 @@ async def list_code_applications(
                 "dicts": 0,
                 "local_workspace_path": workspace_path,
                 "workspace_id": workspace.ws_id,
+                "logical_application_id": workspace.logical_application_id,
+                "linked_remote_application_id": workspace.linked_remote_application_id,
+                "linked_remote_deployment_id": workspace.linked_remote_deployment_id,
+                "availability": availability,
                 "repository": None,
                 "owner": None,
                 "created_at": created_at,
@@ -905,6 +881,10 @@ async def create_code_application(
     seed_project_id: str | None = None,
     local_application: bool = False,
     local_workspace_path: str | None = None,
+    directory_mode: Literal["new_directory", "existing_directory"] = "new_directory",
+    initialize_project: bool = False,
+    linked_remote_application_id: str | None = None,
+    linked_remote_deployment_id: str | None = None,
     db: AsyncSession | None = None,
     ctx: Any | None = None,
     authorization_header: str | None = None,
@@ -931,12 +911,24 @@ async def create_code_application(
             application_id=str(data["applicationId"]),
             display_name=name,
             workspace_path=local_workspace_path or default_local_workspace_path(code),
+            directory_mode=directory_mode,
+            logical_application_id=f"local:{data['applicationId']}",
+            linked_remote_application_id=linked_remote_application_id,
+            linked_remote_deployment_id=linked_remote_deployment_id,
         )
+        already_registered = workspace.apaas_app_id != data["applicationId"]
+        data["applicationId"] = workspace.apaas_app_id or data["applicationId"]
         normalized = _normalize_code_application(data)
         normalized["source"] = "desktop-local"
         normalized["remote_status"] = None
         normalized["local_workspace_path"] = workspace.abs_path
         normalized["workspace_id"] = workspace.ws_id
+        normalized["logical_application_id"] = workspace.logical_application_id
+        normalized["linked_remote_application_id"] = workspace.linked_remote_application_id
+        normalized["linked_remote_deployment_id"] = workspace.linked_remote_deployment_id
+        normalized["availability"] = local_workspace_availability(workspace.abs_path)
+        normalized["already_registered"] = already_registered
+        normalized["initialize_project"] = bool(initialize_project)
         return normalized
 
     if local_code_applications_enabled():
@@ -1304,10 +1296,7 @@ async def open_code_session(
         runtime_session_id = (
             current_runtime_session_id
             if current_runtime_session_id
-            else await _create_desktop_runtime_agent_session(
-                runtime_base_url,
-                desktop_entry_token,
-            )
+            else str(runtime_session_id or "").strip() or None
         )
         binding.runtime_session_id = runtime_session_id
     if runtime_session_id:

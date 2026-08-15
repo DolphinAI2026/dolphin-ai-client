@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import AppIcon from '@/components/common/AppIcon.vue'
-import type { RailSession, RailSessionGroup } from '@/composables/railSessions'
+import type { RailSession } from '@/composables/railSessions'
+import type { CodeRailSessionGroup } from './codeRailHistory'
 
 const props = defineProps<{
   systemSessions: RailSession[]
-  applicationGroups: RailSessionGroup[]
+  applicationGroups: CodeRailSessionGroup[]
   activeSystemSessionId?: string
 }>()
 
@@ -40,8 +41,8 @@ function toggle(key: string) {
   collapsed.value = next
 }
 
-function applicationGroupKey(group: RailSessionGroup): string {
-  return `application:${group.shellSessionId || group.label}`
+function applicationGroupKey(group: CodeRailSessionGroup): string {
+  return `application:${group.logicalApplicationId}`
 }
 
 function sessionRunning(session: RailSession): boolean {
@@ -152,6 +153,7 @@ function deleteSession(session: RailSession) {
                 :class="{ expanded: !collapsed.has(applicationGroupKey(group)) }"
               />
               <span>{{ group.label }}</span>
+              <span class="sas-location-tags">{{ group.availableLocations.map(location => location === 'local' ? '本机' : '远程').join('、') }}</span>
               <span class="sas-count">{{ group.items.length }}</span>
             </button>
             <button
@@ -176,6 +178,7 @@ function deleteSession(session: RailSession) {
             >
               <span class="sas-state" :class="{ running: sessionRunning(session) }" />
               <span class="sas-title">{{ session.title || '未命名会话' }}</span>
+              <span class="sas-location">{{ session.locationSummary }}</span>
             </button>
           </div>
         </div>
@@ -220,6 +223,8 @@ function deleteSession(session: RailSession) {
 .sas-app-header { min-height: 27px; }
 .sas-app-toggle { flex: 1; gap: 5px; padding: 4px 6px; overflow: hidden; color: #758297; font: inherit; font-size: 11px; text-align: left; }
 .sas-app-toggle > span:not(.app-icon):not(.sas-count) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sas-location-tags, .sas-location { flex: 0 0 auto; color: #9aa5b5; font-size: 10px; }
+.sas-location { max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sas-app-new { width: 23px; height: 23px; margin-right: 3px; }
 .app-items { padding-left: 7px; }
 .app-item { padding-left: 8px; }

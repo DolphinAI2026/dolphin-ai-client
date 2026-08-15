@@ -22,9 +22,17 @@ from urllib.parse import quote, unquote, urlsplit
 import httpx
 from fastapi import HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import runtime
+from app.code_runtime.application_locations import (
+    LocalApplicationDirectoryMode,
+    LocalApplicationPathError,
+    local_workspace_path_identity,
+    local_workspace_path_digest,
+    prepare_local_application_workspace,
+)
 from app.engineering_sessions.git_state import GitCommandError, git, git_common_dir
 from app.engineering_sessions.service import EngineeringSessionService
 from app.models import Application, RegisteredWorkspace
@@ -61,6 +69,7 @@ _WORKSPACE_REQUIRED = "LOCAL_APPLICATION_WORKSPACE_REQUIRED"
 _WORKSPACE_FORBIDDEN = "LOCAL_APPLICATION_WORKSPACE_FORBIDDEN"
 _WORKSPACE_INVALID = "LOCAL_APPLICATION_WORKSPACE_INVALID"
 _APPLICATION_INVALID = "LOCAL_APPLICATION_ID_INVALID"
+_PATH_ALREADY_BOUND = "LOCAL_APPLICATION_PATH_ALREADY_BOUND"
 _INSTANCE_LOCKS: dict[tuple[int, str], asyncio.Lock] = {}
 _STARTING_TIMEOUT_SECONDS = 120
 _STARTING_POLL_SECONDS = 0.2
@@ -360,6 +369,20 @@ def default_local_workspace_path(app_code: str) -> Path:
     return default_local_workspace_root() / _safe_workspace_component(app_code)
 
 
+def _local_application_path_error(exc: LocalApplicationPathError) -> HTTPException:
+    status_code = 400 if exc.code == "LOCAL_APPLICATION_PATH_NOT_ABSOLUTE" else 409
+    return _error(status_code, exc.code, str(exc))
+
+
+def _optional_remote_identifier(value: object) -> str | None:
+    identifier = _text(value)
+    return identifier[:120] or None
+
+
+def _default_logical_application_id(application_id: str) -> str:
+    return f"local:{application_id}"[:160]
+
+
 async def ensure_registered_local_workspace(
     db: AsyncSession,
     ctx: Any,
@@ -367,91 +390,124 @@ async def ensure_registered_local_workspace(
     application_id: str,
     display_name: str,
     workspace_path: str | Path | None = None,
+    directory_mode: LocalApplicationDirectoryMode = "new_directory",
+    logical_application_id: str | None = None,
+    linked_remote_application_id: str | None = None,
+    linked_remote_deployment_id: str | None = None,
 ) -> RegisteredWorkspace:
-    import subprocess
-
     external_app_id = _text(application_id)
     if not external_app_id or not _APPLICATION_COMPONENT.fullmatch(external_app_id):
         raise _error(400, _APPLICATION_INVALID, "应用标识不安全")
 
-    ws_dir = Path(workspace_path) if workspace_path is not None else default_local_workspace_path(external_app_id)
-    ws_dir = ws_dir.expanduser()
-    if not ws_dir.is_absolute():
-        raise _error(409, _WORKSPACE_INVALID, "本地应用目录必须是绝对路径")
-    resolved_abs = local_workspace_path_text(ws_dir.resolve(strict=False))
-
-    candidates = (
-        await db.execute(
-            select(RegisteredWorkspace).where(
-                RegisteredWorkspace.tenant_id == int(ctx.tenant_id),
-            )
+    requested_path = workspace_path or default_local_workspace_path(external_app_id)
+    try:
+        resolved_abs = prepare_local_application_workspace(
+            requested_path,
+            directory_mode=directory_mode,
         )
-    ).scalars().all()
-    existing = next(
-        (
-            candidate
-            for candidate in candidates
-            if _workspace_path_identity(candidate.abs_path)
-            == _workspace_path_identity(resolved_abs)
-        ),
-        None,
-    )
+    except LocalApplicationPathError as exc:
+        raise _local_application_path_error(exc) from exc
+    remote_application_id = _optional_remote_identifier(linked_remote_application_id)
+    remote_deployment_id = _optional_remote_identifier(linked_remote_deployment_id)
+    path_digest = local_workspace_path_digest(resolved_abs)
+
+    candidates = (await db.execute(select(RegisteredWorkspace))).scalars().all()
+    matching = [
+        candidate
+        for candidate in candidates
+        if candidate.path_identity_digest == path_digest
+        or local_workspace_path_identity(candidate.abs_path)
+        == local_workspace_path_identity(resolved_abs)
+    ]
+    if len(matching) > 1:
+        raise _error(409, _PATH_ALREADY_BOUND, "本地项目目录存在重复历史绑定")
+    existing = matching[0] if matching else None
     if existing is not None:
+        if existing.tenant_id != int(ctx.tenant_id):
+            raise _error(409, _PATH_ALREADY_BOUND, "本地项目目录已绑定到其他应用")
         if existing.user_id != int(ctx.user.id):
-            raise _error(403, _WORKSPACE_FORBIDDEN, "无权使用该本地应用目录")
+            raise _error(409, _PATH_ALREADY_BOUND, "本地项目目录已绑定给其他用户")
         bound_application = _text(existing.apaas_app_id)
-        if bound_application and bound_application != external_app_id:
-            raise _error(409, _WORKSPACE_INVALID, "本地应用目录已被其他应用使用")
+        if (
+            remote_application_id
+            and _text(existing.linked_remote_application_id)
+            and remote_application_id != _text(existing.linked_remote_application_id)
+        ) or (
+            remote_deployment_id
+            and _text(existing.linked_remote_deployment_id)
+            and remote_deployment_id != _text(existing.linked_remote_deployment_id)
+        ):
+            raise _error(409, _PATH_ALREADY_BOUND, "本地项目目录已绑定到其他远程应用")
+        if not bound_application:
+            existing.apaas_app_id = external_app_id
+            bound_application = external_app_id
+            existing.display_name = _text(display_name)[:200] or _safe_workspace_component(external_app_id)
+        if not _text(existing.logical_application_id):
+            existing.logical_application_id = (
+                _text(logical_application_id)[:160]
+                or _default_logical_application_id(bound_application)
+            )
+        if remote_application_id and not _text(existing.linked_remote_application_id):
+            existing.linked_remote_application_id = remote_application_id
+        if remote_deployment_id and not _text(existing.linked_remote_deployment_id):
+            existing.linked_remote_deployment_id = remote_deployment_id
         existing.workspace_type = "code-local-application"
-        existing.apaas_app_id = external_app_id
-        existing.display_name = _text(display_name)[:200] or _safe_workspace_component(external_app_id)
+        existing.path_identity_digest = path_digest
         existing.last_opened_at = datetime.utcnow()
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            raise _error(409, _PATH_ALREADY_BOUND, "本地项目目录已绑定到其他应用")
         await db.refresh(existing)
         return existing
 
-    if ws_dir.exists() and (not ws_dir.is_dir() or any(ws_dir.iterdir())):
-        raise _error(409, _WORKSPACE_INVALID, "本地应用目录已存在且不为空")
-    ws_dir.mkdir(parents=True, exist_ok=True)
-
-    try:
-        subprocess.run(
-            ["git", "init"],
-            cwd=str(ws_dir),
-            capture_output=True,
-            check=True,
-            timeout=30,
-            **runtime.subprocess_window_kwargs(),
-        )
-        subprocess.run(
-            ["git", "commit", "--allow-empty", "-m", "init"],
-            cwd=str(ws_dir),
-            capture_output=True,
-            check=True,
-            timeout=30,
-            env={
-                **os.environ,
-                "GIT_AUTHOR_NAME": "dolphin-code",
-                "GIT_AUTHOR_EMAIL": "code@local",
-                "GIT_COMMITTER_NAME": "dolphin-code",
-                "GIT_COMMITTER_EMAIL": "code@local",
-            },
-            **runtime.subprocess_window_kwargs(),
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise _error(503, _PREPARATION_FAILED, "无法初始化本地应用 Git 目录") from exc
-
     workspace = RegisteredWorkspace(
         ws_id=f"{int(ctx.user.id)}_{uuid.uuid4().hex[:8]}",
-        abs_path=local_workspace_path_text(ws_dir.resolve()),
+        abs_path=local_workspace_path_text(resolved_abs),
+        path_identity_digest=path_digest,
         user_id=int(ctx.user.id),
         tenant_id=int(ctx.tenant_id),
         workspace_type="code-local-application",
         apaas_app_id=external_app_id,
+        logical_application_id=(
+            _text(logical_application_id)[:160]
+            or _default_logical_application_id(external_app_id)
+        ),
+        linked_remote_application_id=remote_application_id,
+        linked_remote_deployment_id=remote_deployment_id,
         display_name=_text(display_name)[:200] or _safe_workspace_component(external_app_id),
     )
     db.add(workspace)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        concurrent_rows = (
+            await db.execute(select(RegisteredWorkspace))
+        ).scalars().all()
+        concurrent = [
+            candidate
+            for candidate in concurrent_rows
+            if candidate.path_identity_digest == path_digest
+            or local_workspace_path_identity(candidate.abs_path)
+            == local_workspace_path_identity(resolved_abs)
+        ]
+        if not concurrent:
+            raise
+        if len(concurrent) > 1:
+            raise _error(409, _PATH_ALREADY_BOUND, "本地项目目录存在重复历史绑定")
+        return await ensure_registered_local_workspace(
+            db,
+            ctx,
+            application_id=external_app_id,
+            display_name=display_name,
+            workspace_path=resolved_abs,
+            directory_mode=directory_mode,
+            logical_application_id=logical_application_id,
+            linked_remote_application_id=remote_application_id,
+            linked_remote_deployment_id=remote_deployment_id,
+        )
     await db.refresh(workspace)
     return workspace
 
@@ -463,78 +519,55 @@ async def rebind_registered_local_workspace(
     *,
     workspace_path: str | Path,
 ) -> RegisteredWorkspace:
-    import subprocess
-
     workspace = await resolve_registered_workspace(
         db,
         session,
         ctx,
         validate_git=False,
     )
-    ws_dir = Path(workspace_path).expanduser()
-    if not ws_dir.is_absolute():
-        raise _error(409, _WORKSPACE_INVALID, "本地应用目录必须是绝对路径")
-    resolved_abs = local_workspace_path_text(ws_dir.resolve(strict=False))
+    try:
+        resolved_abs = prepare_local_application_workspace(
+            workspace_path,
+            directory_mode="existing_directory",
+        )
+    except LocalApplicationPathError as exc:
+        raise _local_application_path_error(exc) from exc
+    path_digest = local_workspace_path_digest(resolved_abs)
     candidates = (
         await db.execute(
-            select(RegisteredWorkspace).where(
-                RegisteredWorkspace.tenant_id == int(ctx.tenant_id),
-                RegisteredWorkspace.id != workspace.id,
-            )
+            select(RegisteredWorkspace).where(RegisteredWorkspace.id != workspace.id)
         )
     ).scalars().all()
     occupied = next(
         (
             candidate
             for candidate in candidates
-            if _workspace_path_identity(candidate.abs_path)
-            == _workspace_path_identity(resolved_abs)
+            if local_workspace_path_identity(candidate.abs_path)
+            == local_workspace_path_identity(resolved_abs)
         ),
         None,
     )
     if occupied is not None:
-        if occupied.user_id != int(ctx.user.id):
-            raise _error(403, _WORKSPACE_FORBIDDEN, "无权使用该本地应用目录")
-        raise _error(409, _WORKSPACE_INVALID, "本地应用目录已被其他应用使用")
+        raise _error(409, _PATH_ALREADY_BOUND, "本地项目目录已绑定给其他应用")
 
-    initialize_git = not ws_dir.exists() or (
-        ws_dir.is_dir() and not any(ws_dir.iterdir())
-    )
-    if ws_dir.exists() and not ws_dir.is_dir():
-        raise _error(409, _WORKSPACE_INVALID, "本地应用目录不是目录")
-    if initialize_git:
-        ws_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            subprocess.run(
-                ["git", "init"],
-                cwd=str(ws_dir),
-                capture_output=True,
-                check=True,
-                timeout=30,
-                **runtime.subprocess_window_kwargs(),
-            )
-            subprocess.run(
-                ["git", "commit", "--allow-empty", "-m", "init"],
-                cwd=str(ws_dir),
-                capture_output=True,
-                check=True,
-                timeout=30,
-                env={
-                    **os.environ,
-                    "GIT_AUTHOR_NAME": "dolphin-code",
-                    "GIT_AUTHOR_EMAIL": "code@local",
-                    "GIT_COMMITTER_NAME": "dolphin-code",
-                    "GIT_COMMITTER_EMAIL": "code@local",
-                },
-                **runtime.subprocess_window_kwargs(),
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise _error(503, _PREPARATION_FAILED, "无法初始化本地应用 Git 目录") from exc
-
-    _validate_workspace_directory(resolved_abs)
-    workspace.abs_path = resolved_abs
+    workspace.abs_path = local_workspace_path_text(resolved_abs)
+    workspace.path_identity_digest = path_digest
     workspace.last_opened_at = datetime.utcnow()
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        conflicts = (
+            await db.execute(
+                select(RegisteredWorkspace).where(
+                    RegisteredWorkspace.path_identity_digest == path_digest,
+                    RegisteredWorkspace.id != workspace.id,
+                )
+            )
+        ).scalars().all()
+        if conflicts:
+            raise _error(409, _PATH_ALREADY_BOUND, "本地项目目录已绑定给其他应用")
+        raise
     await db.refresh(workspace)
     return workspace
 

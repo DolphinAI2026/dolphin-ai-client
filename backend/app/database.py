@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from sqlalchemy.orm import DeclarativeBase
 from app.application_member_role_migration import migrate_application_member_roles
 from app.config import settings
+from app.code_runtime.workspace_path_identity import migrate_registered_workspace_path_identity
 from app.tenant_public_id import TenantPublicIdStrictError, reconcile_tenant_public_ids
 
 
@@ -116,11 +117,35 @@ AI_CHAT_SESSION_PROFILE_MIGRATIONS = (
 )
 
 
+CODE_APPLICATION_LOCATION_MIGRATIONS = (
+    "ALTER TABLE registered_workspaces ADD COLUMN logical_application_id VARCHAR(160) NULL",
+    "ALTER TABLE registered_workspaces ADD COLUMN linked_remote_application_id VARCHAR(120) NULL",
+    "ALTER TABLE registered_workspaces ADD COLUMN linked_remote_deployment_id VARCHAR(120) NULL",
+    "CREATE INDEX IF NOT EXISTS ix_registered_workspaces_logical_application_id "
+    "ON registered_workspaces(logical_application_id)",
+    "ALTER TABLE ai_chat_sessions ADD COLUMN logical_application_id VARCHAR(160) NULL",
+    "CREATE INDEX IF NOT EXISTS ix_ai_chat_sessions_logical_application_id "
+    "ON ai_chat_sessions(logical_application_id)",
+    "ALTER TABLE ai_chat_sessions ADD COLUMN execution_location VARCHAR(16) NULL",
+    "ALTER TABLE ai_chat_sessions ADD COLUMN session_purpose VARCHAR(32) NOT NULL DEFAULT 'standard'",
+    "ALTER TABLE ai_chat_sessions ADD COLUMN initialization_task_key VARCHAR(120) NULL",
+    "ALTER TABLE ai_chat_sessions ADD COLUMN initialization_task_state VARCHAR(24) NULL",
+)
+
+
 async def migrate_ai_chat_session_profile(conn) -> None:
     """Add the P0 profile column to an existing SQLite/MySQL AIChat table."""
 
     for statement in AI_CHAT_SESSION_PROFILE_MIGRATIONS:
         await _execute_best_effort(conn, statement)
+
+
+async def migrate_code_application_location_contract(conn) -> None:
+    """Add nullable location fields without rewriting existing Code records."""
+
+    for statement in CODE_APPLICATION_LOCATION_MIGRATIONS:
+        await _execute_best_effort(conn, statement)
+    await migrate_registered_workspace_path_identity(conn)
 
 
 async def init_db():
@@ -314,6 +339,7 @@ async def init_db():
             await _execute_best_effort(conn, stmt)
 
         await migrate_ai_chat_session_profile(conn)
+        await migrate_code_application_location_contract(conn)
 
         await migrate_application_member_roles(conn)
 
