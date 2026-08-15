@@ -25,14 +25,17 @@ artifact，并在输出中标记该降级；标签构建（`DOLPHIN_RELEASE_BUIL
 ## GitHub 标签发布
 
 正式包由 `.github/workflows/desktop-release.yml` 在 `vX.Y.Z` 标签或手动填写 `X.Y.Z` 后发布。它在构建前
-校验 updater 签名私钥，并在 Windows x64、macOS arm64、Linux x64 上分别准备固定 revision 的
-`agent-runtime`、`agentic-coding`、Builder 前端、Python 环境和固定版本 Codex。三端只上传正式主包及
+校验 updater 签名私钥，并在 Windows x64、macOS arm64、Linux x64 上分别从固定 revision 准备
+`agent-runtime`、`agentic-coding`、Superpowers、Builder 前端、Python 环境和固定版本 Codex，并在构建前
+物化本地 Runtime appliance。手动发布会先创建或验证 `vX.Y.Z` 标签精确指向当前构建提交，再以该提交构建三端包。
+三端只上传正式主包及
 Tauri updater 有效载荷；Release job 汇总为 `dist-desktop/publish/`，生成 `latest.json` 和
 `SHA256SUMS.txt` 后发布。
 
 GitHub Actions 需要以下 Secrets：`TAURI_SIGNING_PRIVATE_KEY`、可选的
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`、`DEFINESYS_GIT_USERNAME`、`DEFINESYS_GIT_TOKEN` 和默认
-`GITHUB_TOKEN`。缺少签名私钥时标签发布会在任一平台构建开始前失败。
+`GITHUB_TOKEN`。`DEFINESYS_GIT_TOKEN` 必须仅授予 `agent-runtime` 和 `agentic-coding` 的只读拉取权限；
+工作流仅将其写入一次性 Git 配置，并在内部仓库 clone 完成后立即删除。缺少签名私钥时标签发布会在任一平台构建开始前失败。
 
 客户端 updater 固定读取
 `https://github.com/Mars-hub404/apaas-builder-ai/releases/latest/download/latest.json`。工作流在 Release

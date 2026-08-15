@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
-import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -80,6 +80,33 @@ function releaseUrl(repository, tag, asset) {
   return `https://github.com/${repository}/releases/download/${tag}/${encodeURIComponent(asset)}`;
 }
 
+async function publishStagedOutput(staging, output) {
+  const parent = path.dirname(output);
+  const backup = await mkdtemp(path.join(parent, `.${path.basename(output)}.backup-`));
+  await rm(backup, { recursive: true, force: true });
+  let movedExistingOutput = false;
+  let published = false;
+  try {
+    try {
+      await rename(output, backup);
+      movedExistingOutput = true;
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    await rename(staging, output);
+    published = true;
+    if (movedExistingOutput) await rm(backup, { recursive: true, force: true });
+  } catch (error) {
+    if (!published && movedExistingOutput) {
+      await rename(backup, output).catch(() => {});
+    }
+    throw error;
+  } finally {
+    if (!published) await rm(staging, { recursive: true, force: true });
+    if (!movedExistingOutput) await rm(backup, { recursive: true, force: true });
+  }
+}
+
 export async function prepareRelease({ version, repository, tag, input, output }) {
   if (!semverPattern.test(version ?? '')) {
     throw new Error(`Version must be X.Y.Z SemVer: ${version ?? ''}`);
@@ -109,23 +136,17 @@ export async function prepareRelease({ version, repository, tag, input, output }
     sources.set(name, await requireSingleFile(input, name));
   }
 
-  await rm(output, { recursive: true, force: true });
-  await mkdir(output, { recursive: true });
-  for (const [name, source] of sources) {
-    await copyFile(source, path.join(output, name));
-  }
-
   const platforms = {
     'windows-x86_64': {
-      signature: (await readFile(path.join(output, `${names.windowsUpdater}.sig`), 'utf8')).trim(),
+      signature: (await readFile(sources.get(`${names.windowsUpdater}.sig`), 'utf8')).trim(),
       url: releaseUrl(repository, tag, names.windowsUpdater),
     },
     'darwin-aarch64': {
-      signature: (await readFile(path.join(output, `${names.macosUpdater}.sig`), 'utf8')).trim(),
+      signature: (await readFile(sources.get(`${names.macosUpdater}.sig`), 'utf8')).trim(),
       url: releaseUrl(repository, tag, names.macosUpdater),
     },
     'linux-x86_64': {
-      signature: (await readFile(path.join(output, `${names.linuxUpdater}.sig`), 'utf8')).trim(),
+      signature: (await readFile(sources.get(`${names.linuxUpdater}.sig`), 'utf8')).trim(),
       url: releaseUrl(repository, tag, names.linuxUpdater),
     },
   };
@@ -135,20 +156,32 @@ export async function prepareRelease({ version, repository, tag, input, output }
     }
   }
 
-  const latest = {
-    version,
-    notes: `DolphinAI ${version}`,
-    pub_date: new Date().toISOString(),
-    platforms,
-  };
-  await writeFile(path.join(output, 'latest.json'), `${JSON.stringify(latest, null, 2)}\n`);
+  await mkdir(path.dirname(output), { recursive: true });
+  const staging = await mkdtemp(path.join(path.dirname(output), `.${path.basename(output)}.staging-`));
+  try {
+    for (const [name, source] of sources) {
+      await copyFile(source, path.join(staging, name));
+    }
 
-  const checksumNames = [...required, 'latest.json'].sort();
-  const sums = await Promise.all(
-    checksumNames.map(async (name) => `${await sha256(path.join(output, name))}  ${name}`),
-  );
-  await writeFile(path.join(output, 'SHA256SUMS.txt'), `${sums.join('\n')}\n`);
-  return { names, latest, output };
+    const latest = {
+      version,
+      notes: `DolphinAI ${version}`,
+      pub_date: new Date().toISOString(),
+      platforms,
+    };
+    await writeFile(path.join(staging, 'latest.json'), `${JSON.stringify(latest, null, 2)}\n`);
+
+    const checksumNames = [...required, 'latest.json'].sort();
+    const sums = await Promise.all(
+      checksumNames.map(async (name) => `${await sha256(path.join(staging, name))}  ${name}`),
+    );
+    await writeFile(path.join(staging, 'SHA256SUMS.txt'), `${sums.join('\n')}\n`);
+    await publishStagedOutput(staging, output);
+    return { names, latest, output };
+  } catch (error) {
+    await rm(staging, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 async function expectFailure(action, expectedText) {
@@ -188,6 +221,30 @@ async function selfTest() {
     if (latest.platforms['linux-x86_64'].url !== expectedUrl || result.latest.version !== version) {
       throw new Error('latest.json does not use the release download URL');
     }
+
+    await writeFile(path.join(output, 'sentinel.txt'), 'existing release boundary');
+    await writeFile(path.join(input, `${names.windowsUpdater}.sig`), ' \n');
+    await expectFailure(
+      () => prepareRelease({ version, repository: 'Mars-hub404/apaas-builder-ai', tag: 'v0.2.70', input, output }),
+      'Updater signature is empty for windows-x86_64',
+    );
+    if (await readFile(path.join(output, 'sentinel.txt'), 'utf8') !== 'existing release boundary') {
+      throw new Error('Empty updater signatures must not modify the release output boundary');
+    }
+    await writeFile(path.join(input, `${names.windowsUpdater}.sig`), `signature-${names.windowsUpdater}.sig`);
+
+    const duplicate = path.join(input, 'duplicate');
+    await mkdir(duplicate);
+    await writeFile(path.join(duplicate, names.linuxDeb), names.linuxDeb);
+    await expectFailure(
+      () => prepareRelease({ version, repository: 'Mars-hub404/apaas-builder-ai', tag: 'v0.2.70', input, output }),
+      `Expected exactly one ${names.linuxDeb}`,
+    );
+    if (await readFile(path.join(output, 'sentinel.txt'), 'utf8') !== 'existing release boundary') {
+      throw new Error('Duplicate inputs must not modify the release output boundary');
+    }
+    await rm(duplicate, { recursive: true, force: true });
+
     await rm(path.join(input, names.macosDmg));
     await expectFailure(
       () => prepareRelease({ version, repository: 'Mars-hub404/apaas-builder-ai', tag: 'v0.2.70', input, output }),

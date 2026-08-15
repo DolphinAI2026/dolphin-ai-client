@@ -13,7 +13,9 @@ env:
   AGENT_RUNTIME_REPO_URL: https://git.dfy.definesys.cn/orcamatrix/agent-runtime.git
   AGENT_RUNTIME_REVISION: c98437dbde5c803670a8694c7558870a05eb4c6e
   AGENTIC_CODING_REPO_URL: https://git.dfy.definesys.cn/support/agentic-coding.git
-  AGENTIC_CODING_REVISION: 14844c2b8d85a20b2c1c17aa46eb88f07eb8d5c7
+  AGENTIC_CODING_REVISION: eef0836123f8b94f4424c88726476695747f8c96
+  SUPERPOWERS_REPO_URL: https://github.com/obra/superpowers.git
+  SUPERPOWERS_REVISION: 44c9b2d6e889982ac18c27d05a19fefe335194e1
   CODEX_VERSION: 0.147.0
 
 jobs:
@@ -32,20 +34,43 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Checkout fixed runtime dependencies
+      - id: debug-version
+        name: Validate optional debug version
+        shell: pwsh
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:REQUESTED_VERSION -and $env:REQUESTED_VERSION -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$') {
+            throw 'REQUESTED_VERSION must be SemVer when provided.'
+          }
+          "version=$($env:REQUESTED_VERSION)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Checkout fixed runtime and capability dependencies
         shell: pwsh
         env:
           DEFINESYS_GIT_USERNAME: ${{ secrets.DEFINESYS_GIT_USERNAME }}
           DEFINESYS_GIT_TOKEN: ${{ secrets.DEFINESYS_GIT_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
-          if (-not $env:DEFINESYS_GIT_USERNAME -or -not $env:DEFINESYS_GIT_TOKEN) { throw 'Internal Git credentials are required.' }
-          $credentialUrl = "https://$($env:DEFINESYS_GIT_USERNAME):$($env:DEFINESYS_GIT_TOKEN)@git.dfy.definesys.cn/"
-          git config --global "url.$credentialUrl.insteadOf" 'https://git.dfy.definesys.cn/'
-          git clone $env:AGENT_RUNTIME_REPO_URL "$env:GITHUB_WORKSPACE\..\agent-runtime"
-          git -C "$env:GITHUB_WORKSPACE\..\agent-runtime" checkout --detach $env:AGENT_RUNTIME_REVISION
-          git clone $env:AGENTIC_CODING_REPO_URL "$env:GITHUB_WORKSPACE\..\agentic-coding"
-          git -C "$env:GITHUB_WORKSPACE\..\agentic-coding" checkout --detach $env:AGENTIC_CODING_REVISION
+          if (-not $env:DEFINESYS_GIT_USERNAME -or -not $env:DEFINESYS_GIT_TOKEN) { throw 'Internal Git read credentials are required.' }
+          $temporaryConfig = Join-Path $env:RUNNER_TEMP ("dolphin-internal-git-" + [Guid]::NewGuid().ToString('N') + '.config')
+          $previousGitConfig = $env:GIT_CONFIG_GLOBAL
+          try {
+            $env:GIT_CONFIG_GLOBAL = $temporaryConfig
+            $credentialUrl = "https://$($env:DEFINESYS_GIT_USERNAME):$($env:DEFINESYS_GIT_TOKEN)@git.dfy.definesys.cn/"
+            git config --global "url.$credentialUrl.insteadOf" 'https://git.dfy.definesys.cn/'
+            git clone $env:AGENT_RUNTIME_REPO_URL "$env:GITHUB_WORKSPACE\..\agent-runtime"
+            git -C "$env:GITHUB_WORKSPACE\..\agent-runtime" checkout --detach $env:AGENT_RUNTIME_REVISION
+            git clone $env:AGENTIC_CODING_REPO_URL "$env:GITHUB_WORKSPACE\..\agentic-coding"
+            git -C "$env:GITHUB_WORKSPACE\..\agentic-coding" checkout --detach $env:AGENTIC_CODING_REVISION
+          } finally {
+            if ($previousGitConfig) { $env:GIT_CONFIG_GLOBAL = $previousGitConfig } else { Remove-Item Env:GIT_CONFIG_GLOBAL -ErrorAction SilentlyContinue }
+            Remove-Item -LiteralPath $temporaryConfig -Force -ErrorAction SilentlyContinue
+          }
+          git clone $env:SUPERPOWERS_REPO_URL "$env:GITHUB_WORKSPACE\..\superpowers"
+          git -C "$env:GITHUB_WORKSPACE\..\superpowers" checkout --detach $env:SUPERPOWERS_REVISION
+          if (-not (Test-Path "$env:GITHUB_WORKSPACE\..\superpowers\.codex-plugin\plugin.json" -PathType Leaf)) { throw 'Fixed Superpowers source is incomplete.' }
 
       - name: Build Builder and Python runtime dependencies
         shell: pwsh
@@ -63,14 +88,27 @@ jobs:
         run: |
           npm install --prefix .codex-native --no-save --no-package-lock --ignore-scripts "@openai/codex@$env:CODEX_VERSION"
           $codexRoot = Join-Path $env:GITHUB_WORKSPACE '.codex-native\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc'
-          if (-not (Test-Path "$codexRoot\bin\codex.exe" -PathType Leaf)) { throw "Fixed Codex package is incomplete." }
+          if (-not (Test-Path "$codexRoot\bin\codex.exe" -PathType Leaf)) { throw 'Fixed Codex package is incomplete.' }
           "CODEX_NATIVE_ROOT=$codexRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Materialize Windows local Runtime appliance
+        shell: pwsh
+        run: |
+          & ./scripts/prepare-local-runtime-appliance-windows.ps1 `
+            -AgentRuntimeRepo "$env:GITHUB_WORKSPACE\..\agent-runtime" `
+            -AgenticCodingRoot "$env:GITHUB_WORKSPACE\..\agentic-coding" `
+            -CodexVendorRoot $env:CODEX_NATIVE_ROOT `
+            -BuilderDist "$env:GITHUB_WORKSPACE\..\agent-runtime\web\builder\dist" `
+            -SuperpowersSource "$env:GITHUB_WORKSPACE\..\superpowers"
+          if ($LASTEXITCODE -ne 0) { throw "Windows Runtime appliance preparation failed with exit code $LASTEXITCODE." }
 
       - name: Build unsigned portable debug package
         shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.debug-version.outputs.version }}
         run: |
-          $args = @('-Bundle', 'portable')
-          if ('${{ inputs.version }}') { $args += @('-Version', '${{ inputs.version }}') }
+          $args = @('-Bundle', 'portable', '-UsePreparedRuntimeAppliance')
+          if ($env:RELEASE_VERSION) { $args += @('-Version', $env:RELEASE_VERSION) }
           ./scripts/build-desktop-windows.ps1 @args
 
       - name: Upload portable debug package

@@ -17,7 +17,9 @@ env:
   AGENT_RUNTIME_REPO_URL: https://git.dfy.definesys.cn/orcamatrix/agent-runtime.git
   AGENT_RUNTIME_REVISION: c98437dbde5c803670a8694c7558870a05eb4c6e
   AGENTIC_CODING_REPO_URL: https://git.dfy.definesys.cn/support/agentic-coding.git
-  AGENTIC_CODING_REVISION: 14844c2b8d85a20b2c1c17aa46eb88f07eb8d5c7
+  AGENTIC_CODING_REVISION: eef0836123f8b94f4424c88726476695747f8c96
+  SUPERPOWERS_REPO_URL: https://github.com/obra/superpowers.git
+  SUPERPOWERS_REVISION: 44c9b2d6e889982ac18c27d05a19fefe335194e1
   CODEX_VERSION: 0.147.0
 
 jobs:
@@ -26,9 +28,14 @@ jobs:
     outputs:
       version: ${{ steps.release.outputs.version }}
       tag: ${{ steps.release.outputs.tag }}
+      build_sha: ${{ steps.release.outputs.build_sha }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - id: release
-        name: Validate release version and signing secrets
+        name: Validate release version, secrets, and tag commit
         shell: bash
         env:
           REQUESTED_VERSION: ${{ inputs.version }}
@@ -37,31 +44,55 @@ jobs:
           DEFINESYS_GIT_TOKEN: ${{ secrets.DEFINESYS_GIT_TOKEN }}
         run: |
           set -euo pipefail
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            tag="${GITHUB_REF_NAME}"
-          else
-            tag="v${REQUESTED_VERSION}"
-          fi
-          [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]] || {
-            echo "::error::Desktop release tag must be vX.Y.Z SemVer."
-            exit 1
-          }
           [[ -n "${TAURI_SIGNING_PRIVATE_KEY}" ]] || {
             echo "::error::TAURI_SIGNING_PRIVATE_KEY is required before desktop Release builds."
             exit 1
           }
           [[ -n "${DEFINESYS_GIT_USERNAME}" && -n "${DEFINESYS_GIT_TOKEN}" ]] || {
-            echo "::error::DEFINESYS_GIT_USERNAME and DEFINESYS_GIT_TOKEN are required to checkout runtime dependencies."
+            echo "::error::DEFINESYS_GIT_USERNAME and DEFINESYS_GIT_TOKEN require read-only access to the two internal runtime repositories."
+            exit 1
+          }
+
+          build_sha="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME}"
+            tag_commit="$(git rev-list -n 1 "refs/tags/${tag}")"
+          else
+            [[ "${REQUESTED_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]] || {
+              echo "::error::Desktop release version must be X.Y.Z SemVer."
+              exit 1
+            }
+            tag="v${REQUESTED_VERSION}"
+            if git ls-remote --exit-code --refs origin "refs/tags/${tag}" >/dev/null; then
+              git fetch --force origin "refs/tags/${tag}:refs/tags/${tag}"
+            else
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git tag --annotate "${tag}" "${build_sha}" --message "DolphinAI ${tag}"
+              git push origin "refs/tags/${tag}"
+            fi
+            tag_commit="$(git rev-list -n 1 "refs/tags/${tag}")"
+          fi
+
+          [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]] || {
+            echo "::error::Desktop release tag must be vX.Y.Z SemVer."
+            exit 1
+          }
+          [[ "${tag_commit}" == "${build_sha}" ]] || {
+            echo "::error::Release tag ${tag} must point to build commit ${build_sha}."
             exit 1
           }
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
           echo "version=${tag#v}" >> "${GITHUB_OUTPUT}"
+          echo "build_sha=${build_sha}" >> "${GITHUB_OUTPUT}"
 
   build-windows:
     needs: release-metadata
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-metadata.outputs.build_sha }}
 
       - uses: actions/setup-node@v4
         with:
@@ -73,19 +104,31 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Checkout fixed internal runtime dependencies
+      - name: Checkout fixed runtime and capability dependencies
         shell: pwsh
         env:
           DEFINESYS_GIT_USERNAME: ${{ secrets.DEFINESYS_GIT_USERNAME }}
           DEFINESYS_GIT_TOKEN: ${{ secrets.DEFINESYS_GIT_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $credentialUrl = "https://$($env:DEFINESYS_GIT_USERNAME):$($env:DEFINESYS_GIT_TOKEN)@git.dfy.definesys.cn/"
-          git config --global "url.$credentialUrl.insteadOf" 'https://git.dfy.definesys.cn/'
-          git clone $env:AGENT_RUNTIME_REPO_URL "$env:GITHUB_WORKSPACE\..\agent-runtime"
-          git -C "$env:GITHUB_WORKSPACE\..\agent-runtime" checkout --detach $env:AGENT_RUNTIME_REVISION
-          git clone $env:AGENTIC_CODING_REPO_URL "$env:GITHUB_WORKSPACE\..\agentic-coding"
-          git -C "$env:GITHUB_WORKSPACE\..\agentic-coding" checkout --detach $env:AGENTIC_CODING_REVISION
+          if (-not $env:DEFINESYS_GIT_USERNAME -or -not $env:DEFINESYS_GIT_TOKEN) { throw 'Internal Git read credentials are required.' }
+          $temporaryConfig = Join-Path $env:RUNNER_TEMP ("dolphin-internal-git-" + [Guid]::NewGuid().ToString('N') + '.config')
+          $previousGitConfig = $env:GIT_CONFIG_GLOBAL
+          try {
+            $env:GIT_CONFIG_GLOBAL = $temporaryConfig
+            $credentialUrl = "https://$($env:DEFINESYS_GIT_USERNAME):$($env:DEFINESYS_GIT_TOKEN)@git.dfy.definesys.cn/"
+            git config --global "url.$credentialUrl.insteadOf" 'https://git.dfy.definesys.cn/'
+            git clone $env:AGENT_RUNTIME_REPO_URL "$env:GITHUB_WORKSPACE\..\agent-runtime"
+            git -C "$env:GITHUB_WORKSPACE\..\agent-runtime" checkout --detach $env:AGENT_RUNTIME_REVISION
+            git clone $env:AGENTIC_CODING_REPO_URL "$env:GITHUB_WORKSPACE\..\agentic-coding"
+            git -C "$env:GITHUB_WORKSPACE\..\agentic-coding" checkout --detach $env:AGENTIC_CODING_REVISION
+          } finally {
+            if ($previousGitConfig) { $env:GIT_CONFIG_GLOBAL = $previousGitConfig } else { Remove-Item Env:GIT_CONFIG_GLOBAL -ErrorAction SilentlyContinue }
+            Remove-Item -LiteralPath $temporaryConfig -Force -ErrorAction SilentlyContinue
+          }
+          git clone $env:SUPERPOWERS_REPO_URL "$env:GITHUB_WORKSPACE\..\superpowers"
+          git -C "$env:GITHUB_WORKSPACE\..\superpowers" checkout --detach $env:SUPERPOWERS_REVISION
+          if (-not (Test-Path "$env:GITHUB_WORKSPACE\..\superpowers\.codex-plugin\plugin.json" -PathType Leaf)) { throw 'Fixed Superpowers source is incomplete.' }
 
       - name: Build agent-runtime Builder frontend
         shell: pwsh
@@ -107,16 +150,30 @@ jobs:
         run: |
           npm install --prefix .codex-native --no-save --no-package-lock --ignore-scripts "@openai/codex@$env:CODEX_VERSION"
           $codexRoot = Join-Path $env:GITHUB_WORKSPACE '.codex-native\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc'
-          if (-not (Test-Path "$codexRoot\bin\codex.exe" -PathType Leaf)) { throw "Fixed Codex package is incomplete." }
+          if (-not (Test-Path "$codexRoot\bin\codex.exe" -PathType Leaf)) { throw 'Fixed Codex package is incomplete.' }
           "CODEX_NATIVE_ROOT=$codexRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Materialize Windows local Runtime appliance
+        shell: pwsh
+        run: |
+          & ./scripts/prepare-local-runtime-appliance-windows.ps1 `
+            -AgentRuntimeRepo "$env:GITHUB_WORKSPACE\..\agent-runtime" `
+            -AgenticCodingRoot "$env:GITHUB_WORKSPACE\..\agentic-coding" `
+            -CodexVendorRoot $env:CODEX_NATIVE_ROOT `
+            -BuilderDist "$env:GITHUB_WORKSPACE\..\agent-runtime\web\builder\dist" `
+            -SuperpowersSource "$env:GITHUB_WORKSPACE\..\superpowers"
+          if ($LASTEXITCODE -ne 0) { throw "Windows Runtime appliance preparation failed with exit code $LASTEXITCODE." }
 
       - name: Build signed Windows release artifacts
         shell: pwsh
         env:
+          RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
           DOLPHIN_RELEASE_BUILD: '1'
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: ./scripts/build-desktop-windows.ps1 -Version '${{ needs.release-metadata.outputs.version }}' -Bundle nsis
+        run: |
+          if ($env:RELEASE_VERSION -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$') { throw 'RELEASE_VERSION must be SemVer.' }
+          ./scripts/build-desktop-windows.ps1 -Version $env:RELEASE_VERSION -Bundle nsis -UsePreparedRuntimeAppliance
 
       - name: Upload Windows Release boundary
         uses: actions/upload-artifact@v4
@@ -133,6 +190,8 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-metadata.outputs.build_sha }}
 
       - uses: actions/setup-node@v4
         with:
@@ -144,18 +203,31 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Checkout fixed internal runtime dependencies
+      - name: Checkout fixed runtime and capability dependencies
         shell: bash
         env:
           DEFINESYS_GIT_USERNAME: ${{ secrets.DEFINESYS_GIT_USERNAME }}
           DEFINESYS_GIT_TOKEN: ${{ secrets.DEFINESYS_GIT_TOKEN }}
         run: |
           set -euo pipefail
+          temporary_config="$(mktemp)"
+          cleanup_credentials() {
+            rm -f "${temporary_config}"
+            unset GIT_CONFIG_GLOBAL
+          }
+          trap cleanup_credentials EXIT
+          export GIT_CONFIG_GLOBAL="${temporary_config}"
+          git config --global credential.helper ''
           git config --global url."https://${DEFINESYS_GIT_USERNAME}:${DEFINESYS_GIT_TOKEN}@git.dfy.definesys.cn/".insteadOf 'https://git.dfy.definesys.cn/'
           git clone "${AGENT_RUNTIME_REPO_URL}" ../agent-runtime
           git -C ../agent-runtime checkout --detach "${AGENT_RUNTIME_REVISION}"
           git clone "${AGENTIC_CODING_REPO_URL}" ../agentic-coding
           git -C ../agentic-coding checkout --detach "${AGENTIC_CODING_REVISION}"
+          cleanup_credentials
+          trap - EXIT
+          git clone "${SUPERPOWERS_REPO_URL}" ../superpowers
+          git -C ../superpowers checkout --detach "${SUPERPOWERS_REVISION}"
+          test -f ../superpowers/.codex-plugin/plugin.json
 
       - name: Build agent-runtime Builder frontend
         shell: bash
@@ -183,11 +255,21 @@ jobs:
           test -x "${codex_root}/vendor/aarch64-apple-darwin/bin/codex"
           echo "CODEX_NATIVE_ROOT=${codex_root}" >> "${GITHUB_ENV}"
 
+      - name: Materialize macOS arm64 local Runtime appliance
+        shell: bash
+        run: |
+          set -euo pipefail
+          AGENT_RUNTIME_REPO="${GITHUB_WORKSPACE}/../agent-runtime" \
+          AGENTIC_CODING_ROOT="${GITHUB_WORKSPACE}/../agentic-coding" \
+          AGENTIC_SUPERPOWERS_SOURCE="${GITHUB_WORKSPACE}/../superpowers" \
+          CODEX_NATIVE_ROOT="${CODEX_NATIVE_ROOT}" \
+            bash scripts/prepare-local-runtime-appliance-macos.sh
+
       - name: Stamp desktop version
         shell: bash
         env:
           RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
-        run: node -e 'const fs=require("node:fs"); const file="src-tauri/tauri.conf.json"; const config=JSON.parse(fs.readFileSync(file)); config.version=process.env.RELEASE_VERSION; fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);'
+        run: node -e 'const fs=require("node:fs"); const version=process.env.RELEASE_VERSION; if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/.test(version)) throw new Error("RELEASE_VERSION must be SemVer"); const file="src-tauri/tauri.conf.json"; const config=JSON.parse(fs.readFileSync(file)); config.version=version; fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);'
 
       - name: Build signed macOS arm64 Release artifacts
         shell: bash
@@ -212,6 +294,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-metadata.outputs.build_sha }}
 
       - uses: actions/setup-node@v4
         with:
@@ -230,18 +314,31 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
 
-      - name: Checkout fixed internal runtime dependencies
+      - name: Checkout fixed runtime and capability dependencies
         shell: bash
         env:
           DEFINESYS_GIT_USERNAME: ${{ secrets.DEFINESYS_GIT_USERNAME }}
           DEFINESYS_GIT_TOKEN: ${{ secrets.DEFINESYS_GIT_TOKEN }}
         run: |
           set -euo pipefail
+          temporary_config="$(mktemp)"
+          cleanup_credentials() {
+            rm -f "${temporary_config}"
+            unset GIT_CONFIG_GLOBAL
+          }
+          trap cleanup_credentials EXIT
+          export GIT_CONFIG_GLOBAL="${temporary_config}"
+          git config --global credential.helper ''
           git config --global url."https://${DEFINESYS_GIT_USERNAME}:${DEFINESYS_GIT_TOKEN}@git.dfy.definesys.cn/".insteadOf 'https://git.dfy.definesys.cn/'
           git clone "${AGENT_RUNTIME_REPO_URL}" ../agent-runtime
           git -C ../agent-runtime checkout --detach "${AGENT_RUNTIME_REVISION}"
           git clone "${AGENTIC_CODING_REPO_URL}" ../agentic-coding
           git -C ../agentic-coding checkout --detach "${AGENTIC_CODING_REVISION}"
+          cleanup_credentials
+          trap - EXIT
+          git clone "${SUPERPOWERS_REPO_URL}" ../superpowers
+          git -C ../superpowers checkout --detach "${SUPERPOWERS_REVISION}"
+          test -f ../superpowers/.codex-plugin/plugin.json
 
       - name: Build agent-runtime Builder frontend
         shell: bash
@@ -269,11 +366,21 @@ jobs:
           test -x "${codex_root}/vendor/x86_64-unknown-linux-musl/bin/codex"
           echo "CODEX_NATIVE_ROOT=${codex_root}" >> "${GITHUB_ENV}"
 
+      - name: Materialize Linux local Runtime appliance
+        shell: bash
+        run: |
+          set -euo pipefail
+          AGENT_RUNTIME_REPO="${GITHUB_WORKSPACE}/../agent-runtime" \
+          AGENTIC_CODING_ROOT="${GITHUB_WORKSPACE}/../agentic-coding" \
+          AGENTIC_SUPERPOWERS_SOURCE="${GITHUB_WORKSPACE}/../superpowers" \
+          CODEX_NATIVE_ROOT="${CODEX_NATIVE_ROOT}" \
+            bash scripts/prepare-local-runtime-appliance-linux.sh
+
       - name: Stamp desktop version
         shell: bash
         env:
           RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
-        run: node -e 'const fs=require("node:fs"); const file="src-tauri/tauri.conf.json"; const config=JSON.parse(fs.readFileSync(file)); config.version=process.env.RELEASE_VERSION; fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);'
+        run: node -e 'const fs=require("node:fs"); const version=process.env.RELEASE_VERSION; if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/.test(version)) throw new Error("RELEASE_VERSION must be SemVer"); const file="src-tauri/tauri.conf.json"; const config=JSON.parse(fs.readFileSync(file)); config.version=version; fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);'
 
       - name: Build signed Linux Release artifacts
         shell: bash
@@ -307,6 +414,8 @@ jobs:
       checksums_url: ${{ steps.report.outputs.checksums_url }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-metadata.outputs.build_sha }}
 
       - uses: actions/setup-node@v4
         with:
@@ -331,11 +440,16 @@ jobs:
           path: dist-desktop/release
 
       - name: Prepare signed updater manifest and checksums
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
+          RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
         run: >-
           node scripts/prepare-desktop-release.mjs
-          --version '${{ needs.release-metadata.outputs.version }}'
-          --repository '${{ github.repository }}'
-          --tag '${{ needs.release-metadata.outputs.tag }}'
+          --version "$RELEASE_VERSION"
+          --repository "$RELEASE_REPOSITORY"
+          --tag "$RELEASE_TAG"
           --input dist-desktop/release
           --output dist-desktop/publish
 
@@ -343,7 +457,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.release-metadata.outputs.tag }}
-          target_commitish: ${{ github.sha }}
+          target_commitish: ${{ needs.release-metadata.outputs.build_sha }}
           generate_release_notes: true
           files: dist-desktop/publish/*
         env:

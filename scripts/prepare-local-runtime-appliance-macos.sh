@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 构建 Linux 桌面本地运行时使用的受信任 appliance。
+# 构建 macOS arm64 桌面本地运行时使用的受信任 appliance。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -23,20 +23,6 @@ require_executable() {
   [ -x "$1" ] || fail "missing executable: $1"
 }
 
-resolve_codex_native_root() {
-  if [ -n "${CODEX_NATIVE_ROOT}" ]; then
-    printf '%s\n' "${CODEX_NATIVE_ROOT}"
-    return
-  fi
-  local pnpm_home="${PNPM_HOME:-${HOME}/.local/share/pnpm}"
-  local package_root="${pnpm_home}/global/5/.pnpm"
-  local candidate=""
-  [ -d "${package_root}" ] || fail "set CODEX_NATIVE_ROOT to the installed @openai/codex Linux package"
-  candidate="$(find "${package_root}" -maxdepth 1 -type d -name '@openai+codex@*-linux-x64' -print | sort | tail -n 1)"
-  [ -n "${candidate}" ] || fail "set CODEX_NATIVE_ROOT to the installed @openai/codex Linux package"
-  printf '%s/node_modules/@openai/codex\n' "${candidate}"
-}
-
 require_directory "${AGENT_RUNTIME_REPO}"
 require_directory "${AGENTIC_CODING_ROOT}"
 require_directory "${AGENTIC_SUPERPOWERS_SOURCE}"
@@ -51,17 +37,17 @@ grep -q 'type="module"' "${BUILDER_DIST}/index.html" ||
 require_executable "${AGENTIC_CODING_ROOT}/bin/agentic-pack"
 require_executable "${AGENTIC_CODING_ROOT}/.venv/bin/python"
 
-CODEX_NATIVE_ROOT="$(resolve_codex_native_root)"
-CODEX_VENDOR="${CODEX_NATIVE_ROOT}/vendor/x86_64-unknown-linux-musl"
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64|Darwin-aarch64) ;;
+  *) fail "this appliance builder only supports macOS arm64" ;;
+esac
+
+[ -n "${CODEX_NATIVE_ROOT}" ] || fail "set CODEX_NATIVE_ROOT to the installed @openai/codex macOS package"
+CODEX_VENDOR="${CODEX_NATIVE_ROOT}/vendor/aarch64-apple-darwin"
 require_executable "${CODEX_VENDOR}/bin/codex"
 
-PACK_PYTHON="$(readlink -f "${AGENTIC_CODING_ROOT}/.venv/bin/python")"
+PACK_PYTHON="${AGENTIC_CODING_ROOT}/.venv/bin/python"
 require_executable "${PACK_PYTHON}"
-
-case "$(uname -s)-$(uname -m)" in
-  Linux-x86_64) ;;
-  *) fail "this appliance builder only supports Linux x86_64" ;;
-esac
 
 rm -rf "${APPLIANCE_DIR}"
 mkdir -p "${APPLIANCE_DIR}/bin"
@@ -69,7 +55,7 @@ mkdir -p "${APPLIANCE_DIR}/bin"
 printf '[local-runtime-appliance] build agent-runtime\n'
 (
   cd "${AGENT_RUNTIME_REPO}"
-  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+  CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
     go build -trimpath -ldflags='-s -w' \
     -o "${APPLIANCE_DIR}/bin/agent-runtime" \
     ./cmd/sandbox-runtime
@@ -101,14 +87,9 @@ printf '[local-runtime-appliance] build offline agentic pack\n'
   --superpowers-source "${AGENTIC_SUPERPOWERS_SOURCE}" \
   "${AGENTIC_CODING_ROOT}"
 
-# The offline pack is runtime data, not a source checkout.  Nested Git
-# metadata (notably the vendored superpowers skill repository) is unnecessary
-# at runtime and can make Tauri resource traversal fail on mounted filesystems.
 find "${APPLIANCE_DIR}/agentic-coding-pack" \( -type d -o -type f \) -name .git \
   -prune -exec rm -rf {} +
 
-# Removing source metadata changes the pack tree, so refresh the manifest
-# digest before the offline reconcile check and before Tauri bundles it.
 PYTHONPATH="${AGENTIC_CODING_ROOT}/python" "${PACK_PYTHON}" - "${APPLIANCE_DIR}/agentic-coding-pack" <<'PY'
 from pathlib import Path
 import sys
