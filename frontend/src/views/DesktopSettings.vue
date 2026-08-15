@@ -171,20 +171,12 @@
               <div class="settings-card about-card">
                 <div class="card-heading">
                   <div class="card-heading-icon"><AppIcon name="help-circle" :size="18" /></div>
-                  <div><strong>Dolphin Code</strong><span>桌面客户端版本与更新状态。</span></div>
+                  <div><strong>DolphinAI</strong><span>查看客户端版本、构建信息与更新状态。</span></div>
                 </div>
-                <div class="info-row"><span>当前版本</span><strong>v{{ appVersion }}</strong></div>
-                <div class="info-row"><span>运行形态</span><strong>{{ desktopUpdateAvailable ? '桌面客户端' : 'Web 预览' }}</strong></div>
                 <div class="desktop-section-actions">
-                  <el-button
-                    type="primary"
-                    :disabled="!desktopUpdateAvailable"
-                    @click="checkAndPromptUpdate({ silentIfNone: false })"
-                  >
-                    <AppIcon name="refresh" :size="15" />
-                    检查更新
+                  <el-button type="primary" @click="aboutDialogOpen = true">
+                    查看版本与更新
                   </el-button>
-                  <span v-if="!desktopUpdateAvailable" class="desktop-settings-inline-hint">仅桌面客户端可用</span>
                 </div>
               </div>
             </template>
@@ -192,6 +184,7 @@
         </div>
       </div>
     </main>
+    <DesktopAboutDialog v-model="aboutDialogOpen" />
   </BuilderFrame>
 </template>
 
@@ -200,6 +193,7 @@ import { computed, onMounted, ref } from 'vue'
 import { Loading } from '@element-plus/icons-vue'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
+import DesktopAboutDialog from '@/components/desktop/DesktopAboutDialog.vue'
 import DesktopServiceExamples from '@/components/desktop/DesktopServiceExamples.vue'
 import {
   buildDesktopSetupInput,
@@ -208,7 +202,6 @@ import {
   getDesktopState,
   openDesktopPath,
   saveDesktopSetup,
-  checkAndPromptUpdate,
   type DesktopDiscoveryDocument,
   type DesktopPathKind,
   type DesktopStateSnapshot,
@@ -257,13 +250,12 @@ const operationError = ref('')
 const urlTouched = ref(false)
 const environmentChecking = ref(false)
 const environmentError = ref('')
+const aboutDialogOpen = ref(false)
 const environmentTools = [
   { name: 'Git', description: '用于本地工程版本管理' },
   { name: 'Python', description: '用于本地工具和 Runtime 扩展' },
   { name: 'Node.js', description: '用于前端和脚本运行' },
 ]
-const appVersion = __APP_VERSION__ || '未知'
-const desktopUpdateAvailable = __DESKTOP__ && !__DESKTOP_WEB_PREVIEW__
 const activeMeta = computed(() => sectionMeta[activeSection.value])
 const activeLocalAiKind = computed(() => localAiMenu.find(item => item.id === activeSection.value)?.kind || null)
 const urlError = computed(() => validateServiceUrl(serviceUrl.value))

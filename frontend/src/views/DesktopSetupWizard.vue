@@ -4,7 +4,7 @@
       <header class="desktop-setup-header">
         <div class="desktop-brand-mark">D</div>
         <div>
-          <h1>{{ showFailure ? 'Dolphin Code 启动失败' : '连接 Dolphin Code' }}</h1>
+          <h1>{{ showFailure ? 'DolphinAI 启动失败' : '连接 DolphinAI' }}</h1>
           <p>{{ showFailure ? '桌面服务没有完成启动，请重试或修改远程地址。' : '输入一次远程服务地址，桌面端会自动发现认证和 Builder / Code 能力。' }}</p>
         </div>
       </header>

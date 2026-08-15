@@ -12,6 +12,8 @@ const __APP_VERSION__ = (() => {
     return ''
   }
 })()
+const __BUILD_REVISION__ = process.env.DOLPHIN_BUILD_REVISION || 'dev'
+const __BUILD_TARGET__ = process.env.DOLPHIN_BUILD_TARGET || `${process.platform}-${process.arch}`
 const backendProxyTarget = process.env.VITE_BACKEND_PROXY_TARGET || 'http://localhost:8000'
 const devServerAllowedPaths = [resolve(__dirname, '..')]
 try {
@@ -27,6 +29,8 @@ export default defineConfig({
     __DESKTOP__: JSON.stringify(process.env.VITE_DESKTOP === '1'),
     __DESKTOP_WEB_PREVIEW__: JSON.stringify(process.env.VITE_DESKTOP_WEB_PREVIEW === '1'),
     __APP_VERSION__: JSON.stringify(__APP_VERSION__),
+    __BUILD_REVISION__: JSON.stringify(__BUILD_REVISION__),
+    __BUILD_TARGET__: JSON.stringify(__BUILD_TARGET__),
   },
   plugins: [
     vue(),

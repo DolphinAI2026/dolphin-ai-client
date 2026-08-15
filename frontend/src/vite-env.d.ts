@@ -7,3 +7,6 @@ declare const __DESKTOP__: boolean
 declare const __DESKTOP_WEB_PREVIEW__: boolean
 // 应用版本号(取自 src-tauri/tauri.conf.json), 编译期注入。
 declare const __APP_VERSION__: string
+// 构建时由桌面发布脚本注入的提交版本与目标系统。
+declare const __BUILD_REVISION__: string
+declare const __BUILD_TARGET__: string

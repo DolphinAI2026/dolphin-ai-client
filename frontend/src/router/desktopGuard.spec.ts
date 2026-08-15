@@ -16,6 +16,8 @@ import setupWizardSource from '@/views/DesktopSetupWizard.vue?raw'
 import loginSource from '@/views/Login.vue?raw'
 import * as loginModule from '@/views/Login.vue'
 import desktopSettingsSource from '@/views/DesktopSettings.vue?raw'
+import aboutDialogSource from '@/components/desktop/DesktopAboutDialog.vue?raw'
+import railSidebarSource from '@/components/v2/RailSidebar.vue?raw'
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -120,12 +122,22 @@ describe('resolveDesktopRedirect', () => {
     expect(settingsRouteSource).toContain("meta: { requiresAuth: true, tenantContext: 'none' }")
   })
 
-  it('桌面设置提供关于、版本与手动更新入口', () => {
+  it('桌面设置通过关于弹窗提供版本与手动更新入口', () => {
     expect(desktopSettingsSource).toContain("label: '关于与更新'")
-    expect(desktopSettingsSource).toContain('当前版本')
-    expect(desktopSettingsSource).toContain('__APP_VERSION__')
-    expect(desktopSettingsSource).toContain('checkAndPromptUpdate({ silentIfNone: false })')
-    expect(desktopSettingsSource).toContain('仅桌面客户端可用')
+    expect(desktopSettingsSource).toContain('<DesktopAboutDialog')
+    expect(aboutDialogSource).toContain('DolphinAI')
+    expect(aboutDialogSource).toContain('__APP_VERSION__')
+    expect(aboutDialogSource).toContain('__BUILD_REVISION__')
+    expect(aboutDialogSource).toContain('__BUILD_TARGET__')
+    expect(aboutDialogSource).toContain('checkAndPromptUpdate({ silentIfNone: false })')
+  })
+
+  it('核心桌面入口使用 DolphinAI 品牌', () => {
+    for (const source of [loginSource, setupWizardSource, railSidebarSource]) {
+      expect(source).toContain('DolphinAI')
+      expect(source).not.toContain('Dolphin Code')
+      expect(source).not.toContain('睿鲸')
+    }
   })
 
   it('登录页显示桌面服务摘要并通过 packaged setup 更改服务', () => {

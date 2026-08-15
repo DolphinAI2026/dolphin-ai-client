@@ -812,13 +812,13 @@ function renderIcon(name: string): string {
       <button
         class="rail-logo"
         type="button"
-        :aria-label="effectiveCollapsed ? '展开导航' : 'Dolphin Code 首页'"
+        :aria-label="effectiveCollapsed ? '展开导航' : 'DolphinAI 首页'"
         @click="effectiveCollapsed ? toggleCollapsed() : go(defaultProductHome(productAvailability))"
       >
         <img class="rail-logo-mark" :src="ruijingWhaleMarkUrl" alt="" aria-hidden="true" />
       </button>
       <div v-if="!effectiveCollapsed" class="rail-brand-copy">
-        <div class="rail-title">Dolphin Code</div>
+        <div class="rail-title">DolphinAI</div>
       </div>
       <!-- 收起按钮放在 brand 区右侧 — 跟 SessionSidebar 的 « 按钮位置一致，
            比放底部更顺手。展开 / 收起两个状态用同一个 button，方向不一样。 -->

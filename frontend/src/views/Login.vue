@@ -16,17 +16,17 @@
     </button>
 
     <main class="login-shell">
-      <section class="login-brand-stage" aria-label="Dolphin Code 品牌背景">
+      <section class="login-brand-stage" aria-label="DolphinAI 品牌背景">
         <img class="login-brand-mark-large" :src="ruijingWhaleMarkUrl" alt="" aria-hidden="true" />
       </section>
 
-      <section class="login-auth-panel" aria-label="登录Dolphin Code">
+      <section class="login-auth-panel" aria-label="登录 DolphinAI">
         <div class="login-card">
           <div class="login-card-top">
             <div class="login-header">
               <img class="login-logo" :src="ruijingWhaleMarkUrl" alt="" aria-hidden="true" />
               <div class="login-header-copy">
-                <h1>Dolphin Code</h1>
+                <h1>DolphinAI</h1>
                 <p>登录以打开桌面工作台</p>
               </div>
             </div>
