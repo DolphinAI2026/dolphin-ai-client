@@ -148,21 +148,10 @@ try {
 
   Write-Host "[local-runtime-appliance] build Windows agent-runtime"
   $ReconcilerSource = Join-Path $AgentRuntimeRepo "internal\adapters\agenticpack\reconciler.go"
-  $ReconcilerText = Get-Content -LiteralPath $ReconcilerSource -Raw
-  $ImportMarker = "`t`"path/filepath`""
-  $CommandMarker = 'commandPath := filepath.Join(r.packDir, "bin", "agentic-pack-reconcile")'
-  if (-not $ReconcilerText.Contains($ImportMarker) -or -not $ReconcilerText.Contains($CommandMarker)) {
-    throw "agent-runtime reconcile source no longer matches the Windows build overlay contract."
+  $PatchedReconcilerPath = Join-Path $Root "scripts\windows-agent-runtime-reconciler.go"
+  if (-not (Test-Path -LiteralPath $PatchedReconcilerPath -PathType Leaf)) {
+    throw "Missing Windows agent-runtime reconciler overlay: $PatchedReconcilerPath"
   }
-  $PatchedReconciler = $ReconcilerText.Replace(
-    $ImportMarker,
-    "$ImportMarker`r`n`t`"runtime`""
-  ).Replace(
-    $CommandMarker,
-    "$CommandMarker`r`n`tif runtime.GOOS == `"windows`" {`r`n`t`tcommandPath += `".exe`"`r`n`t}"
-  )
-  $PatchedReconcilerPath = Join-Path $TemporaryRoot "reconciler.go"
-  Write-Utf8NoBom $PatchedReconcilerPath $PatchedReconciler
 
   $FileLockSource = Join-Path $AgentRuntimeRepo "internal\adapters\filetxn\lock.go"
   $WindowsFileLockPath = Join-Path $TemporaryRoot "filetxn-lock-windows.go"

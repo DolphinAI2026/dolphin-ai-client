@@ -1,5 +1,6 @@
 param(
   [string]$Version = "",
+  [string]$SourceRevision = "",
   [string]$Target = "x86_64-pc-windows-msvc",
   [ValidateSet("portable", "nsis", "msi", "all")]
   [string]$Bundle = "portable",
@@ -108,6 +109,11 @@ function Initialize-MsvcEnvironment {
   if (-not (Get-Command link.exe -ErrorAction SilentlyContinue)) {
     throw "MSVC environment initialized but link.exe is still unavailable."
   }
+}
+
+if (-not $SourceRevision) {
+  $SourceRevision = (& git -C $Root rev-parse HEAD).Trim()
+  Assert-NativeSuccess "Source revision lookup" $LASTEXITCODE
 }
 
 try {
@@ -324,6 +330,13 @@ try {
         & $PortablePython -B -c "from pydantic import BaseModel; import glob, pathlib, sysconfig, zoneinfo; assert BaseModel; assert sysconfig.get_config_vars()"
         Assert-NativeSuccess "Portable Runtime Python validation" $LASTEXITCODE
 
+        & (Join-Path $Root "scripts\verify-desktop-windows-package.ps1") `
+          -PackageRoot $PortableAppRoot `
+          -ExpectedVersion $PackageVersion `
+          -ExpectedSourceRevision $SourceRevision `
+          -WriteManifest
+        Assert-NativeSuccess "Portable staging package verification" $LASTEXITCODE
+
         Push-Location $PortableStagingRoot
         try {
           & tar.exe -a -c -f $PortableZip "Dolphin Code"
@@ -333,10 +346,33 @@ try {
         } finally {
           Pop-Location
         }
+
+        $VerificationRoot = Join-Path $env:TEMP ("ruijing-$PackageVersion-verify-" + [Guid]::NewGuid().ToString("N"))
+        try {
+          New-Item -ItemType Directory -Force -Path $VerificationRoot | Out-Null
+          & tar.exe -xf $PortableZip -C $VerificationRoot
+          Assert-NativeSuccess "Portable package extraction" $LASTEXITCODE
+          & (Join-Path $Root "scripts\verify-desktop-windows-package.ps1") `
+            -PackageRoot (Join-Path $VerificationRoot "Dolphin Code") `
+            -ExpectedVersion $PackageVersion `
+            -ExpectedSourceRevision $SourceRevision
+          Assert-NativeSuccess "Extracted portable package verification" $LASTEXITCODE
+        } finally {
+          $ExtendedVerificationRoot = "\\?\" + $VerificationRoot
+          Remove-Item -LiteralPath $ExtendedVerificationRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
         Write-Host ""
         Write-Host "Download-ready portable package: $PortableZip"
         Get-Item $PortableZip | Format-List FullName,Length,LastWriteTime
         Get-FileHash $PortableZip -Algorithm SHA256 | Format-List
+      } else {
+        & (Join-Path $Root "scripts\verify-desktop-windows-package.ps1") `
+          -PackageRoot $ReleaseRoot `
+          -ApplicationExecutable "app.exe" `
+          -ExpectedVersion $PackageVersion `
+          -ExpectedSourceRevision $SourceRevision `
+          -WriteManifest
+        Assert-NativeSuccess "Windows installer staging verification" $LASTEXITCODE
       }
     } finally {
       Pop-Location
