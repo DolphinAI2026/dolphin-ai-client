@@ -14,7 +14,11 @@ export function createCodeAgentActivationCoordinator(): CodeAgentActivationCoord
   const pendingTurns = new Map<string, Promise<void>>()
 
   return {
-    async activate<T>(shellSessionRef, isCurrent, operation) {
+    async activate<T>(
+      shellSessionRef: string,
+      isCurrent: () => boolean,
+      operation: () => Promise<T>,
+    ): Promise<CodeAgentActivationResult<T>> {
       const key = String(shellSessionRef || '').trim()
       const previousTurn = pendingTurns.get(key)
       let releaseTurn!: () => void

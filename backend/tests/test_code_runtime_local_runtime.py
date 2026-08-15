@@ -1076,22 +1076,13 @@ async def test_open_reuses_active_application_instance_across_conversations(
     runtime_dir.mkdir(parents=True)
     context_path = runtime_dir / "runtime-context.json"
     context_path.write_bytes(b'{"conversationId":"original"}\n')
+    provider_document, _provider_identity = await local_runtime_module._provider_document(
+        db,
+        ctx,
+        None,
+    )
     (runtime_dir / "model-provider.json").write_text(
-        json.dumps(
-            {
-                "defaultProviderId": "local.test",
-                "providers": [
-                    {
-                        "providerId": "local.test",
-                        "providerType": "openai-compatible",
-                        "apiBaseUrl": "https://models.example.invalid/v1",
-                        "token": "unit-test-model-token",
-                        "defaultModel": "gpt-local-test",
-                        "models": [{"id": "gpt-local-test", "displayName": "gpt-local-test"}],
-                    }
-                ],
-            }
-        ),
+        json.dumps(provider_document),
         encoding="utf-8",
     )
     token_path = runtime_dir / "sandbox-token"
@@ -1554,23 +1545,13 @@ async def test_reused_runtime_without_entry_token_returns_503(
         / "local-instance-1"
     )
     runtime_dir.mkdir(parents=True)
+    provider_document, _provider_identity = await local_runtime_module._provider_document(
+        db,
+        ctx,
+        None,
+    )
     (runtime_dir / "model-provider.json").write_text(
-        json.dumps(
-            {
-                "defaultProviderId": "local.test",
-                "providers": [
-                    {
-                        "providerId": "local.test",
-                        "providerType": "openai-compatible",
-                        "runtimeProviderKind": "openai",
-                        "apiBaseUrl": "https://models.example.invalid/v1",
-                        "token": "unit-test-model-token",
-                        "defaultModel": "gpt-local-test",
-                        "models": [{"id": "gpt-local-test", "displayName": "gpt-local-test"}],
-                    }
-                ],
-            }
-        ),
+        json.dumps(provider_document),
         encoding="utf-8",
     )
     client, _service = _client(

@@ -11,7 +11,8 @@ describe('Apps Code mode entry', () => {
     expect(appsSource).toContain('resolveCodeApplicationShellSessionRef')
     expect(appsSource).toContain('const shellSessionRef = resolveCodeApplicationShellSessionRef(created)')
     expect(appsSource).toContain('stageCodeApplicationLocationPreference(\n      codePreferenceScope(app),\n      executionLocation,\n      shellSessionRef,')
-    expect(appsSource).toContain('router.push(`/code/${shellSessionRef}`)')
+    expect(appsSource).toContain('path: `/code/${shellSessionRef}`')
+    expect(appsSource).toContain('query: { source: executionLocation }')
   })
 
   it('refreshes the outer rail after opening a Code application', () => {
@@ -56,7 +57,8 @@ describe('Apps Code mode entry', () => {
     expect(appsSource).toContain('external_application_id: location.external_application_id')
     expect(appsSource).toContain('execution_location: executionLocation')
     expect(appsSource).toContain("session_policy: 'resume_recent'")
-    expect(appsSource).toContain("session_purpose: 'standard'")
+    expect(appsSource).toContain("sessionPurpose: CodeSessionPurpose = 'standard'")
+    expect(appsSource).toContain('session_purpose: sessionPurpose')
   })
 
   it('shows location recovery instead of automatically falling back from an unavailable preference', () => {

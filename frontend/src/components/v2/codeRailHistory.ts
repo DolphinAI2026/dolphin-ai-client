@@ -15,6 +15,7 @@ export interface CodeRailSession extends RailSession {
 }
 
 export interface CodeRailSessionGroup extends RailSessionGroup {
+  items: CodeRailSession[]
   logicalApplicationId: string
   availableLocations: CodeExecutionLocation[]
   localShellSessionId?: string

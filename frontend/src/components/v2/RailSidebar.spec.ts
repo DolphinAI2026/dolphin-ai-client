@@ -152,8 +152,8 @@ describe('RailSidebar unified session source (SP2b)', () => {
     expect(railSidebarSource).toContain('createCodeAgentSession')
     expect(railSidebarSource).toContain('codeRuntimeApi.createAgentSession')
     expect(railSidebarSource).toContain('rail-sess-group-new')
-    expect(railSidebarSource).toContain('g.standardShellSessionId')
-    expect(railSidebarSource).toContain("createCodeAgentSession(g.standardShellSessionId, g)")
+    expect(railSidebarSource).toContain('codeGroupStandardShellSessionId')
+    expect(railSidebarSource).toContain("createCodeAgentSession(codeGroupStandardShellSessionId(g), g)")
     expect(railSidebarSource).toContain("effectiveGroupBy === 'app'")
     expect(railSidebarSource).not.toContain('class="rail-sess-new"')
     expect(railSidebarSource).toContain(
@@ -204,7 +204,8 @@ describe('RailSidebar unified session source (SP2b)', () => {
 
   it('keeps the application-scoped sessions returned by Code rail history', () => {
     expect(railSidebarSource).toContain('codeRuntimeApi.listRailHistory()')
-    expect(railSidebarSource).toContain('codeRailHistory.value = history')
+    expect(railSidebarSource).toContain('codeRailHistory.value = applicationResult.status === \'fulfilled\'')
+    expect(railSidebarSource).toContain('? applicationResult.value')
     expect(railSidebarSource).not.toContain('hydrateCodeRailHistory')
     expect(railSidebarSource).not.toContain('codeRuntimeApi.listAgentSessions')
   })
@@ -221,7 +222,8 @@ describe('RailSidebar unified session source (SP2b)', () => {
   })
 
   it('shows the recent-session list in every mode', () => {
-    expect(railSidebarSource).not.toContain("currentMode.value !== 'code'")
+    expect(railSidebarSource).toContain('v-if="showRecent && currentMode === \'code\'"')
+    expect(railSidebarSource).toContain('v-else-if="showRecent" class="rail-sessions"')
   })
 
   it('defaults Code sessions to application grouping', () => {
