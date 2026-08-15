@@ -946,7 +946,6 @@ async def create_code_application(
     body = {
         "appCode": code,
         "appName": name,
-        "seedProjectId": seed_id,
     }
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=60, write=10, pool=10)) as client:

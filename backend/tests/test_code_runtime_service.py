@@ -1294,7 +1294,7 @@ async def test_list_code_applications_rejects_non_json_success_response(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_create_code_application_posts_to_control_plane_with_default_seed(monkeypatch):
+async def test_create_code_application_posts_to_control_plane_without_seed_project_id(monkeypatch):
     from app.code_runtime import service
 
     calls: list[dict] = []
@@ -1346,7 +1346,6 @@ async def test_create_code_application_posts_to_control_plane_with_default_seed(
         "json": {
             "appCode": "sales-lead-helper",
             "appName": "销售线索评分助手",
-            "seedProjectId": "1781233861147",
         },
     }]
     assert result["external_application_id"] == "code-app-new"
@@ -1422,7 +1421,7 @@ async def test_create_code_application_registers_local_workspace(
 
 
 @pytest.mark.asyncio
-async def test_create_code_application_uses_seed_project_override(monkeypatch):
+async def test_create_code_application_does_not_forward_seed_project_override(monkeypatch):
     from app.code_runtime import service
     from app.config import settings
 
@@ -1468,7 +1467,7 @@ async def test_create_code_application_uses_seed_project_override(monkeypatch):
     )
 
     assert calls[0]["headers"]["Authorization"] == "Bearer user-token"
-    assert calls[0]["json"]["seedProjectId"] == "90002"
+    assert "seedProjectId" not in calls[0]["json"]
 
 
 @pytest.mark.asyncio
