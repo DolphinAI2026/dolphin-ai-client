@@ -1251,7 +1251,7 @@ fn spawn_sidecar(
         "DESKTOP_SIDECAR_STARTING",
         "启动 sidecar 进程",
     ));
-    let mut command = match app.shell().sidecar("ruijing-sidecar") {
+    let mut command = match app.shell().sidecar("dolphin-ai-sidecar") {
         Ok(command) => command.args(launch.args),
         Err(error) => {
             set_launch_failed(
@@ -1787,7 +1787,7 @@ fn lifecycle_worker(app: AppHandle, receiver: Receiver<LifecycleIntent>) {
 
 pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-        .title("睿鲸 Builder")
+        .title("DolphinAI")
         .inner_size(1440.0, 900.0)
         .visible(true)
         .disable_drag_drop_handler()
@@ -2020,7 +2020,7 @@ mod tests {
     fn fixture_config(mode: DesktopLoginMode) -> DesktopConfig {
         DesktopConfig {
             schema_version: 1,
-            root_dir: PathBuf::from("/tmp/DolphinCode"),
+            root_dir: PathBuf::from("/tmp/DolphinAI"),
             login: DesktopLoginConfig {
                 mode,
                 base_url: "https://om-demo.dfy.definesys.cn".to_string(),
@@ -2035,7 +2035,7 @@ mod tests {
     fn fixture_backend(supervisor: LifecycleSupervisor) -> DesktopBackend {
         let backend = DesktopBackend::new(
             DesktopConfigStore::new(std::env::temp_dir().join("dolphin-desktop-tests")),
-            PathBuf::from("/tmp/DolphinCode"),
+            PathBuf::from("/tmp/DolphinAI"),
             PathBuf::from("/tmp/agent-runtime"),
             tauri::Url::parse("tauri://localhost/index.html").unwrap(),
             supervisor,
@@ -2046,7 +2046,7 @@ mod tests {
 
     fn fixture_setup_input() -> DesktopSetupInput {
         DesktopSetupInput {
-            root_dir: "/tmp/DolphinCode".to_string(),
+            root_dir: "/tmp/DolphinAI".to_string(),
             login: DesktopLoginConfig {
                 mode: DesktopLoginMode::ControlPlane,
                 base_url: "https://om-demo.dfy.definesys.cn".to_string(),
@@ -2085,7 +2085,7 @@ mod tests {
         let temp = unique_backend_test_dir("workspace-scope-login-update");
         let config_store = DesktopConfigStore::new(temp.join("system"));
         let mut setup_input = fixture_setup_input();
-        setup_input.root_dir = temp.join("DolphinCode").to_string_lossy().into_owned();
+        setup_input.root_dir = temp.join("DolphinAI").to_string_lossy().into_owned();
         let saved = config_store.save(setup_input).unwrap();
         let (supervisor, receiver) = LifecycleSupervisor::channel();
         let backend = DesktopBackend::new(

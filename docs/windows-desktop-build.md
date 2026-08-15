@@ -43,7 +43,7 @@ Windows sidecar。
 
 ```powershell
 .\scripts\verify-desktop-windows-package.ps1 `
-  -PackageRoot "C:\path\to\Dolphin Code" `
+  -PackageRoot "C:\path\to\DolphinAI" `
   -ExpectedVersion "0.2.66" `
   -ExpectedSourceRevision "<git-revision>"
 ```
@@ -53,7 +53,7 @@ Windows sidecar。
 下面三项依赖真实桌面配置、远程账号和 Coding 模型，不在无账号的通用构建脚本中伪造。交付给用户前必须用
 本次解压目录执行，不能沿用仍在运行的旧客户端进程。
 
-1. 关闭所有旧的 `Dolphin Code.exe`、`ruijing-sidecar.exe` 和 `agent-runtime.exe`，再从本次解压目录启动。
+1. 关闭所有旧的 `DolphinAI.exe`、`dolphin-ai-sidecar.exe` 和 `agent-runtime.exe`，再从本次解压目录启动。
 2. 打开一个本地应用，确认本地 Runtime 状态到达 `ready`，且过程中没有命令行黑框。
 3. 新建一个 Code 会话并发送最小消息，确认 agent session 创建成功并收到首个流式事件。
 
@@ -63,9 +63,9 @@ Windows sidecar。
 ## 产物
 
 ```text
-dist-desktop/windows/ruijing-<version>-windows-x86_64-portable.zip
-dist-desktop/windows/ruijing-<version>-windows-x86_64-setup.exe
-dist-desktop/windows/ruijing-<version>-windows-x86_64.msi
+dist-desktop/windows/dolphin-ai-<version>-windows-x86_64-portable.zip
+dist-desktop/windows/dolphin-ai-<version>-windows-x86_64-setup.exe
+dist-desktop/windows/dolphin-ai-<version>-windows-x86_64.msi
 ```
 
 绿色包适合快速验证和并行保留多个版本；安装包提供标准卸载和后续更新能力。两种包都必须通过相同的 Runtime

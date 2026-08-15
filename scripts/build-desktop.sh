@@ -150,15 +150,15 @@ fi
 .venv/bin/python -m pip install -r requirements.txt >/dev/null
 # 全新 checkout 可能没装 pyinstaller — 缺则补装 (构建期依赖, 不入 requirements.txt 避免污染部署)
 .venv/bin/python -m PyInstaller --version >/dev/null 2>&1 || .venv/bin/pip install "pyinstaller>=6.6"
-# 预置 skill (backend/desktop/preset-skills) 经 ruijing-sidecar.spec 的 datas 收进包,
+# 预置 skill (backend/desktop/preset-skills) 经 dolphin-ai-sidecar.spec 的 datas 收进包,
 # 首启由 build_env._sync_preset_skills 覆盖式同步进 data_dir/skills/platform/。
-.venv/bin/python -m PyInstaller ruijing-sidecar.spec --clean --noconfirm
+.venv/bin/python -m PyInstaller dolphin-ai-sidecar.spec --clean --noconfirm
 
 echo ""
 echo "==> 3/4 放置 sidecar 二进制 (triple=$TRIPLE)"
 mkdir -p "$ROOT/src-tauri/binaries"
-cp "$ROOT/backend/dist/ruijing-sidecar" "$ROOT/src-tauri/binaries/ruijing-sidecar-${TRIPLE}"
-chmod +x "$ROOT/src-tauri/binaries/ruijing-sidecar-${TRIPLE}"
+cp "$ROOT/backend/dist/dolphin-ai-sidecar" "$ROOT/src-tauri/binaries/dolphin-ai-sidecar-${TRIPLE}"
+chmod +x "$ROOT/src-tauri/binaries/dolphin-ai-sidecar-${TRIPLE}"
 ls -lh "$ROOT/src-tauri/binaries/"
 
 echo ""

@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Dolphin Code",
+  "productName": "DolphinAI",
   "version": "0.2.66",
-  "identifier": "com.ruijing.builder",
+  "identifier": "com.definesys.dolphin-ai",
   "build": {
     "frontendDist": "../frontend/dist-desktop",
     "devUrl": "http://localhost:5173"
@@ -25,7 +25,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/ruijing-sidecar"],
+    "externalBin": ["binaries/dolphin-ai-sidecar"],
     "windows": {
       "nsis": {
         "languages": ["SimpChinese"]

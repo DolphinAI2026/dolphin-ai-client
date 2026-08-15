@@ -1,7 +1,7 @@
 param(
   [Parameter(Mandatory = $true)]
   [string]$PackageRoot,
-  [string]$ApplicationExecutable = "Dolphin Code.exe",
+  [string]$ApplicationExecutable = "DolphinAI.exe",
   [string]$ExpectedVersion = "",
   [string]$ExpectedSourceRevision = "",
   [switch]$WriteManifest
@@ -25,7 +25,7 @@ $RuntimeRoot = Join-Path $PackageRoot "resources\agent-runtime"
 $ManifestPath = Join-Path $PackageRoot "build-manifest.json"
 $RelativeFiles = @(
   $ApplicationExecutable,
-  "ruijing-sidecar.exe",
+  "dolphin-ai-sidecar.exe",
   "resources\agent-runtime\bin\agent-runtime.exe",
   "resources\agent-runtime\codex\bin\codex.exe",
   "resources\agent-runtime\codex\codex-path\rg.exe",
@@ -142,7 +142,7 @@ Write-Host "[package-gate] PASS no repository metadata"
 
 $HashFiles = [ordered]@{
   application = $ApplicationExecutable
-  sidecar = "ruijing-sidecar.exe"
+  sidecar = "dolphin-ai-sidecar.exe"
   agent_runtime = "resources\agent-runtime\bin\agent-runtime.exe"
   codex = "resources\agent-runtime\codex\bin\codex.exe"
   python = "resources\agent-runtime\agentic-coding\.venv\Scripts\python.exe"
@@ -156,7 +156,7 @@ if ($WriteManifest) {
   }
   $Manifest = [ordered]@{
     schema_version = 1
-    product = "Dolphin Code"
+    product = "DolphinAI"
     version = $ExpectedVersion
     source_revision = $ExpectedSourceRevision
     target = "x86_64-pc-windows-msvc"

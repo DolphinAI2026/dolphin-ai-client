@@ -19,15 +19,15 @@ cd "$ROOT/frontend" && npm run build:desktop
 echo ""
 echo "==> 2/4 PyInstaller x86_64 sidecar (Rosetta)"
 cd "$ROOT/backend"
-arch -x86_64 "$PYX86VENV" -m PyInstaller ruijing-sidecar.spec --clean --noconfirm \
+arch -x86_64 "$PYX86VENV" -m PyInstaller dolphin-ai-sidecar.spec --clean --noconfirm \
     --distpath dist-x86 --workpath build-x86
 
 echo ""
 echo "==> 3/4 放置 x86 sidecar 二进制 (triple=$TARGET)"
 mkdir -p "$ROOT/src-tauri/binaries"
-cp "$ROOT/backend/dist-x86/ruijing-sidecar" "$ROOT/src-tauri/binaries/ruijing-sidecar-${TARGET}"
-chmod +x "$ROOT/src-tauri/binaries/ruijing-sidecar-${TARGET}"
-file "$ROOT/src-tauri/binaries/ruijing-sidecar-${TARGET}"
+cp "$ROOT/backend/dist-x86/dolphin-ai-sidecar" "$ROOT/src-tauri/binaries/dolphin-ai-sidecar-${TARGET}"
+chmod +x "$ROOT/src-tauri/binaries/dolphin-ai-sidecar-${TARGET}"
+file "$ROOT/src-tauri/binaries/dolphin-ai-sidecar-${TARGET}"
 
 echo ""
 echo "==> 4/4 Tauri build --target $TARGET"

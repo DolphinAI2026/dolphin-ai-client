@@ -213,7 +213,7 @@ try {
 
   Invoke-Step "4/6 Build PyInstaller Windows sidecar" {
     if ($SkipSidecarBuild) {
-      $PreparedSidecar = Join-Path $Backend "dist\ruijing-sidecar.exe"
+      $PreparedSidecar = Join-Path $Backend "dist\dolphin-ai-sidecar.exe"
       if (-not (Test-Path -LiteralPath $PreparedSidecar -PathType Leaf)) {
         throw "Cannot skip sidecar build because prepared executable is missing: $PreparedSidecar"
       }
@@ -244,7 +244,7 @@ try {
         & $VenvPython -m PyInstaller --version | Out-Null
         Assert-NativeSuccess "PyInstaller availability check" $LASTEXITCODE
       }
-      & $VenvPython -m PyInstaller ruijing-sidecar.spec --clean --noconfirm
+      & $VenvPython -m PyInstaller dolphin-ai-sidecar.spec --clean --noconfirm
       Assert-NativeSuccess "PyInstaller sidecar build" $LASTEXITCODE
     } finally {
       Pop-Location
@@ -254,11 +254,11 @@ try {
   Invoke-Step "5/6 Place sidecar binary" {
     $BinDir = Join-Path $Tauri "binaries"
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
-    $Sidecar = Join-Path $Backend "dist\ruijing-sidecar.exe"
+    $Sidecar = Join-Path $Backend "dist\dolphin-ai-sidecar.exe"
     if (-not (Test-Path $Sidecar)) {
       throw "Missing PyInstaller output: $Sidecar"
     }
-    $Dest = Join-Path $BinDir "ruijing-sidecar-$Target.exe"
+    $Dest = Join-Path $BinDir "dolphin-ai-sidecar-$Target.exe"
     Copy-Item $Sidecar $Dest -Force
     Get-Item $Dest | Format-List FullName,Length,LastWriteTime
   }
@@ -274,7 +274,7 @@ try {
       $ReleaseRoot = Join-Path $CargoTargetRoot "$Target\release"
       $ReleaseAgentRuntime = Join-Path $ReleaseRoot "resources\agent-runtime"
       if ($SkipTauriBuild) {
-        foreach ($PreparedBinary in @("app.exe", "ruijing-sidecar.exe")) {
+        foreach ($PreparedBinary in @("DolphinAI.exe", "dolphin-ai-sidecar.exe")) {
           if (-not (Test-Path -LiteralPath (Join-Path $ReleaseRoot $PreparedBinary) -PathType Leaf)) {
             throw "Cannot skip Tauri build because prepared binary is missing: $PreparedBinary"
           }
@@ -315,18 +315,18 @@ try {
         $DownloadDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
           (Join-Path $Root "dist-desktop\windows")
         )
-        $PortableStagingRoot = Join-Path $env:TEMP "ruijing-$PackageVersion-portable"
-        $PortableAppRoot = Join-Path $PortableStagingRoot "Dolphin Code"
-        $PortableZip = Join-Path $DownloadDir "ruijing-$PackageVersion-windows-x86_64-portable.zip"
+        $PortableStagingRoot = Join-Path $env:TEMP "dolphin-ai-$PackageVersion-portable"
+        $PortableAppRoot = Join-Path $PortableStagingRoot "DolphinAI"
+        $PortableZip = Join-Path $DownloadDir "dolphin-ai-$PackageVersion-windows-x86_64-portable.zip"
 
         Remove-Tree $PortableStagingRoot
         New-Item -ItemType Directory -Force -Path $PortableAppRoot | Out-Null
         New-Item -ItemType Directory -Force -Path $DownloadDir | Out-Null
-        Get-ChildItem $DownloadDir -File -Filter "ruijing-*-windows-x86_64-portable.zip" |
+        Get-ChildItem $DownloadDir -File -Filter "dolphin-ai-*-windows-x86_64-portable.zip" |
           Remove-Item -Force
 
-        Copy-Item (Join-Path $ReleaseRoot "app.exe") (Join-Path $PortableAppRoot "Dolphin Code.exe") -Force
-        Copy-Item (Join-Path $ReleaseRoot "ruijing-sidecar.exe") $PortableAppRoot -Force
+        Copy-Item (Join-Path $ReleaseRoot "DolphinAI.exe") (Join-Path $PortableAppRoot "DolphinAI.exe") -Force
+        Copy-Item (Join-Path $ReleaseRoot "dolphin-ai-sidecar.exe") $PortableAppRoot -Force
         if ($SkipTauriBuild) {
           Copy-Tree (Join-Path $Tauri "resources\agent-runtime") (Join-Path $PortableAppRoot "resources\agent-runtime")
         } else {
@@ -334,8 +334,8 @@ try {
         }
 
         foreach ($RelativePath in @(
-          "Dolphin Code.exe",
-          "ruijing-sidecar.exe",
+          "DolphinAI.exe",
+          "dolphin-ai-sidecar.exe",
           "resources\agent-runtime\bin\agent-runtime.exe",
           "resources\agent-runtime\codex\bin\codex.exe",
           "resources\agent-runtime\agentic-coding\.venv\Scripts\python.exe",
@@ -360,7 +360,7 @@ try {
 
         Push-Location $PortableStagingRoot
         try {
-          & tar.exe -a -c -f $PortableZip "Dolphin Code"
+          & tar.exe -a -c -f $PortableZip "DolphinAI"
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $PortableZip -PathType Leaf)) {
             throw "Failed to create portable package with tar.exe"
           }
@@ -368,13 +368,13 @@ try {
           Pop-Location
         }
 
-        $VerificationRoot = Join-Path $env:TEMP ("ruijing-$PackageVersion-verify-" + [Guid]::NewGuid().ToString("N"))
+        $VerificationRoot = Join-Path $env:TEMP ("dolphin-ai-$PackageVersion-verify-" + [Guid]::NewGuid().ToString("N"))
         try {
           New-Item -ItemType Directory -Force -Path $VerificationRoot | Out-Null
           & tar.exe -xf $PortableZip -C $VerificationRoot
           Assert-NativeSuccess "Portable package extraction" $LASTEXITCODE
           & (Join-Path $Root "scripts\verify-desktop-windows-package.ps1") `
-            -PackageRoot (Join-Path $VerificationRoot "Dolphin Code") `
+            -PackageRoot (Join-Path $VerificationRoot "DolphinAI") `
             -ExpectedVersion $PackageVersion `
             -ExpectedSourceRevision $SourceRevision
           Assert-NativeSuccess "Extracted portable package verification" $LASTEXITCODE
@@ -423,9 +423,9 @@ try {
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
       if ($Installer) {
-        Get-ChildItem $DownloadDir -File -Filter "ruijing-*-windows-x86_64-setup.exe" |
+        Get-ChildItem $DownloadDir -File -Filter "dolphin-ai-*-windows-x86_64-setup.exe" |
           Remove-Item -Force
-        $NamedInstaller = Join-Path $DownloadDir "ruijing-$PackageVersion-windows-x86_64-setup.exe"
+        $NamedInstaller = Join-Path $DownloadDir "dolphin-ai-$PackageVersion-windows-x86_64-setup.exe"
         Copy-Item $Installer.FullName $NamedInstaller -Force
         Write-Host ""
         Write-Host "Download-ready installer: $NamedInstaller"
@@ -437,9 +437,9 @@ try {
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
       if ($Msi) {
-        Get-ChildItem $DownloadDir -File -Filter "ruijing-*-windows-x86_64.msi" |
+        Get-ChildItem $DownloadDir -File -Filter "dolphin-ai-*-windows-x86_64.msi" |
           Remove-Item -Force
-        $NamedMsi = Join-Path $DownloadDir "ruijing-$PackageVersion-windows-x86_64.msi"
+        $NamedMsi = Join-Path $DownloadDir "dolphin-ai-$PackageVersion-windows-x86_64.msi"
         Copy-Item $Msi.FullName $NamedMsi -Force
         Write-Host "Download-ready MSI: $NamedMsi"
       } elseif ($Bundle -in "msi", "all") {
