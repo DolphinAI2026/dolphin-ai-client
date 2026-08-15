@@ -61,10 +61,10 @@ async function checkForUpdates() {
   checking.value = true
   errorText.value = ''
   try {
-    await checkAndPromptUpdate({ silentIfNone: false })
-  } catch (error) {
-    console.warn('[desktop-about] update check failed', error)
-    errorText.value = '检查更新失败，请稍后重试'
+    const result = await checkAndPromptUpdate({ silentIfNone: false })
+    if (result.status === 'failed') {
+      errorText.value = result.error
+    }
   } finally {
     checking.value = false
   }

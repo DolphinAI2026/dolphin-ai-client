@@ -18,6 +18,7 @@ import * as loginModule from '@/views/Login.vue'
 import desktopSettingsSource from '@/views/DesktopSettings.vue?raw'
 import aboutDialogSource from '@/components/desktop/DesktopAboutDialog.vue?raw'
 import railSidebarSource from '@/components/v2/RailSidebar.vue?raw'
+import desktopUpdateSource from '@/utils/desktop/update.ts?raw'
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -125,11 +126,17 @@ describe('resolveDesktopRedirect', () => {
   it('桌面设置通过关于弹窗提供版本与手动更新入口', () => {
     expect(desktopSettingsSource).toContain("label: '关于与更新'")
     expect(desktopSettingsSource).toContain('<DesktopAboutDialog')
+    expect(desktopSettingsSource).not.toContain('Dolphin Code')
     expect(aboutDialogSource).toContain('DolphinAI')
     expect(aboutDialogSource).toContain('__APP_VERSION__')
     expect(aboutDialogSource).toContain('__BUILD_REVISION__')
     expect(aboutDialogSource).toContain('__BUILD_TARGET__')
     expect(aboutDialogSource).toContain('checkAndPromptUpdate({ silentIfNone: false })')
+    expect(aboutDialogSource).toContain('const result = await checkAndPromptUpdate({ silentIfNone: false })')
+    expect(aboutDialogSource).toContain("if (result.status === 'failed')")
+    expect(aboutDialogSource).toContain('errorText.value = result.error')
+    expect(desktopUpdateSource).toContain("status: 'failed'")
+    expect(desktopUpdateSource).not.toContain('ElMessage.error')
   })
 
   it('核心桌面入口使用 DolphinAI 品牌', () => {

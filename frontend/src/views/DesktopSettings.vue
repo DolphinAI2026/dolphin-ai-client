@@ -232,7 +232,7 @@ const sectionMeta: Record<SettingsSection, { title: string; description: string;
   apaas: { title: 'aPaaS 环境', description: '维护本地 Builder 导入、发布所需的平台连接。', icon: 'building' },
   environment: { title: '环境检查', description: '检查桌面 Runtime 和常用开发工具，结果只用于诊断。', icon: 'terminal' },
   storage: { title: '存储与诊断', description: '查看桌面数据目录并打开本机日志。', icon: 'database' },
-  about: { title: '关于与更新', description: '查看 Dolphin Code 版本并手动检查客户端更新。', icon: 'help-circle' },
+  about: { title: '关于与更新', description: '查看 DolphinAI 版本并手动检查客户端更新。', icon: 'help-circle' },
 }
 
 const activeSection = ref<SettingsSection>('remote')
