@@ -4,6 +4,8 @@ set -euo pipefail
 
 START_TS=$(date +%s)
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+HOST_OS="$(uname -s)"
+HOST_ARCH="$(uname -m)"
 TRIPLE="$(rustc --print host-tuple)"
 CONFIG="$ROOT/src-tauri/tauri.conf.json"
 SOURCE_REVISION="$(git -C "$ROOT" rev-parse HEAD)"
@@ -12,6 +14,17 @@ UPDATER_ARTIFACTS_ENABLED=1
 is_release_build() {
     [[ "${DOLPHIN_RELEASE_BUILD:-}" == "1" || "${GITHUB_REF_TYPE:-}" == "tag" || "${GITHUB_REF:-}" == refs/tags/* ]]
 }
+
+assert_macos_arm_host() {
+    local host_os="$1" host_arch="$2" host_triple="$3"
+    [[ "$host_os" != "Darwin" ]] && return 0
+    if [[ "$host_arch" != "arm64" && "$host_arch" != "aarch64" ]] || [[ "$host_triple" != "aarch64-apple-darwin" ]]; then
+        echo "ERROR: build-desktop.sh only produces macOS aarch64 packages on Apple Silicon. Use scripts/build-desktop-x86.sh for Intel macOS packages." >&2
+        return 1
+    fi
+}
+
+assert_macos_arm_host "$HOST_OS" "$HOST_ARCH" "$TRIPLE"
 
 restore_tauri_config() {
     if [[ -n "${TAURI_CONFIG_BACKUP:-}" ]]; then
@@ -38,15 +51,24 @@ read_package_version() {
     node -e 'const fs = require("node:fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).version);' "$CONFIG"
 }
 
-copy_single_artifact() {
-    local source_dir="$1" pattern="$2" destination="$3"
-    local -a matches
-    mapfile -d '' matches < <(find "$source_dir" -maxdepth 1 -type f -name "$pattern" -print0)
-    [[ ${#matches[@]} -eq 1 ]] || {
-        echo "ERROR: expected one $pattern artifact under $source_dir, found ${#matches[@]}" >&2
+find_exactly_one() {
+    local description="$1" candidate match="" count=0
+    shift
+    while IFS= read -r -d '' candidate; do
+        match="$candidate"
+        count=$((count + 1))
+    done < <("$@")
+    [[ "$count" -eq 1 ]] || {
+        echo "ERROR: $description, found $count" >&2
         return 1
     }
-    cp "${matches[0]}" "$destination"
+    printf '%s\n' "$match"
+}
+
+copy_single_artifact() {
+    local source_dir="$1" pattern="$2" destination="$3" source
+    source="$(find_exactly_one "expected one $pattern artifact under $source_dir" find "$source_dir" -maxdepth 1 -type f -name "$pattern" -print0)" || return 1
+    cp "$source" "$destination"
 }
 
 copy_linux_updater_artifacts() {
@@ -143,7 +165,6 @@ repack_linux_appimage_with_pristine_codex() {
     local source_builder_index="$ROOT/src-tauri/resources/agent-runtime/web/builder/dist/index.html"
     local appdir appdir_codex output_file output_name plugin arch
     local source_hash bundled_hash extracted_codex extracted_builder_index smoke_dir codex_version
-    local -a matches
 
     [[ -x "$source_codex" ]] || {
         echo "ERROR: Linux Runtime Codex 不存在或不可执行: $source_codex" >&2
@@ -158,28 +179,11 @@ repack_linux_appimage_with_pristine_codex() {
         return 1
     }
 
-    mapfile -d '' matches < <(find "$bundle_dir" -maxdepth 1 -type d -name '*.AppDir' -print0)
-    [[ ${#matches[@]} -eq 1 ]] || {
-        echo "ERROR: 期望恰好一个 AppDir，实际 ${#matches[@]} 个: $bundle_dir" >&2
-        return 1
-    }
-    appdir="${matches[0]}"
+    appdir="$(find_exactly_one "期望恰好一个 AppDir: $bundle_dir" find "$bundle_dir" -maxdepth 1 -type d -name '*.AppDir' -print0)" || return 1
 
-    mapfile -d '' matches < <(
-        find "$appdir" -type f -path '*/resources/agent-runtime/codex/bin/codex' -print0
-    )
-    [[ ${#matches[@]} -eq 1 ]] || {
-        echo "ERROR: AppDir 中未找到唯一的 Runtime Codex，实际 ${#matches[@]} 个" >&2
-        return 1
-    }
-    appdir_codex="${matches[0]}"
+    appdir_codex="$(find_exactly_one "AppDir 中未找到唯一的 Runtime Codex" find "$appdir" -type f -path '*/resources/agent-runtime/codex/bin/codex' -print0)" || return 1
 
-    mapfile -d '' matches < <(find "$bundle_dir" -maxdepth 1 -type f -name '*.AppImage' -print0)
-    [[ ${#matches[@]} -eq 1 ]] || {
-        echo "ERROR: 期望恰好一个 AppImage，实际 ${#matches[@]} 个: $bundle_dir" >&2
-        return 1
-    }
-    output_file="${matches[0]}"
+    output_file="$(find_exactly_one "期望恰好一个 AppImage: $bundle_dir" find "$bundle_dir" -maxdepth 1 -type f -name '*.AppImage' -print0)" || return 1
     output_name="$(basename "$output_file")"
 
     plugin="${LINUXDEPLOY_PLUGIN_APPIMAGE:-$HOME/.cache/tauri/linuxdeploy-plugin-appimage.AppImage}"
@@ -227,16 +231,10 @@ repack_linux_appimage_with_pristine_codex() {
         "$output_file" --appimage-extract \
             'usr/lib/*/resources/agent-runtime/web/builder/dist/index.html' >/dev/null
     )
-    mapfile -d '' matches < <(
-        find "$smoke_dir/squashfs-root" -type f \
-            -path '*/resources/agent-runtime/codex/bin/codex' -print0
-    )
-    [[ ${#matches[@]} -eq 1 ]] || {
-        echo "ERROR: 无法从最终 AppImage 提取唯一的 Runtime Codex" >&2
+    extracted_codex="$(find_exactly_one "无法从最终 AppImage 提取唯一的 Runtime Codex" find "$smoke_dir/squashfs-root" -type f -path '*/resources/agent-runtime/codex/bin/codex' -print0)" || {
         find "$smoke_dir" -depth -delete
         return 1
     }
-    extracted_codex="${matches[0]}"
     bundled_hash="$(sha256sum "$extracted_codex" | awk '{print $1}')"
     [[ "$source_hash" == "$bundled_hash" ]] || {
         echo "ERROR: 最终 AppImage 再次改写了 Runtime Codex" >&2
@@ -244,16 +242,10 @@ repack_linux_appimage_with_pristine_codex() {
         return 1
     }
     codex_version="$("$extracted_codex" --version)"
-    mapfile -d '' matches < <(
-        find "$smoke_dir/squashfs-root" -type f \
-            -path '*/resources/agent-runtime/web/builder/dist/index.html' -print0
-    )
-    [[ ${#matches[@]} -eq 1 ]] || {
-        echo "ERROR: 无法从最终 AppImage 提取唯一的 Builder 入口" >&2
+    extracted_builder_index="$(find_exactly_one "无法从最终 AppImage 提取唯一的 Builder 入口" find "$smoke_dir/squashfs-root" -type f -path '*/resources/agent-runtime/web/builder/dist/index.html' -print0)" || {
         find "$smoke_dir" -depth -delete
         return 1
     }
-    extracted_builder_index="${matches[0]}"
     grep -q 'id="root"' "$extracted_builder_index" && grep -q 'type="module"' "$extracted_builder_index" || {
         echo "ERROR: 最终 AppImage 内 Builder 入口缺少前端模块" >&2
         find "$smoke_dir" -depth -delete
@@ -270,7 +262,7 @@ echo "==> 1/4 前端桌面构建 (base=/)"
 if [[ ! -d "$ROOT/frontend/node_modules" ]]; then
     (cd "$ROOT/frontend" && npm ci)
 fi
-if [[ "$(uname -s)" == "Darwin" ]]; then
+if [[ "$HOST_OS" == "Darwin" ]]; then
     DOLPHIN_BUILD_TARGET="macos-aarch64"
 else
     DOLPHIN_BUILD_TARGET="linux-x86_64"
@@ -301,7 +293,7 @@ chmod +x "$ROOT/src-tauri/binaries/dolphin-ai-sidecar-${TRIPLE}"
 ls -lh "$ROOT/src-tauri/binaries/"
 
 echo ""
-if [[ "$(uname -s)" == "Darwin" ]]; then
+if [[ "$HOST_OS" == "Darwin" ]]; then
     BUNDLES="app,dmg"
     FALLBACK_BUNDLES="app"
     BUNDLE_DIRS=("macos" "dmg")
@@ -335,7 +327,7 @@ cd "$ROOT" && npx tauri build --bundles "$BUNDLES" || {
     cd "$ROOT" && npx tauri build --bundles "$FALLBACK_BUNDLES"
 }
 
-if [[ "$(uname -s)" == "Linux" ]]; then
+if [[ "$HOST_OS" == "Linux" ]]; then
     repack_linux_appimage_with_pristine_codex
     publish_linux_release
 else

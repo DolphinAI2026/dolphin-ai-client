@@ -41,15 +41,24 @@ read_package_version() {
     node -e 'const fs = require("node:fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).version);' "$CONFIG"
 }
 
-copy_single_artifact() {
-    local source_dir="$1" pattern="$2" destination="$3"
-    local -a matches
-    mapfile -d '' matches < <(find "$source_dir" -maxdepth 1 -type f -name "$pattern" -print0)
-    [[ ${#matches[@]} -eq 1 ]] || {
-        echo "ERROR: expected one $pattern artifact under $source_dir, found ${#matches[@]}" >&2
+find_exactly_one() {
+    local description="$1" candidate match="" count=0
+    shift
+    while IFS= read -r -d '' candidate; do
+        match="$candidate"
+        count=$((count + 1))
+    done < <("$@")
+    [[ "$count" -eq 1 ]] || {
+        echo "ERROR: $description, found $count" >&2
         return 1
     }
-    cp "${matches[0]}" "$destination"
+    printf '%s\n' "$match"
+}
+
+copy_single_artifact() {
+    local source_dir="$1" pattern="$2" destination="$3" source
+    source="$(find_exactly_one "expected one $pattern artifact under $source_dir" find "$source_dir" -maxdepth 1 -type f -name "$pattern" -print0)" || return 1
+    cp "$source" "$destination"
 }
 
 publish_macos_x86_release() {
