@@ -1,7 +1,7 @@
 # 桌面客户端单 URL 与本地 AI 跨平台技术方案
 
 **文档 ID**：`ARCH-20260809-001-desktop-local-ai-cross-platform`  
-**版本**：`1.0`  
+**版本**：`1.1`
 **状态**：已确认，进入实现  
 **适用工程**：`apaas-builder-ai`  
 **目标平台**：Windows、Linux、macOS
@@ -10,17 +10,17 @@
 
 桌面客户端初始化只要求用户输入一个远程服务 URL。该 URL 对应的远程平台负责声明认证、产品能力和服务地址，客户端不能根据域名、端口或路径猜测部署类型。
 
-远程平台是以下对象的唯一事实源：
+远程平台是以下远程对象的唯一事实源：
 
 - 登录、用户、租户、组织和权限；
 - Builder、Code 和产品入口；
-- 应用、项目、工作区、代码仓库、会话、消息、任务和运行状态；
+- 远程应用、远程工作区、代码仓库、远程会话、消息、任务和运行状态；
 - 远程模型、MCP、Skill、知识库及应用绑定；
 - 远程服务地址、协议版本和能力策略。
 
-桌面端只拥有四类设备侧 AI 资源：本地模型、本地 MCP、本地 Skill、本地知识库。本地资源可以补充远程 Builder 和 Code，但不能创建独立的本地租户、本地应用或本地会话事实。
+桌面端拥有四类设备侧 AI 资源：本地模型、本地 MCP、本地 Skill、本地知识库。本地资源可以补充远程 Builder 和 Code。桌面端还可以登记本机 Code 项目位置，并为本机运行创建本地 Code 会话；这些记录属于当前设备，不得伪装成远程租户、远程应用或远程会话事实。
 
-本地 AI 默认开启；本地 Code 和 Local Runtime 不默认开启。离线时只允许管理和测试本地 AI 资源，不提供独立 Builder 或 Code 工作流。
+本地 AI 默认开启。本机 Code 能力在桌面端可用，但 Local Runtime 只在用户明确打开本机位置时按需启动，不参与客户端默认启动。离线时可以管理本地 AI 资源和已登记的本机 Code 项目；远程位置、远程会话和依赖远程身份的能力显示离线状态。
 
 ## 单 URL Discovery 与认证合同
 
@@ -74,9 +74,19 @@ GET <service-url>/.well-known/dolphin-desktop-bootstrap
 
 客户端缓存最后一次有效 discovery 快照、ETag 和获取时间。重新发现失败时可以显示旧快照用于诊断，但不得用过期快照签发调用或伪造在线状态。切换 URL 或 `deployment_id` 后，旧登录态、绑定、调用票据和远程缓存全部失效。
 
-## 远程事实源与本地 AI 资源
+## 远程事实源、本机 Code 位置与本地 AI 资源
 
-远程 Builder 和 Code 只显示 discovery 声明为启用的产品。桌面 Code 应用列表、会话历史和新建会话固定读取远程接口，不再使用 `local | remote` 应用来源作为产品模型，也不再提供“新建本地应用”入口。
+远程 Builder 和 Code 只显示 discovery 声明为启用的产品。Code 应用是统一的逻辑对象，本机与远程是该应用的可用位置，不再作为两类互斥产品页面。桌面端并行读取设备侧本机位置与远程应用目录，并且只在存在稳定远程标识或用户明确建立关联时合并；同名应用不得自动合并。
+
+统一模型使用三个互不替代的标识：
+
+- `logical_application_id`：逻辑应用身份，用于列表和会话归组；
+- `execution_location`：`local | remote`，表示当前会话固定从哪个位置运行；
+- `execution_target`：Runtime 的技术执行目标，继续描述 Control Plane 或桌面 Runtime，不承担产品位置语义。
+
+仅有本机位置的应用可以直接在本机打开；仅有远程位置的应用可以直接在远程打开；同时具备两个位置的应用首次打开必须由用户选择，后续仅使用该应用上次成功打开的位置。已记住位置或历史会话的原位置失效时不得静默切换。
+
+本机位置由桌面 sidecar 的本地数据库保存路径、逻辑应用关联和可用性，不创建本地租户。远程应用元数据、组织、权限和远程位置仍由远程平台提供。任一来源失败不得清空另一来源已经成功加载的数据。
 
 本地 AI 统一使用资源记录：
 
@@ -172,9 +182,9 @@ Tauri 启动顺序调整为：
   -> sidecar 健康：打开远程登录或业务页面
 ```
 
-Local Runtime Manager 不再参与默认启动。sidecar 不接收 `DOLPHIN_LOCAL_RUNTIME_MANAGER_URL`、`DOLPHIN_LOCAL_RUNTIME_MANAGER_TOKEN` 或 `DOLPHIN_AGENT_RUNTIME_PATH`，也不再因为本地 Runtime 不可用而阻断远程 Builder 和 Code。
+Local Runtime Manager 不再参与默认启动，也不得因为本地 Runtime 不可用而阻断远程 Builder 和 Code。用户打开本机 Code 位置时，sidecar 才按需准备并启动本地 Runtime；准备或启动失败只影响当前本机位置，并保留应用和会话用于重试。
 
-现有 Local Runtime 模块暂时保留为未来本地 AI 资源进程的按需管理能力，但不能承担本地应用、工作区或会话语义。旧 `starting_runtime` 状态只做读取兼容，新的启动文案统一为“准备桌面服务”。
+本机项目注册、路径恢复和会话位置由桌面 sidecar 持久化；Local Runtime 只承担已选择本机位置后的进程和工作区运行，不成为应用身份事实源。远程位置继续走 Control Plane workspace。旧 `starting_runtime` 状态保留读取兼容；客户端默认启动文案统一为“准备桌面服务”，本机会话内部仍使用“检查本地项目、启动本地环境、打开 Code 工作台”三阶段。
 
 ## Windows Linux macOS 打包
 
@@ -211,7 +221,16 @@ registry、桥协议、Skill、MCP、模型和知识索引使用显式版本。�
 
 ## 实施阶段与文件 Ownership
 
-首阶段目标是建立 discovery/configuration 基线、停止默认 Local Runtime，并让 Builder/Code 入口由远程能力决定。本阶段不实现完整 WSS、调用票据和本地 MCP 执行器。
+首阶段目标是建立 discovery/configuration 基线、停止默认 Local Runtime，并让 Builder/Code 入口由远程能力决定。本机 Code 位置属于后续按需能力，不改变默认启动约束。本阶段不实现完整 WSS、调用票据和本地 MCP 执行器。
+
+统一 Code 应用与位置阶段增量 ownership：
+
+- `backend/app/code_runtime/application_locations.py`：本机位置注册、可用性和远程关联；
+- `backend/app/code_runtime/session_location.py`：逻辑应用、会话运行位置和兼容推导；
+- `backend/app/code_runtime/project_initialization.py`：已有项目初始化会话和幂等任务派发；
+- `frontend/src/composables/useUnifiedCodeApplications.ts`：本机/远程独立加载与统一投影；
+- `frontend/src/components/code/*`：位置筛选、首次选择、添加项目和恢复交互；
+- `frontend/src/views/Apps.vue`、`frontend/src/views/CodeConversationPage.vue`、`frontend/src/components/v2/RailSidebar.vue`：只接入上述模块，不继续堆叠新职责。
 
 首阶段文件 ownership：
 
@@ -240,7 +259,7 @@ registry、桥协议、Skill、MCP、模型和知识索引使用显式版本。�
 4. schema v1 配置可迁移到 v2，URL、平台类型和产品声明非法时被拒绝；
 5. 未安装 Local Runtime appliance 时 sidecar 仍能启动并打开远程登录；
 6. discovery 只启用 Builder 时不显示 Code，只启用 Code 时不显示 Builder；
-7. 桌面 Code 应用和会话不再默认使用本地来源；
+7. 桌面 Code 应用按逻辑应用统一展示，本机与远程独立加载；本机 Runtime 只在打开本机位置时按需启动；
 8. 本地模型、MCP、Skill、知识库入口在桌面可见，且不会写入远程事实对象；
 9. Windows 构建不弹命令行，Linux/macOS 构建不依赖 agent-runtime 资源；
 10. Windows NSIS/portable、Linux AppImage/deb、macOS app/dmg 的 bundle 配置正确。
