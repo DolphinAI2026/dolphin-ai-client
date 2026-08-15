@@ -2,7 +2,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.pool import StaticPool
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from app.database import Base
 from app.models import RegisteredWorkspace
@@ -30,89 +30,13 @@ async def test_insert_and_query(session):
 
 
 @pytest.mark.asyncio
-async def test_unique_device_path_digest(session):
+async def test_unique_tenant_path(session):
     from sqlalchemy.exc import IntegrityError
-    from app.code_runtime.application_locations import local_workspace_path_digest
-
-    digest = local_workspace_path_digest("/p")
-    session.add(RegisteredWorkspace(
-        ws_id="1_a",
-        abs_path="/p",
-        path_identity_digest=digest,
-        user_id=1,
-        tenant_id=1,
-        display_name="p",
-    ))
+    session.add(RegisteredWorkspace(ws_id="1_a", abs_path="/p", user_id=1, tenant_id=1, display_name="p"))
     await session.commit()
-    session.add(RegisteredWorkspace(
-        ws_id="1_b",
-        abs_path="/p",
-        path_identity_digest=digest,
-        user_id=1,
-        tenant_id=2,
-        display_name="p",
-    ))
+    session.add(RegisteredWorkspace(ws_id="1_b", abs_path="/p", user_id=1, tenant_id=1, display_name="p"))
     with pytest.raises(IntegrityError):
         await session.commit()
-
-
-def test_registered_workspace_uses_full_path_digest_unique_index():
-    column = RegisteredWorkspace.__table__.columns["path_identity_digest"]
-    index = next(
-        item for item in RegisteredWorkspace.__table__.indexes
-        if item.name == "uq_regws_path_identity_digest"
-    )
-
-    assert column.type.length == 64
-    assert column.nullable is True
-    assert index.unique is True
-    assert [expression.name for expression in index.expressions] == ["path_identity_digest"]
-    assert "uq_regws_abs_path" not in {item.name for item in RegisteredWorkspace.__table__.indexes}
-    assert "uq_regws_tenant_path" not in {item.name for item in RegisteredWorkspace.__table__.indexes}
-
-
-@pytest.mark.asyncio
-async def test_path_identity_migration_backfills_unique_rows_and_leaves_duplicate_group_unclaimed():
-    from app.database import migrate_registered_workspace_path_identity
-    from app.code_runtime.application_locations import local_workspace_path_digest
-
-    engine = create_async_engine("sqlite+aiosqlite://")
-    async with engine.begin() as conn:
-        await conn.execute(text("""
-            CREATE TABLE registered_workspaces (
-                id INTEGER PRIMARY KEY,
-                tenant_id INTEGER NOT NULL,
-                abs_path VARCHAR(1000) NOT NULL
-            )
-        """))
-        await conn.execute(text(
-            "CREATE UNIQUE INDEX uq_regws_tenant_path "
-            "ON registered_workspaces(tenant_id, abs_path)"
-        ))
-        await conn.execute(text("""
-            INSERT INTO registered_workspaces (id, tenant_id, abs_path) VALUES
-            (1, 1, '/workspace/unique'),
-            (2, 1, '/workspace/duplicate'),
-            (3, 2, '/workspace/duplicate')
-        """))
-        await migrate_registered_workspace_path_identity(conn)
-        rows = (
-            await conn.execute(text(
-                "SELECT id, path_identity_digest FROM registered_workspaces ORDER BY id"
-            ))
-        ).all()
-        legacy_indexes = {
-            row[1]
-            for row in (await conn.execute(text("PRAGMA index_list('registered_workspaces')"))).all()
-        }
-
-    await engine.dispose()
-    assert rows == [
-        (1, local_workspace_path_digest('/workspace/unique')),
-        (2, None),
-        (3, None),
-    ]
-    assert "uq_regws_tenant_path" not in legacy_indexes
 
 
 def test_workspace_manager_external(tmp_path):

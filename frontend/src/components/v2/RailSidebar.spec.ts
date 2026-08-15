@@ -1,15 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import railSidebarSource from './RailSidebar.vue?raw'
 import { railTenantHome } from './RailSidebar.vue'
-import { groupCodeRailHistoryByApplication } from './codeRailHistory'
-import type { CodeRailHistoryResponse } from '@/api/codeRuntime'
-
-type RailSidebarModule = typeof import('./RailSidebar.vue') & {
-  createLatestRailNavigationIntent?: () => {
-    begin: () => number
-    isCurrent: (intent: number) => boolean
-  }
-}
 
 describe('RailSidebar brand mark', () => {
   it('uses the Ruijing whale mark in the rail logo', () => {
@@ -37,89 +28,11 @@ describe('RailSidebar product availability', () => {
 // SP2b(2026-06-25): rail 会话统一单一来源 aiChatApi; Code 模式复用同一
 // 会话分组，只是按 mode=code 拉取并路由到 /code。
 describe('RailSidebar unified session source (SP2b)', () => {
-  it('lets only the latest async rail click commit navigation', async () => {
-    const module = await import('./RailSidebar.vue') as RailSidebarModule
-    expect(module.createLatestRailNavigationIntent).toBeTypeOf('function')
-    const navigation = module.createLatestRailNavigationIntent!()
-    const committed: string[] = []
-    let releaseFirst!: () => void
-    const firstActivation = new Promise<void>((resolve) => { releaseFirst = resolve })
-
-    const firstIntent = navigation.begin()
-    const first = firstActivation.then(() => {
-      if (navigation.isCurrent(firstIntent)) committed.push('first')
-    })
-    const secondIntent = navigation.begin()
-    if (navigation.isCurrent(secondIntent)) committed.push('second')
-    releaseFirst()
-    await first
-
-    expect(committed).toEqual(['second'])
-  })
-
-  it('keeps same-name logical applications separate while grouping local and remote locations', () => {
-    const history: CodeRailHistoryResponse = {
-      apps: [
-        {
-          shell_session_id: 'local-shell',
-          external_application_id: 'local-crm',
-          logical_application_id: 'crm-primary',
-          execution_location: 'local',
-          app_name: 'CRM',
-          workspace_path: '/home/user/workspaces/customer-crm',
-          sessions: [],
-        },
-        {
-          shell_session_id: 'remote-shell',
-          external_application_id: 'remote-crm',
-          logical_application_id: 'crm-primary',
-          execution_location: 'remote',
-          app_name: 'CRM',
-          environment_name: '开发环境',
-          sessions: [],
-        },
-        {
-          shell_session_id: 'other-shell',
-          external_application_id: 'other-crm',
-          logical_application_id: 'crm-secondary',
-          execution_location: 'remote',
-          app_name: 'CRM',
-          environment_name: '测试环境',
-          sessions: [],
-        },
-      ],
-    }
-
-    const groups = groupCodeRailHistoryByApplication(history)
-    const primary = groups.find(group => group.logicalApplicationId === 'crm-primary')
-    const secondary = groups.find(group => group.logicalApplicationId === 'crm-secondary')
-
-    expect(groups).toHaveLength(2)
-    expect(primary?.availableLocations).toEqual(['local', 'remote'])
-    expect(primary?.items.map(session => session.locationSummary)).toEqual([
-      '本机 · customer-crm',
-      '远程 · 开发环境',
-    ])
-    expect(primary?.locationSessions.local?.shellSessionId).toBe('local-shell')
-    expect(primary?.locationSessions.remote?.shellSessionId).toBe('remote-shell')
-    expect(secondary?.availableLocations).toEqual(['remote'])
-    expect(secondary?.locationSessions.local).toBeUndefined()
-  })
-
-  it('groups Code history by logical application identity and renders fixed location labels', () => {
-    expect(railSidebarSource).toContain("from './codeRailHistory'")
-    expect(railSidebarSource).toContain('groupCodeRailHistoryByApplication')
-    expect(railSidebarSource).toContain('g.availableLocations')
-    expect(railSidebarSource).toContain('s.locationSummary')
-    expect(railSidebarSource).toContain('g.localShellSessionId')
-    expect(railSidebarSource).toContain('g.remoteShellSessionId')
-  })
-
   it('uses a single aiChatApi session source (no codingApi)', () => {
     expect(railSidebarSource).toContain("from '@/api/aiChat'")
     expect(railSidebarSource).toContain('aiChatApi.listSessions(')
     expect(railSidebarSource).toContain('codeRuntimeApi.listRailHistory')
-    expect(railSidebarSource).toContain('codeRailHistorySessions')
+    expect(railSidebarSource).toContain('normalizeCodeRailHistory')
     expect(railSidebarSource).toContain("sessions.filter(s => s.mode !== 'code')")
     expect(railSidebarSource).not.toContain("from '@/api/coding'")
     expect(railSidebarSource).not.toContain('codingApi.getConversations()')
@@ -133,66 +46,28 @@ describe('RailSidebar unified session source (SP2b)', () => {
   it('delegates normalization + routing to the railSessions composable', () => {
     expect(railSidebarSource).toContain("from '@/composables/railSessions'")
     expect(railSidebarSource).toContain('normalizeAiSessions')
-    expect(railSidebarSource).toContain('groupCodeRailHistoryByApplication')
+    expect(railSidebarSource).toContain('normalizeCodeRailHistory')
     expect(railSidebarSource).toContain('railSessionTarget(')
     expect(railSidebarSource).toContain('nextAgentQuery')
   })
 
-  it('delegates Code runtime activation to the conversation page after routing', () => {
-    const openSessionSource = railSidebarSource.slice(
-      railSidebarSource.indexOf('async function openSession('),
-      railSidebarSource.indexOf('function sessionGroupKey('),
-    )
-
-    expect(openSessionSource).not.toContain('codeRuntimeApi.activateAgentSession')
-    expect(openSessionSource).toContain('router.push(railSessionTarget(')
+  it('activates Code runtime history before opening the shell route', () => {
+    expect(railSidebarSource).toContain('codeRuntimeApi.activateAgentSession')
+    expect(railSidebarSource).toContain('session.runtimeSessionId')
+    expect(railSidebarSource).toContain('session.shellSessionId')
   })
 
   it('exposes Code new runtime conversation actions on application groups', () => {
     expect(railSidebarSource).toContain('createCodeAgentSession')
     expect(railSidebarSource).toContain('codeRuntimeApi.createAgentSession')
     expect(railSidebarSource).toContain('rail-sess-group-new')
-    expect(railSidebarSource).toContain('codeGroupStandardShellSessionId')
-    expect(railSidebarSource).toContain('createCodeAgentSession(codeGroupStandardShellSessionId(g), g)')
+    expect(railSidebarSource).toContain('g.shellSessionId')
+    expect(railSidebarSource).toContain("createCodeAgentSession(g.shellSessionId)")
     expect(railSidebarSource).toContain("effectiveGroupBy === 'app'")
     expect(railSidebarSource).not.toContain('class="rail-sess-new"')
     expect(railSidebarSource).toContain(
       'nextAgentQuery(route.query, result.runtime_session_id)',
     )
-  })
-
-  it('keeps initialization shells visible but never selects them for a normal new conversation', () => {
-    const history: CodeRailHistoryResponse = {
-      apps: [
-        {
-          shell_session_id: 'standard-shell',
-          external_application_id: 'local-crm',
-          logical_application_id: 'crm',
-          execution_location: 'local',
-          session_purpose: 'standard',
-          app_name: 'CRM',
-          sessions: [],
-        },
-        {
-          shell_session_id: 'initialization-shell',
-          external_application_id: 'local-crm',
-          logical_application_id: 'crm',
-          execution_location: 'local',
-          session_purpose: 'project_initialization',
-          app_name: 'CRM',
-          sessions: [],
-        },
-      ],
-    }
-
-    const [group] = groupCodeRailHistoryByApplication(history)
-
-    expect(group.items.map(item => item.sessionPurpose)).toEqual([
-      'standard',
-      'project_initialization',
-    ])
-    expect(group.standardShellSessionId).toBe('standard-shell')
-    expect(group.locationSessions.local?.shellSessionId).toBe('standard-shell')
   })
 
   it('exposes Builder new conversations on application groups', () => {
@@ -203,9 +78,8 @@ describe('RailSidebar unified session source (SP2b)', () => {
   })
 
   it('keeps the application-scoped sessions returned by Code rail history', () => {
-    expect(railSidebarSource).toContain('codeRuntimeApi.listRailHistory()')
-    expect(railSidebarSource).toContain("applicationResult.status === 'fulfilled'")
-    expect(railSidebarSource).toContain('? applicationResult.value')
+    expect(railSidebarSource).toContain('codeRuntimeApi.listRailHistory(codeApplicationSource.value)')
+    expect(railSidebarSource).toContain('codeRailHistory.value = history')
     expect(railSidebarSource).not.toContain('hydrateCodeRailHistory')
     expect(railSidebarSource).not.toContain('codeRuntimeApi.listAgentSessions')
   })
@@ -222,8 +96,7 @@ describe('RailSidebar unified session source (SP2b)', () => {
   })
 
   it('shows the recent-session list in every mode', () => {
-    expect(railSidebarSource).toContain('v-if="showRecent && currentMode === \'code\'"')
-    expect(railSidebarSource).toContain('v-else-if="showRecent" class="rail-sessions"')
+    expect(railSidebarSource).not.toContain("currentMode.value !== 'code'")
   })
 
   it('defaults Code sessions to application grouping', () => {

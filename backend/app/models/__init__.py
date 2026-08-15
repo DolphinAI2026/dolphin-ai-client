@@ -476,21 +476,20 @@ class AppHealthSnapshot(Base):
 class RegisteredWorkspace(Base):
     """桌面「打开本地文件夹」external 工作区注册表 (指针进 DB, 不写用户文件夹)。"""
     __tablename__ = "registered_workspaces"
+    # abs_path VARCHAR(1000) utf8mb4 = 4000 字节,直接进唯一约束超 MySQL 索引上限 3072 字节
+    # (本地 SQLite 无此限制,故只在 MySQL 上线时暴露)。改用带 mysql_length 前缀的唯一索引:
+    # MySQL 只索引 abs_path 前 255 字符(255*4=1020<3072),SQLite 忽略 mysql_length 走全列。
     __table_args__ = (
-        Index("uq_regws_path_identity_digest", "path_identity_digest", unique=True),
+        Index("uq_regws_tenant_path", "tenant_id", "abs_path", unique=True, mysql_length={"abs_path": 255}),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     ws_id: Mapped[str] = mapped_column(String(60), unique=True, index=True, nullable=False)
     abs_path: Mapped[str] = mapped_column(String(1000), nullable=False)
-    path_identity_digest: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     tenant_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     workspace_type: Mapped[str] = mapped_column(String(40), nullable=False, default="external")
     apaas_app_id: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
-    logical_application_id: Mapped[Optional[str]] = mapped_column(String(160), nullable=True, index=True)
-    linked_remote_application_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
-    linked_remote_deployment_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     display_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_opened_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

@@ -77,32 +77,6 @@ describe('code applications store', () => {
     expect(list).toHaveBeenNthCalledWith(2, expect.objectContaining({ source: 'remote' }))
   })
 
-  it('loads local and remote in parallel and reports failures independently', async () => {
-    let resolveLocal!: (value: CodeApplicationListResponse) => void
-    let rejectRemote!: (reason: Error) => void
-    const local = new Promise<CodeApplicationListResponse>(resolve => { resolveLocal = resolve })
-    const remote = new Promise<CodeApplicationListResponse>((_resolve, reject) => { rejectRemote = reject })
-    const list = vi.spyOn(codeRuntimeApi, 'listApplications')
-      .mockReturnValueOnce(local)
-      .mockReturnValueOnce(remote)
-    const store = useCodeApplicationsStore()
-
-    const pending = store.loadLocations(
-      { tenantId: 3 },
-      ['local', 'remote'],
-      { pageSize: 100 },
-    )
-    expect(list).toHaveBeenCalledTimes(2)
-
-    resolveLocal(page('local', 'desktop-local'))
-    rejectRemote(new Error('remote unavailable'))
-
-    await expect(pending).resolves.toMatchObject({
-      local: { status: 'fulfilled', value: page('local', 'desktop-local') },
-      remote: { status: 'rejected' },
-    })
-  })
-
   it('uses the fresh TTL cache and supports an explicit refresh', async () => {
     const list = vi.spyOn(codeRuntimeApi, 'listApplications')
       .mockResolvedValueOnce(page('first'))

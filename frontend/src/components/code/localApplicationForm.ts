@@ -1,13 +1,3 @@
-import type { LocalApplicationDirectoryMode } from '@/api/codeRuntime'
-
-export const LOCAL_APPLICATION_PATH_MESSAGES: Record<string, string> = {
-  LOCAL_APPLICATION_PATH_NOT_ABSOLUTE: '请选择绝对路径的项目目录',
-  LOCAL_APPLICATION_PATH_NOT_FOUND: '所选项目目录不存在',
-  LOCAL_APPLICATION_PATH_NOT_DIRECTORY: '所选路径不是目录',
-  LOCAL_APPLICATION_PATH_UNREADABLE: '所选项目目录不可读',
-  LOCAL_APPLICATION_PATH_ALREADY_BOUND: '所选项目目录已绑定到其他应用',
-}
-
 export function createLocalApplicationCode(name: string, suffix: string): string {
   const normalized = String(name || '')
     .trim()
@@ -33,28 +23,4 @@ export function joinLocalProjectPath(parent: string, appCode: string): string {
   if (!root) return ''
   const separator = root.includes('\\') ? '\\' : '/'
   return `${root}${separator}${String(appCode || '').trim()}`
-}
-
-export function localApplicationProjectPath(
-  directoryMode: LocalApplicationDirectoryMode,
-  selectedDirectory: string,
-  appCode: string,
-): string {
-  return directoryMode === 'existing_directory'
-    ? String(selectedDirectory || '').trim()
-    : joinLocalProjectPath(selectedDirectory, appCode)
-}
-
-export function shouldApplyDefaultWorkspace(
-  requestId: number,
-  latestRequestId: number,
-  directoryMode: LocalApplicationDirectoryMode,
-): boolean {
-  return requestId === latestRequestId && directoryMode === 'new_directory'
-}
-
-export function describeLocalApplicationError(detail: unknown): string {
-  const text = String(detail || '').trim()
-  const code = Object.keys(LOCAL_APPLICATION_PATH_MESSAGES).find(candidate => text.includes(candidate))
-  return code ? LOCAL_APPLICATION_PATH_MESSAGES[code] : text
 }
