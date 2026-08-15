@@ -6,7 +6,7 @@ import process from 'node:process';
 
 const semverPattern = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
-function requiredAssets(version) {
+function primaryOutputAssets(version) {
   const prefix = `dolphin-ai-${version}`;
   return {
     windows_setup_url: `${prefix}-windows-x86_64-setup.exe`,
@@ -16,6 +16,19 @@ function requiredAssets(version) {
     latest_json_url: 'latest.json',
     checksums_url: 'SHA256SUMS.txt',
   };
+}
+
+function requiredAssets(version) {
+  const prefix = `dolphin-ai-${version}`;
+  return [
+    ...Object.values(primaryOutputAssets(version)),
+    `${prefix}-windows-x86_64-updater.nsis.zip`,
+    `${prefix}-windows-x86_64-updater.nsis.zip.sig`,
+    `${prefix}-macos-aarch64-updater.app.tar.gz`,
+    `${prefix}-macos-aarch64-updater.app.tar.gz.sig`,
+    `${prefix}-linux-x86_64-updater.AppImage.tar.gz`,
+    `${prefix}-linux-x86_64-updater.AppImage.tar.gz.sig`,
+  ];
 }
 
 function releaseVersion(tag) {
@@ -34,9 +47,11 @@ function urlsFromRelease(release, version) {
     assets.set(asset.name, asset.browser_download_url);
   }
   const urls = { release_url: release.html_url };
-  for (const [field, name] of Object.entries(requiredAssets(version))) {
+  for (const name of requiredAssets(version)) {
+    if (!assets.has(name)) throw new Error(`GitHub Release is missing attachment: ${name}`);
+  }
+  for (const [field, name] of Object.entries(primaryOutputAssets(version))) {
     const url = assets.get(name);
-    if (!url) throw new Error(`GitHub Release is missing attachment: ${name}`);
     urls[field] = url;
   }
   return urls;
@@ -51,7 +66,7 @@ function retryDelay(attempt) {
 }
 
 function isRetryableStatus(status) {
-  return status === 408 || status === 429 || status >= 500;
+  return status === 404 || status === 408 || status === 429 || status >= 500;
 }
 
 async function getRelease({ repository, tag, token, fetchImpl, timeoutMs = 10_000, maxAttempts = 3, sleepImpl = delay }) {
@@ -73,7 +88,11 @@ async function getRelease({ repository, tag, token, fetchImpl, timeoutMs = 10_00
         headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}` },
         signal: controller.signal,
       });
-      if (response.ok) return response.json();
+      if (response.ok) {
+        const release = await response.json();
+        urlsFromRelease(release, releaseVersion(tag));
+        return release;
+      }
       lastError = new Error(`GitHub Release API returned HTTP ${response.status}`);
       retryable = isRetryableStatus(response.status);
     } catch (error) {
@@ -119,7 +138,7 @@ async function expectFailure(action, expectedText) {
 }
 
 function releaseFixture(version, omit = '') {
-  const assets = Object.values(requiredAssets(version))
+  const assets = requiredAssets(version)
     .filter((name) => name !== omit)
     .map((name) => ({ name, browser_download_url: `https://downloads.example.test/${name}` }));
   return { html_url: `https://github.com/Mars-hub404/apaas-builder-ai/releases/tag/v${version}`, assets };
@@ -187,6 +206,45 @@ async function selfTest() {
     const output = await readFile(outputPath, 'utf8');
     if (Object.keys(urls).length !== 7 || output.trim().split('\n').length !== 7 || attempts !== 3) {
       throw new Error('Expected all seven Release URL outputs after bounded API retries');
+    }
+
+    let jsonAttempts = 0;
+    await reportRelease({
+      repository: 'Mars-hub404/apaas-builder-ai', tag: `v${version}`, token: 'test-token', outputPath, summaryPath,
+      fetchImpl: async () => {
+        jsonAttempts += 1;
+        if (jsonAttempts === 1) return { ok: true, status: 200, json: async () => { throw new Error('injected JSON parse failure'); } };
+        return { ok: true, status: 200, json: async () => releaseFixture(version) };
+      },
+      sleepImpl: async () => {},
+    });
+    if (jsonAttempts !== 2) throw new Error('JSON parse failures must retry within the bounded Release API loop');
+
+    let notFoundAttempts = 0;
+    await reportRelease({
+      repository: 'Mars-hub404/apaas-builder-ai', tag: `v${version}`, token: 'test-token', outputPath, summaryPath,
+      fetchImpl: async () => {
+        notFoundAttempts += 1;
+        if (notFoundAttempts === 1) return { ok: false, status: 404, json: async () => ({ message: 'not ready' }) };
+        return { ok: true, status: 200, json: async () => releaseFixture(version) };
+      },
+      sleepImpl: async () => {},
+    });
+    if (notFoundAttempts !== 2) throw new Error('Release API 404 responses must retry within the bounded loop');
+
+    let incompleteAttempts = 0;
+    const missingLinuxSignature = `dolphin-ai-${version}-linux-x86_64-updater.AppImage.tar.gz.sig`;
+    await reportRelease({
+      repository: 'Mars-hub404/apaas-builder-ai', tag: `v${version}`, token: 'test-token', outputPath, summaryPath,
+      fetchImpl: async () => {
+        incompleteAttempts += 1;
+        const release = incompleteAttempts === 1 ? releaseFixture(version, missingLinuxSignature) : releaseFixture(version);
+        return { ok: true, status: 200, json: async () => release };
+      },
+      sleepImpl: async () => {},
+    });
+    if (incompleteAttempts !== 2) {
+      throw new Error('HTTP 200 responses with incomplete Release attachments must retry within the bounded loop');
     }
 
     const timeoutOutput = path.join(root, 'timeout-output');

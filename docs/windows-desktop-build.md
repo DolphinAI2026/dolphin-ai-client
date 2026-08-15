@@ -28,6 +28,9 @@ artifact，并在输出中标记该降级；标签构建（`DOLPHIN_RELEASE_BUIL
 校验 updater 签名私钥，并在 Windows x64、macOS arm64、Linux x64 上分别从固定 revision 准备
 `agent-runtime`、`agentic-coding`、Superpowers、Builder 前端、Python 环境和固定版本 Codex，并在构建前
 物化本地 Runtime appliance。手动发布会先创建或验证 `vX.Y.Z` 标签精确指向当前构建提交，再以该提交构建三端包。
+标签创建完成后任一构建失败时，该标签会保留，便于修复后从同一版本标签重新触发或明确处置；它不会被工作流自动删除。
+macOS 和 Linux appliance 使用已校验 SHA-256 的 `python-build-standalone` 解释器根目录，并在迁移 appliance
+目录后运行包内 Python 与 `agentic-pack-reconcile`，不复制构建 runner 的 `.venv`。
 三端只上传正式主包及
 Tauri updater 有效载荷；Release job 汇总为 `dist-desktop/publish/`，生成 `latest.json` 和
 `SHA256SUMS.txt` 后发布。

@@ -11,7 +11,7 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   AGENT_RUNTIME_REPO_URL: https://git.dfy.definesys.cn/orcamatrix/agent-runtime.git
@@ -25,6 +25,9 @@ env:
 jobs:
   release-metadata:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
     outputs:
       version: ${{ steps.release.outputs.version }}
       tag: ${{ steps.release.outputs.tag }}
@@ -89,10 +92,12 @@ jobs:
   build-windows:
     needs: release-metadata
     runs-on: windows-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.release-metadata.outputs.build_sha }}
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -123,8 +128,8 @@ jobs:
             git clone $env:AGENTIC_CODING_REPO_URL "$env:GITHUB_WORKSPACE\..\agentic-coding"
             git -C "$env:GITHUB_WORKSPACE\..\agentic-coding" checkout --detach $env:AGENTIC_CODING_REVISION
           } finally {
-            if ($previousGitConfig) { $env:GIT_CONFIG_GLOBAL = $previousGitConfig } else { Remove-Item Env:GIT_CONFIG_GLOBAL -ErrorAction SilentlyContinue }
-            Remove-Item -LiteralPath $temporaryConfig -Force -ErrorAction SilentlyContinue
+            if ($previousGitConfig) { $env:GIT_CONFIG_GLOBAL = $previousGitConfig } else { Remove-Item Env:GIT_CONFIG_GLOBAL -ErrorAction Stop }
+            Remove-Item -LiteralPath $temporaryConfig -Force -ErrorAction Stop
           }
           git clone $env:SUPERPOWERS_REPO_URL "$env:GITHUB_WORKSPACE\..\superpowers"
           git -C "$env:GITHUB_WORKSPACE\..\superpowers" checkout --detach $env:SUPERPOWERS_REVISION
@@ -188,10 +193,12 @@ jobs:
   build-macos:
     needs: release-metadata
     runs-on: macos-14
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.release-metadata.outputs.build_sha }}
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -237,7 +244,7 @@ jobs:
           npm ci
           npm run build
 
-      - name: Create agentic-coding Python environment
+      - name: Create agentic-coding build Python environment
         shell: bash
         run: |
           set -euo pipefail
@@ -245,6 +252,26 @@ jobs:
           python3 -m venv .venv
           .venv/bin/python -m pip install --upgrade pip
           .venv/bin/python -m pip install -r requirements.txt
+
+      - name: Download fixed macOS portable Python runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/cpython-3.11.16-macos-arm64.tar.gz"
+          destination="${GITHUB_WORKSPACE}/.portable-python"
+          curl --fail --location --retry 3 --output "${archive}" \
+            'https://github.com/astral-sh/python-build-standalone/releases/download/20260814/cpython-3.11.16%2B20260814-aarch64-apple-darwin-install_only.tar.gz'
+          printf '%s  %s\n' 'fcba9f3f676c83e07225e38116649f0c6eb94cb4fcc166632cf92769462b6e39' "${archive}" | shasum -a 256 --check --status
+          mkdir -p "${destination}"
+          tar -xzf "${archive}" -C "${destination}"
+          portable_python="$(find "${destination}" -path '*/python/bin/python3' -print)"
+          [ "$(printf '%s\n' "${portable_python}" | sed '/^$/d' | wc -l | tr -d ' ')" = 1 ] || {
+            echo '::error::Fixed macOS portable Python archive must contain exactly one python/bin/python3.'
+            exit 1
+          }
+          portable_root="$(cd "$(dirname "${portable_python}")/.." && pwd)"
+          "${portable_root}/bin/python3" -c 'import sys; assert sys.prefix == sys.base_prefix'
+          printf 'PORTABLE_PYTHON_ROOT=%s\n' "${portable_root}" >> "${GITHUB_ENV}"
 
       - name: Install fixed Codex native package
         shell: bash
@@ -262,6 +289,7 @@ jobs:
           AGENT_RUNTIME_REPO="${GITHUB_WORKSPACE}/../agent-runtime" \
           AGENTIC_CODING_ROOT="${GITHUB_WORKSPACE}/../agentic-coding" \
           AGENTIC_SUPERPOWERS_SOURCE="${GITHUB_WORKSPACE}/../superpowers" \
+          PORTABLE_PYTHON_ROOT="${PORTABLE_PYTHON_ROOT}" \
           CODEX_NATIVE_ROOT="${CODEX_NATIVE_ROOT}" \
             bash scripts/prepare-local-runtime-appliance-macos.sh
 
@@ -292,10 +320,12 @@ jobs:
   build-linux:
     needs: release-metadata
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.release-metadata.outputs.build_sha }}
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -348,7 +378,7 @@ jobs:
           npm ci
           npm run build
 
-      - name: Create agentic-coding Python environment
+      - name: Create agentic-coding build Python environment
         shell: bash
         run: |
           set -euo pipefail
@@ -356,6 +386,26 @@ jobs:
           python3 -m venv .venv
           .venv/bin/python -m pip install --upgrade pip
           .venv/bin/python -m pip install -r requirements.txt
+
+      - name: Download fixed Linux portable Python runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/cpython-3.11.16-linux-x86_64.tar.gz"
+          destination="${GITHUB_WORKSPACE}/.portable-python"
+          curl --fail --location --retry 3 --output "${archive}" \
+            'https://github.com/astral-sh/python-build-standalone/releases/download/20260814/cpython-3.11.16%2B20260814-x86_64-unknown-linux-gnu-install_only.tar.gz'
+          printf '%s  %s\n' '33994fad90145ba559ebbe8a18d69fa7e56653502f7ba14ba07199b52cde3775' "${archive}" | sha256sum --check --status
+          mkdir -p "${destination}"
+          tar -xzf "${archive}" -C "${destination}"
+          portable_python="$(find "${destination}" -path '*/python/bin/python3' -print)"
+          [ "$(printf '%s\n' "${portable_python}" | sed '/^$/d' | wc -l | tr -d ' ')" = 1 ] || {
+            echo '::error::Fixed Linux portable Python archive must contain exactly one python/bin/python3.'
+            exit 1
+          }
+          portable_root="$(cd "$(dirname "${portable_python}")/.." && pwd)"
+          "${portable_root}/bin/python3" -c 'import sys; assert sys.prefix == sys.base_prefix'
+          printf 'PORTABLE_PYTHON_ROOT=%s\n' "${portable_root}" >> "${GITHUB_ENV}"
 
       - name: Install fixed Codex native package
         shell: bash
@@ -373,6 +423,7 @@ jobs:
           AGENT_RUNTIME_REPO="${GITHUB_WORKSPACE}/../agent-runtime" \
           AGENTIC_CODING_ROOT="${GITHUB_WORKSPACE}/../agentic-coding" \
           AGENTIC_SUPERPOWERS_SOURCE="${GITHUB_WORKSPACE}/../superpowers" \
+          PORTABLE_PYTHON_ROOT="${PORTABLE_PYTHON_ROOT}" \
           CODEX_NATIVE_ROOT="${CODEX_NATIVE_ROOT}" \
             bash scripts/prepare-local-runtime-appliance-linux.sh
 
@@ -404,6 +455,9 @@ jobs:
   release:
     needs: [release-metadata, build-windows, build-macos, build-linux]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
     outputs:
       release_url: ${{ steps.report.outputs.release_url }}
       windows_setup_url: ${{ steps.report.outputs.windows_setup_url }}
@@ -416,6 +470,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.release-metadata.outputs.build_sha }}
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:

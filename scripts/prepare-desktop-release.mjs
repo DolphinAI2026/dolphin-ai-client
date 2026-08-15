@@ -80,30 +80,43 @@ function releaseUrl(repository, tag, asset) {
   return `https://github.com/${repository}/releases/download/${tag}/${encodeURIComponent(asset)}`;
 }
 
-async function publishStagedOutput(staging, output) {
+async function publishStagedOutput(staging, output, operations = {}) {
+  const renameImpl = operations.rename ?? rename;
+  const rmImpl = operations.rm ?? rm;
+  const warn = operations.warn ?? ((message) => console.warn(message));
   const parent = path.dirname(output);
   const backup = await mkdtemp(path.join(parent, `.${path.basename(output)}.backup-`));
-  await rm(backup, { recursive: true, force: true });
+  await rmImpl(backup, { recursive: true, force: true });
   let movedExistingOutput = false;
   let published = false;
   try {
     try {
-      await rename(output, backup);
+      await renameImpl(output, backup);
       movedExistingOutput = true;
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
     }
-    await rename(staging, output);
+    await renameImpl(staging, output);
     published = true;
-    if (movedExistingOutput) await rm(backup, { recursive: true, force: true });
+    if (movedExistingOutput) {
+      try {
+        await rmImpl(backup, { recursive: true, force: true });
+      } catch (error) {
+        warn(`Desktop Release published at ${output}; backup cleanup failed and was retained at ${backup}: ${error.message}`);
+      }
+    }
   } catch (error) {
     if (!published && movedExistingOutput) {
-      await rename(backup, output).catch(() => {});
+      try {
+        await renameImpl(backup, output);
+      } catch (rollbackError) {
+        throw new Error(`${error.message}; rollback failed; backup retained at ${backup}: ${rollbackError.message}`);
+      }
     }
     throw error;
   } finally {
-    if (!published) await rm(staging, { recursive: true, force: true });
-    if (!movedExistingOutput) await rm(backup, { recursive: true, force: true });
+    if (!published) await rmImpl(staging, { recursive: true, force: true });
+    if (!movedExistingOutput) await rmImpl(backup, { recursive: true, force: true });
   }
 }
 
@@ -250,6 +263,69 @@ async function selfTest() {
       () => prepareRelease({ version, repository: 'Mars-hub404/apaas-builder-ai', tag: 'v0.2.70', input, output }),
       names.macosDmg,
     );
+
+    const transactionRoot = path.join(root, 'transaction-tests');
+    await mkdir(transactionRoot);
+    const failedOutput = path.join(transactionRoot, 'failed-output');
+    const failedStaging = path.join(transactionRoot, 'failed-staging');
+    await mkdir(failedOutput);
+    await mkdir(failedStaging);
+    await writeFile(path.join(failedOutput, 'release.txt'), 'previous release');
+    await writeFile(path.join(failedStaging, 'release.txt'), 'next release');
+    await expectFailure(
+      () => publishStagedOutput(failedStaging, failedOutput, {
+        rename: async (from, to) => {
+          if (from === failedStaging && to === failedOutput) throw new Error('injected publication rename failure');
+          return rename(from, to);
+        },
+      }),
+      'injected publication rename failure',
+    );
+    if (await readFile(path.join(failedOutput, 'release.txt'), 'utf8') !== 'previous release') {
+      throw new Error('A failed publication rename must restore the previous release boundary');
+    }
+
+    const rollbackOutput = path.join(transactionRoot, 'rollback-output');
+    const rollbackStaging = path.join(transactionRoot, 'rollback-staging');
+    await mkdir(rollbackOutput);
+    await mkdir(rollbackStaging);
+    await writeFile(path.join(rollbackOutput, 'release.txt'), 'previous release');
+    await writeFile(path.join(rollbackStaging, 'release.txt'), 'next release');
+    await expectFailure(
+      () => publishStagedOutput(rollbackStaging, rollbackOutput, {
+        rename: async (from, to) => {
+          if (from === rollbackStaging && to === rollbackOutput) throw new Error('injected publication rename failure');
+          if (to === rollbackOutput) throw new Error('injected rollback rename failure');
+          return rename(from, to);
+        },
+      }),
+      'backup retained at',
+    );
+    if (await readFile(path.join(rollbackStaging, 'release.txt'), 'utf8').catch(() => null) !== null) {
+      throw new Error('A failed publication must remove the abandoned staging directory');
+    }
+
+    const cleanupOutput = path.join(transactionRoot, 'cleanup-output');
+    const cleanupStaging = path.join(transactionRoot, 'cleanup-staging');
+    await mkdir(cleanupOutput);
+    await mkdir(cleanupStaging);
+    await writeFile(path.join(cleanupOutput, 'release.txt'), 'previous release');
+    await writeFile(path.join(cleanupStaging, 'release.txt'), 'next release');
+    const warnings = [];
+    let backupCleanupAttempts = 0;
+    await publishStagedOutput(cleanupStaging, cleanupOutput, {
+      rm: async (target, options) => {
+        if (path.basename(target).startsWith('.cleanup-output.backup-')) {
+          backupCleanupAttempts += 1;
+          if (backupCleanupAttempts === 2) throw new Error('injected backup cleanup failure');
+        }
+        return rm(target, options);
+      },
+      warn: (message) => warnings.push(message),
+    });
+    if (await readFile(path.join(cleanupOutput, 'release.txt'), 'utf8') !== 'next release' || warnings.length !== 1) {
+      throw new Error('Backup cleanup failures must warn without undoing a published release');
+    }
     console.log('prepare-desktop-release self-test passed');
   } finally {
     await rm(root, { recursive: true, force: true });

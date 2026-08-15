@@ -482,3 +482,5 @@ manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="ut
   [Environment]::SetEnvironmentVariable("PYTHONDONTWRITEBYTECODE", $OriginalDontWriteBytecode, "Process")
   Remove-Item -LiteralPath $TemporaryRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
+
+exit 0

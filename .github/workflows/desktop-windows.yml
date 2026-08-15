@@ -9,6 +9,9 @@ on:
         default: ''
         type: string
 
+permissions:
+  contents: read
+
 env:
   AGENT_RUNTIME_REPO_URL: https://git.dfy.definesys.cn/orcamatrix/agent-runtime.git
   AGENT_RUNTIME_REVISION: c98437dbde5c803670a8694c7558870a05eb4c6e
@@ -21,8 +24,11 @@ env:
 jobs:
   portable-debug:
     runs-on: windows-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -65,8 +71,8 @@ jobs:
             git clone $env:AGENTIC_CODING_REPO_URL "$env:GITHUB_WORKSPACE\..\agentic-coding"
             git -C "$env:GITHUB_WORKSPACE\..\agentic-coding" checkout --detach $env:AGENTIC_CODING_REVISION
           } finally {
-            if ($previousGitConfig) { $env:GIT_CONFIG_GLOBAL = $previousGitConfig } else { Remove-Item Env:GIT_CONFIG_GLOBAL -ErrorAction SilentlyContinue }
-            Remove-Item -LiteralPath $temporaryConfig -Force -ErrorAction SilentlyContinue
+            if ($previousGitConfig) { $env:GIT_CONFIG_GLOBAL = $previousGitConfig } else { Remove-Item Env:GIT_CONFIG_GLOBAL -ErrorAction Stop }
+            Remove-Item -LiteralPath $temporaryConfig -Force -ErrorAction Stop
           }
           git clone $env:SUPERPOWERS_REPO_URL "$env:GITHUB_WORKSPACE\..\superpowers"
           git -C "$env:GITHUB_WORKSPACE\..\superpowers" checkout --detach $env:SUPERPOWERS_REVISION
