@@ -7,7 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.apaas_session import call_apaas_with_relogin
 from app.database import get_db
-from app.deps import AuthContext, get_auth_context, resolve_effective_tenant_id
+from app.deps import (
+    AuthContext,
+    get_auth_context,
+    is_control_plane_context,
+    resolve_effective_tenant_id,
+)
 from app.routes.applications._helpers import _resolve_platform_env_for_tenant
 from app.services.lowcode_logs import (
     build_lowcode_log_analysis,
@@ -30,6 +35,14 @@ async def get_tenant_lowcode_logs(
     function_menu: str | None = Query(None),
     keyword: str | None = Query(None),
 ) -> dict:
+    if is_control_plane_context(ctx):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "CONTROL_PLANE_REMOTE_MANAGEMENT_REQUIRED",
+                "message": "aPaaS 租户日志由 Control Plane 远程管理，本地 Builder 不读取 PlatformEnv",
+            },
+        )
     tenant_id = await resolve_effective_tenant_id(db, ctx)
     env = await _resolve_platform_env_for_tenant(db, tenant_id)
     if not env:

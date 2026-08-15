@@ -167,6 +167,38 @@ async def test_list_applications_uses_effective_tenant_for_unscoped_platform_adm
 
 
 @pytest.mark.asyncio
+async def test_control_plane_application_list_does_not_require_local_tenant(db_session):
+    """Control Plane desktop scope is valid without a local SQLite tenant projection."""
+    user = User(
+        username="cp_apps_owner",
+        hashed_password="x",
+        account_source="control_plane",
+        coding_tenant_id="cp-tenant-1",
+    )
+    db_session.add(user)
+    await db_session.commit()
+
+    result = await list_applications(
+        AuthContext(
+            user=user,
+            tenant_id=0,
+            tenant_role="tenant_admin",
+            org_permissions={},
+            tenant_access_scope="control_plane_code",
+            control_plane_tenant_id="cp-tenant-1",
+        ),
+        db_session,
+        team_scope=None,
+        include_remote=False,
+        source_filter=None,
+        include_config=False,
+        app_type="low-code",
+    )
+
+    assert result == []
+
+
+@pytest.mark.asyncio
 async def test_list_applications_uses_current_tenant_platform_env_for_remote_apps(db_session, monkeypatch):
     from app.routes.applications import crud
 

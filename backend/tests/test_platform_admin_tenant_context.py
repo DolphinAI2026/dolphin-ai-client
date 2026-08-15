@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.auth import create_access_token, decode_token, get_password_hash
@@ -118,6 +119,7 @@ async def test_platform_admin_routes_fall_back_to_active_tenant_without_membersh
     user = User(
         username="admin-no-membership",
         hashed_password=get_password_hash("secret"),
+        account_source="desktop",
         is_platform_admin=True,
         is_active=True,
     )
@@ -154,6 +156,7 @@ async def test_platform_admin_routes_fall_back_to_active_tenant_without_membersh
         tenant_id=0,
         tenant_role="platform_admin",
         org_permissions={"*": True},
+        tenant_access_scope="unscoped",
     )
 
     assert await resolve_effective_tenant_id(db_session, ctx) == tenant.id
@@ -166,6 +169,35 @@ async def test_platform_admin_routes_fall_back_to_active_tenant_without_membersh
 
     env_rows = await list_envs(ctx, db_session)
     assert [row["env_name"] for row in env_rows] == ["测试环境"]
+
+
+@pytest.mark.asyncio
+async def test_control_plane_context_never_uses_legacy_local_tenant_projection(db_session):
+    tenant = Tenant(tenant_name="Legacy Projection", tenant_code="legacy-cp")
+    user = User(
+        username="cp-with-legacy-projection",
+        hashed_password="x",
+        account_source="control_plane",
+        is_platform_admin=True,
+        is_active=True,
+    )
+    db_session.add_all([tenant, user])
+    await db_session.commit()
+
+    ctx = AuthContext(
+        user=user,
+        tenant_id=tenant.id,
+        tenant_role="platform_admin",
+        org_permissions={"*": True},
+        tenant_access_scope="control_plane_code",
+        control_plane_tenant_id="cp-tenant-1",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await resolve_effective_tenant_id(db_session, ctx)
+
+    detail = exc_info.value.detail
+    assert detail["code"] == "CONTROL_PLANE_REMOTE_SCOPE_REQUIRED"
 
 
 @pytest.mark.asyncio

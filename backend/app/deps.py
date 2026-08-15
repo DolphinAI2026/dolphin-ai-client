@@ -35,6 +35,22 @@ class AuthContext:
     control_plane_tenant_name: Optional[str] = None
 
 
+def is_control_plane_context(ctx: AuthContext) -> bool:
+    """Return whether the remote Control Plane owns this request's scope.
+
+    A Control Plane ticket deliberately has no local Builder tenant.  Keep
+    this check centralized so tenant-scoped Builder routes do not accidentally
+    reintroduce a local SQLite tenant requirement.  Standalone aPaaS sessions
+    remain local-projection backed and therefore return ``False``.
+    """
+    return (
+        str(getattr(getattr(ctx, "user", None), "account_source", "") or "")
+        .strip()
+        .lower()
+        == "control_plane"
+    )
+
+
 async def resolve_default_tenant_id_for_user(db: AsyncSession, user_id: int) -> int | None:
     """Return the user's default active tenant id, falling back to the first active membership."""
     result = await db.execute(
@@ -69,6 +85,14 @@ async def resolve_effective_tenant_id(db: AsyncSession, ctx: AuthContext) -> int
     scoped, so platform admins fall back to their default membership, then the
     first active tenant in the system.
     """
+    if is_control_plane_context(ctx):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "CONTROL_PLANE_REMOTE_SCOPE_REQUIRED",
+                "message": "当前请求由 Control Plane 组织负责，不能使用本地 Builder 租户配置",
+            },
+        )
     if ctx.tenant_id and ctx.tenant_id > 0:
         return ctx.tenant_id
     if ctx.tenant_access_scope == "platform_only":
@@ -174,87 +198,16 @@ async def _resolve_control_plane_code_context(
     user: User,
     payload: dict,
 ) -> AuthContext | None:
-    """Resolve the CP authority to its local Builder projection.
+    """Keep Control Plane organization authority independent of local tenants.
 
-    ``control_plane_tenant_id_str`` is the durable mapping.  The old
-    name-based match is retained only as a one-time, unambiguous backfill for
-    installations created before the mapping column existed; it is never used
-    as the long-term lookup key and never falls back to a default local tenant.
+    Older builds projected a Control Plane organization into ``Tenant`` and
+    even wrote mapping fields during authentication.  That made unrelated
+    Builder routes silently depend on desktop SQLite.  The remote organization
+    id is now the only tenant authority for this context; standalone/aPaaS
+    sessions continue to use their own local projection path.
     """
-    context = _control_plane_code_context(user, payload)
-    if not context:
-        return context
-
-    result = await db.execute(
-        select(Tenant).where(
-            Tenant.status == 1,
-            Tenant.control_plane_tenant_id_str == context.control_plane_tenant_id,
-        )
-    )
-    matches = result.scalars().all()
-    if not matches and context.control_plane_tenant_name:
-        # Compatibility migration for legacy rows. Require an aPaaS binding so
-        # an unrelated local tenant with the same display name is not selected.
-        legacy_result = await db.execute(
-            select(Tenant).where(
-                Tenant.status == 1,
-                Tenant.control_plane_tenant_id_str.is_(None),
-                Tenant.tenant_name == context.control_plane_tenant_name,
-                Tenant.apaas_tenant_id_str.is_not(None),
-                Tenant.apaas_tenant_id_str != "",
-            )
-        )
-        matches = legacy_result.scalars().all()
-        if len(matches) == 1:
-            matches[0].control_plane_tenant_id_str = context.control_plane_tenant_id
-            await db.commit()
-
-    if not matches:
-        # Control Plane users can already carry an explicit aPaaS account
-        # binding while the local projection predates the CP mapping column.
-        # Recover that projection only when the aPaaS tenant maps to exactly
-        # one active local tenant; never fall back to a user's arbitrary
-        # default tenant when the binding is missing or ambiguous.
-        bound_apaas_tid = str(user.apaas_tenant_id or "").strip()
-        if bound_apaas_tid:
-            bound_result = await db.execute(
-                select(Tenant).where(
-                    Tenant.status == 1,
-                    Tenant.apaas_tenant_id_str == bound_apaas_tid,
-                )
-            )
-            bound_matches = bound_result.scalars().all()
-            if len(bound_matches) == 1:
-                matches = bound_matches
-                matches[0].control_plane_tenant_id_str = context.control_plane_tenant_id
-                await db.commit()
-            elif len(bound_matches) > 1:
-                logger.warning(
-                    "control_plane aPaaS binding is ambiguous user_id=%s cp_tid=%s apaas_tid=%s matches=%s",
-                    user.id,
-                    context.control_plane_tenant_id,
-                    bound_apaas_tid,
-                    [tenant.id for tenant in bound_matches],
-                )
-
-    if len(matches) != 1:
-        if matches:
-            logger.warning(
-                "control_plane tenant mapping is ambiguous user_id=%s cp_tid=%s name=%s matches=%s",
-                user.id,
-                context.control_plane_tenant_id,
-                context.control_plane_tenant_name,
-                [tenant.id for tenant in matches],
-            )
-        return context
-
-    tenant = matches[0]
-    context.tenant_id = tenant.id
-    context.apaas_tenant_id = str(tenant.apaas_tenant_id_str).strip() or None
-    # Keep the CP authority visible even when a local projection is present.
-    # Builder resources use tenant_id; Code resources use control_plane_tenant_id.
-    context.tenant_access_scope = "control_plane_code"
-    return context
+    del db
+    return _control_plane_code_context(user, payload)
 
 
 def platform_admin_has_unscoped_tenant_access(user: User) -> bool:

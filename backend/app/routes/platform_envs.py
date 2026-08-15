@@ -14,11 +14,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import Application, PlatformEnv
-from app.deps import AuthContext, require_tenant_admin, resolve_effective_tenant_id
+from app.deps import (
+    AuthContext,
+    is_control_plane_context,
+    require_tenant_admin,
+    resolve_effective_tenant_id,
+)
 from app.apaas_client import APaaSClient
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/platform-envs", tags=["platform-envs"])
+
+
+def _reject_control_plane_local_env(ctx: AuthContext) -> None:
+    if is_control_plane_context(ctx):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "CONTROL_PLANE_REMOTE_MANAGEMENT_REQUIRED",
+                "message": "aPaaS 接入由 Control Plane 远程管理，本地 Builder 不读取 PlatformEnv",
+            },
+        )
+
+
+async def _local_env_tenant_id(db: AsyncSession, ctx: AuthContext) -> int:
+    _reject_control_plane_local_env(ctx)
+    return await resolve_effective_tenant_id(db, ctx)
 
 
 # ============================================================
@@ -66,7 +87,7 @@ async def list_envs(
     Defaults are returned when the underlying source isn't yet wired —
     the shape matches `frontend/src/api/runtimeEnv.ts`.
     """
-    tenant_id = await resolve_effective_tenant_id(db, ctx)
+    tenant_id = await _local_env_tenant_id(db, ctx)
     result = await db.execute(
         select(PlatformEnv)
         .where(PlatformEnv.tenant_id == tenant_id)
@@ -128,7 +149,7 @@ async def create_env(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """创建平台环境"""
-    tenant_id = await resolve_effective_tenant_id(db, ctx)
+    tenant_id = await _local_env_tenant_id(db, ctx)
     env = PlatformEnv(
         tenant_id=tenant_id,
         env_name=data.env_name,
@@ -153,7 +174,7 @@ async def update_env(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """更新平台环境"""
-    tenant_id = await resolve_effective_tenant_id(db, ctx)
+    tenant_id = await _local_env_tenant_id(db, ctx)
     result = await db.execute(
         select(PlatformEnv).where(
             PlatformEnv.id == env_id,
@@ -217,7 +238,7 @@ async def delete_env(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """删除平台环境"""
-    tenant_id = await resolve_effective_tenant_id(db, ctx)
+    tenant_id = await _local_env_tenant_id(db, ctx)
     result = await db.execute(
         select(PlatformEnv).where(
             PlatformEnv.id == env_id,
@@ -261,7 +282,7 @@ async def test_env(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """测试平台环境连接"""
-    tenant_id = await resolve_effective_tenant_id(db, ctx)
+    tenant_id = await _local_env_tenant_id(db, ctx)
     result = await db.execute(
         select(PlatformEnv).where(
             PlatformEnv.id == env_id,
@@ -309,7 +330,7 @@ async def login_env(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """用账号密码登录获取 token"""
-    tenant_id = await resolve_effective_tenant_id(db, ctx)
+    tenant_id = await _local_env_tenant_id(db, ctx)
     result = await db.execute(
         select(PlatformEnv).where(
             PlatformEnv.id == env_id,
@@ -352,7 +373,7 @@ async def set_default(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """设为默认环境"""
-    tenant_id = await resolve_effective_tenant_id(db, ctx)
+    tenant_id = await _local_env_tenant_id(db, ctx)
     # 先取消所有默认
     all_envs_result = await db.execute(
         select(PlatformEnv).where(PlatformEnv.tenant_id == tenant_id)
@@ -376,7 +397,7 @@ async def list_remote_apps(
     """列出平台上可导入的应用列表（排除已导入的）"""
     from app.models import Application
 
-    tenant_id = await resolve_effective_tenant_id(db, ctx)
+    tenant_id = await _local_env_tenant_id(db, ctx)
     result = await db.execute(
         select(PlatformEnv).where(
             PlatformEnv.id == env_id,
@@ -468,7 +489,7 @@ async def get_embed_url(
     """获取嵌入低代码平台的 iframe URL（含 token）"""
     from app.models import Application
 
-    tenant_id = await resolve_effective_tenant_id(db, ctx)
+    tenant_id = await _local_env_tenant_id(db, ctx)
     # 查应用
     result = await db.execute(
         select(Application).where(Application.id == app_id, Application.tenant_id == tenant_id)

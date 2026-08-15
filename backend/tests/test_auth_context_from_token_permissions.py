@@ -126,8 +126,8 @@ async def test_control_plane_tenant_claim_is_preserved_for_header_and_query_cont
 
 
 @pytest.mark.asyncio
-async def test_control_plane_code_resolves_bound_local_tenant(shared_db):
-    """Code org tickets must use the matching bound Builder tenant for env APIs."""
+async def test_control_plane_code_ignores_bound_local_tenant(shared_db):
+    """Control Plane tickets must not adopt or mutate a local Builder tenant."""
     from app.deps import get_auth_context, get_auth_context_from_token
 
     async with shared_db() as db:
@@ -163,20 +163,19 @@ async def test_control_plane_code_resolves_bound_local_tenant(shared_db):
         )
     query_ctx = await get_auth_context_from_token(token)
 
-    assert header_ctx.tenant_id == tenant.id
-    assert header_ctx.apaas_tenant_id == "850079360340721665"
-    assert query_ctx.tenant_id == tenant.id
-    assert query_ctx.apaas_tenant_id == "850079360340721665"
+    assert header_ctx.tenant_id == 0
+    assert header_ctx.apaas_tenant_id is None
+    assert query_ctx.tenant_id == 0
+    assert query_ctx.apaas_tenant_id is None
 
     async with shared_db() as db:
         persisted = await db.get(Tenant, tenant.id)
-        assert persisted.control_plane_tenant_id_str == "0"
+        assert persisted.control_plane_tenant_id_str is None
         assert header_ctx.tenant_access_scope == "control_plane_code"
 
 
 @pytest.mark.asyncio
-async def test_control_plane_code_backfills_unique_apaas_bound_projection(shared_db):
-    """A legacy local tenant can be recovered from the user's explicit aPaaS binding."""
+async def test_control_plane_code_does_not_backfill_apaas_projection(shared_db):
     from app.deps import get_auth_context_from_token
 
     async with shared_db() as db:
@@ -204,16 +203,16 @@ async def test_control_plane_code_backfills_unique_apaas_bound_projection(shared
     )
     ctx = await get_auth_context_from_token(token)
 
-    assert ctx.tenant_id == tenant.id
-    assert ctx.apaas_tenant_id == "apaas-xdg-tenant"
+    assert ctx.tenant_id == 0
+    assert ctx.apaas_tenant_id is None
 
     async with shared_db() as db:
         persisted = await db.get(Tenant, tenant.id)
-        assert persisted.control_plane_tenant_id_str == "cp-xdg-tenant"
+        assert persisted.control_plane_tenant_id_str is None
 
 
 @pytest.mark.asyncio
-async def test_control_plane_code_prefers_stable_id_over_duplicate_name(shared_db):
+async def test_control_plane_code_ignores_existing_local_mapping(shared_db):
     from app.deps import get_auth_context_from_token
 
     async with shared_db() as db:
@@ -244,8 +243,8 @@ async def test_control_plane_code_prefers_stable_id_over_duplicate_name(shared_d
         control_plane_tenant_name="同名组织",
     )
     ctx = await get_auth_context_from_token(token)
-    assert ctx.tenant_id == mapped.id
-    assert ctx.apaas_tenant_id == "apaas-1"
+    assert ctx.tenant_id == 0
+    assert ctx.apaas_tenant_id is None
 
 
 @pytest.mark.asyncio

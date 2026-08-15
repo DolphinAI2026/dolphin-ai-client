@@ -14,7 +14,12 @@ from app.database import get_db
 from app.models import User, Application, DocumentVersion, ChangePlan, ApiCallLog, PlatformEnv, Conversation, ConfigSnapshot, Tenant, APaaSUserCredential
 from app.auth import get_current_user
 from app.schemas import ApplicationCreate, ApplicationPageResponse, ApplicationResponse, MergedAppResponse
-from app.deps import get_auth_context, AuthContext, resolve_effective_tenant_id
+from app.deps import (
+    get_auth_context,
+    AuthContext,
+    is_control_plane_context,
+    resolve_effective_tenant_id,
+)
 from app.permissions import check_resource_permission, Action
 from jose import JWTError, jwt
 from app.config import settings, APP_DEPLOY_ABSTRACT
@@ -35,6 +40,24 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 _APPLICATION_TYPES = {"low-code", "ai-code"}
+
+
+def _reject_control_plane_builder_route(ctx: AuthContext, message: str) -> None:
+    """Keep Builder-local application APIs out of Control Plane sessions.
+
+    Control Plane owns the remote Code application catalog.  These routes
+    persist/query the Builder SQLite ``Application`` table (or call aPaaS),
+    so allowing a Control Plane context through would either use tenant ``0``
+    or resurrect the removed local-tenant projection.
+    """
+    if is_control_plane_context(ctx):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "CONTROL_PLANE_REMOTE_MANAGEMENT_REQUIRED",
+                "message": message,
+            },
+        )
 
 
 def _normalize_application_type(value: str | None) -> str | None:
@@ -133,6 +156,10 @@ def _application_stage_clause(stage: str | None):
 
 async def _resolve_current_apaas_tenant_id(db: AsyncSession, ctx: AuthContext) -> str:
     """Return the aPaaS tenant bound to the currently selected AI Builder tenant."""
+    _reject_control_plane_builder_route(
+        ctx,
+        "aPaaS 应用由 Control Plane 远程管理，本地 Builder 不读取租户绑定",
+    )
     tenant_id = await resolve_effective_tenant_id(db, ctx)
     if not tenant_id:
         return ""
@@ -151,6 +178,10 @@ async def _resolve_apaas_call_context(db: AsyncSession, ctx: AuthContext) -> tup
     tenant platform environment token, then the per-local-tenant user
     credential, before falling back to the legacy field.
     """
+    _reject_control_plane_builder_route(
+        ctx,
+        "aPaaS 应用由 Control Plane 远程管理，本地 Builder 不读取租户绑定",
+    )
     effective_tenant_id = await resolve_effective_tenant_id(db, ctx)
     bound_tenant_id = await _resolve_current_apaas_tenant_id(db, ctx)
 
@@ -200,6 +231,11 @@ async def _list_remote_apps_for_current_builder_tenant(
     ctx: AuthContext,
 ) -> tuple[list, str | None, str | None]:
     """List remote low-code apps through the current local tenant binding."""
+    if is_control_plane_context(ctx):
+        # Control Plane is the remote authority.  This helper is specifically
+        # for standalone aPaaS projection lookups and must never manufacture a
+        # local tenant requirement for a Control Plane request.
+        return [], None, None
     effective_tenant_id = await resolve_effective_tenant_id(db, ctx)
     env = await _resolve_platform_env_for_tenant(db, effective_tenant_id)
     if env:
@@ -390,6 +426,10 @@ async def match_applications_by_name(
     - app_name 相似匹配：去掉"应用/系统/平台/设计文档"等通用后缀后，支持双向包含和相似度
     - 不查远程平台（轻量），只返必要字段
     """
+    # Code/Control Plane has its own remote application catalog and must not
+    # fall back to Builder SQLite matching.
+    if is_control_plane_context(ctx):
+        return []
     keyword = (app_name_like or "").strip()
     code_keyword = (app_code_like or "").strip()
     if not keyword and not code_keyword:
@@ -440,39 +480,54 @@ async def list_applications(
     app_type: Optional[str] = Query(None),  # low-code / ai-code / all
 ):
     """获取应用列表（本地 + 得帆云平台合并）"""
-    effective_tenant_id = await resolve_effective_tenant_id(db, ctx)
+    control_plane_scope = is_control_plane_context(ctx)
+    # Control Plane owns the remote organization.  There may be no local
+    # Tenant/UserTenant projection in the desktop SQLite, which is valid.  The
+    # Code application catalog is loaded through its Control Plane route; this
+    # Builder endpoint only contributes local/aPaaS projected applications.
+    effective_tenant_id = None if control_plane_scope else await resolve_effective_tenant_id(db, ctx)
     requested_app_type = _normalize_application_type(app_type)
     # 1. 查本地应用
-    query = select(Application).where(Application.tenant_id == effective_tenant_id)
-    if requested_app_type:
-        query = query.where(Application.app_type == requested_app_type)
-    if team_scope and team_scope.isdigit():
-        query = query.where(Application.team_id == int(team_scope))
-    query = query.order_by(desc(Application.updated_at))
-    result = await db.execute(query)
-    local_apps = result.scalars().all()
+    if control_plane_scope:
+        local_apps = []
+    else:
+        query = select(Application).where(Application.tenant_id == effective_tenant_id)
+        if requested_app_type:
+            query = query.where(Application.app_type == requested_app_type)
+        if team_scope and team_scope.isdigit():
+            query = query.where(Application.team_id == int(team_scope))
+        query = query.order_by(desc(Application.updated_at))
+        result = await db.execute(query)
+        local_apps = result.scalars().all()
 
     # 1.5 获取所有环境信息（用于构建 URL 和显示环境名称）
     env_base_url = None
     env_tenant_id = None
     env_map: dict[int, dict] = {}  # env_id → {env_name, status}
-    try:
-        from app.models import PlatformEnv
-        env_result = await db.execute(
-            select(PlatformEnv).where(PlatformEnv.tenant_id == effective_tenant_id)
-        )
-        all_envs = env_result.scalars().all()
-        for env in all_envs:
-            env_map[env.id] = {"env_name": env.env_name, "status": env.status}
-            if env.is_default:
-                env_base_url = env.base_url
-                env_tenant_id = env.platform_tenant_id
-    except Exception:
-        pass
+    all_envs = []
+    if not control_plane_scope:
+        try:
+            from app.models import PlatformEnv
+            env_result = await db.execute(
+                select(PlatformEnv).where(PlatformEnv.tenant_id == effective_tenant_id)
+            )
+            all_envs = env_result.scalars().all()
+        except Exception:
+            logger.warning("读取本地 PlatformEnv 失败，应用列表继续返回应用数据", exc_info=True)
+    for env in all_envs:
+        env_map[env.id] = {"env_name": env.env_name, "status": env.status}
+        if env.is_default:
+            env_base_url = env.base_url
+            env_tenant_id = env.platform_tenant_id
 
     # 2. 拉取远程应用（降级处理）
     remote_apps: list = []
-    if include_remote and requested_app_type != "ai-code" and source_filter != "local":
+    if (
+        not control_plane_scope
+        and include_remote
+        and requested_app_type != "ai-code"
+        and source_filter != "local"
+    ):
         try:
             remote_apps, remote_base_url, remote_tenant_id = await _list_remote_apps_for_current_builder_tenant(db, ctx)
             env_base_url = remote_base_url or env_base_url
@@ -623,6 +678,16 @@ async def list_applications_page(
     这个端点只分页 Builder 侧已接入/已生成的应用；未绑定的远程平台应用仍走旧列表接口。
     """
 
+    if is_control_plane_context(ctx):
+        return {
+            "items": [],
+            "total": 0,
+            "page": 1,
+            "page_size": page_size,
+            "total_pages": 1,
+            "counts": {"all": 0, "active": 0, "deployed": 0, "draft": 0},
+        }
+
     async def count_stage(stage_value: str | None) -> int:
         stmt = _apply_application_list_filters(
             select(sa_func.count(Application.id)).select_from(Application),
@@ -710,6 +775,10 @@ async def get_application(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)]
 ):
+    _reject_control_plane_builder_route(
+        ctx,
+        "应用详情由 Control Plane 远程管理，本地 Builder 不读取远程组织应用",
+    )
     result = await db.execute(
         select(Application).where(
             Application.id == app_id,
@@ -771,6 +840,10 @@ async def get_application_spec_as_markdown(
     2) 否则用 config_preview 反向渲染（标准 6 章节模板）
     3) 都没有 → 返回空 + 标志说明这是空白草稿
     """
+    _reject_control_plane_builder_route(
+        ctx,
+        "应用文档由 Control Plane 远程管理，本地 Builder 不读取远程组织应用",
+    )
     from sqlalchemy import desc as sa_desc
     from app.models import DocumentVersion
     from ._helpers import _render_doc_content_from_config
@@ -1099,6 +1172,10 @@ async def auto_create_application(
     如果 conversation_id 已有关联应用，返回已有应用（不重复创建）。
     否则创建新的 draft 应用。
     """
+    _reject_control_plane_builder_route(
+        ctx,
+        "应用创建由 Control Plane 远程管理，本地 Builder 不创建组织应用",
+    )
     # 如果有 conversation_id，检查是否已有关联应用
     if data.conversation_id:
         result = await db.execute(
@@ -1529,6 +1606,10 @@ async def import_from_platform(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """从平台导入已有应用：拉取结构 → 生成 config_preview + markdown 需求文档"""
+    _reject_control_plane_builder_route(
+        ctx,
+        "aPaaS 应用导入由 Control Plane 远程管理，本地 Builder 不执行平台导入",
+    )
     from app.platform_sync import sync_from_platform_full
     from app.services.config_to_spec import config_to_markdown
 
@@ -1710,6 +1791,10 @@ async def update_application(
     db: Annotated[AsyncSession, Depends(get_db)]
 ):
     """更新应用配置（继续完善后重新生成前调用）"""
+    _reject_control_plane_builder_route(
+        ctx,
+        "应用编辑由 Control Plane 远程管理，本地 Builder 不修改远程组织应用",
+    )
     result = await db.execute(
         select(Application).where(
             Application.id == app_id,
@@ -1761,6 +1846,10 @@ async def update_app_code(
     db: Annotated[AsyncSession, Depends(get_db)]
 ):
     """更新应用编码（部署失败后修改）"""
+    _reject_control_plane_builder_route(
+        ctx,
+        "应用编码由 Control Plane 远程管理，本地 Builder 不修改远程组织应用",
+    )
     result = await db.execute(
         select(Application).where(Application.id == app_id, Application.tenant_id == ctx.tenant_id)
     )
@@ -1813,6 +1902,10 @@ async def generate_application_icon(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    _reject_control_plane_builder_route(
+        ctx,
+        "应用图标由 Control Plane 远程管理，本地 Builder 不修改远程组织应用",
+    )
     result = await db.execute(
         select(Application).where(
             Application.id == app_id,

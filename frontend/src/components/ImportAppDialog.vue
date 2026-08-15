@@ -114,7 +114,7 @@
           <el-button
             type="primary"
             :loading="importing"
-            :disabled="!selectedEnvId || !selectedAppId"
+            :disabled="!selectedAppId"
             @click="doImport"
           >
             {{ selectedIsImported ? '重新导入' : '导入选中应用' }}
@@ -129,8 +129,10 @@
 import { ref, computed, watch } from 'vue'
 import { Search, Loading } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { platformEnvApi, type PlatformEnv, type RemoteApp } from '@/api/platformEnv'
-import { applicationApi } from '@/api/application'
+import type { RemoteApp } from '@/api/platformEnv'
+import { controlPlaneApaasApi } from '@/api/controlPlaneApaas'
+import { standaloneApaasApi } from '@/api/standaloneApaas'
+import { getDesktopState, isDesktop } from '@/utils/desktop'
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{
@@ -143,17 +145,16 @@ const visible = computed({
   set: (v) => emit('update:modelValue', v),
 })
 
-const envs = ref<PlatformEnv[]>([])
-const selectedEnvId = ref<number | null>(null)
 const remoteApps = ref<RemoteApp[]>([])
 const selectedAppId = ref<string>('')
 const searchText = ref('')
 const loading = ref(false)
 const importing = ref(false)
-
-const connectedEnvs = computed(() =>
-  envs.value
-)
+type ImportSource = 'control-plane' | 'standalone-apaas'
+// Discovery is authoritative. Account/tenant profile fields cannot tell which
+// backend owns the current deployment and previously routed standalone imports
+// to the legacy Python Builder API.
+const importSource = ref<ImportSource>('control-plane')
 
 const selectedIsImported = computed(() =>
   remoteApps.value.find((a) => a.apaas_app_id === selectedAppId.value)?.already_imported ?? false
@@ -182,27 +183,45 @@ const filteredApps = computed(() => {
 })
 
 const emptyText = computed(() => {
-  if (!selectedEnvId.value) return '暂无可导入的平台应用'
   if (remoteApps.value.length === 0) return '暂无已上线应用'
   return '无匹配结果'
 })
+
+async function resolveImportSource(): Promise<ImportSource> {
+  // Web standalone builds do not have the Tauri discovery bridge. Their
+  // product base path is authoritative and must keep application import on
+  // the standalone Builder AI backend instead of Control Plane.
+  const pathname = typeof window !== 'undefined' ? window.location.pathname.toLowerCase() : ''
+  const standaloneWebPath = pathname === '/builder-standalone'
+    || pathname.startsWith('/builder-standalone/')
+  if (!isDesktop && standaloneWebPath) return 'standalone-apaas'
+  if (!isDesktop) return 'control-plane'
+  try {
+    const state = await getDesktopState()
+    const discovery = state.config?.discovery
+    const deploymentId = String(discovery?.deployment_id || '').toLowerCase()
+    const platformType = String(discovery?.platform?.type || '').toLowerCase()
+    const provider = String(discovery?.auth?.provider || state.config?.login?.mode || '').toLowerCase()
+    return deploymentId === 'builder-standalone'
+      || platformType === 'apaas_builder'
+      || provider === 'apaas'
+      ? 'standalone-apaas'
+      : 'control-plane'
+  } catch {
+    return 'control-plane'
+  }
+}
 
 watch(
   () => props.modelValue,
   async (v) => {
     if (v) {
-      selectedEnvId.value = null
       remoteApps.value = []
       selectedAppId.value = ''
       searchText.value = ''
+      importSource.value = await resolveImportSource()
       try {
-        envs.value = await platformEnvApi.list()
-        const def = connectedEnvs.value.find((e) => e.is_default)
-        const env = def || connectedEnvs.value[0]
-        if (env) {
-          selectedEnvId.value = env.id
-          await loadRemoteApps(env.id)
-        }
+        await loadRemoteApps()
       } catch (e: any) {
         ElMessage.error('加载平台应用失败')
       }
@@ -210,12 +229,33 @@ watch(
   }
 )
 
-async function loadRemoteApps(envId: number) {
+async function loadRemoteApps() {
   selectedAppId.value = ''
   searchText.value = ''
   loading.value = true
   try {
-    remoteApps.value = await platformEnvApi.listRemoteApps(envId)
+    if (importSource.value === 'control-plane') {
+      const page = await controlPlaneApaasApi.listApplications()
+      remoteApps.value = (page.items || []).map((app) => ({
+        apaas_app_id: app.appId,
+        app_name: app.appName || app.appCode || '未命名应用',
+        app_code: app.appCode || '',
+        description: app.description || '',
+        status: app.status || '已上线',
+        already_imported: Boolean(app.alreadyImported),
+      }))
+    } else {
+      const page = await standaloneApaasApi.listApplications()
+      const items = Array.isArray(page) ? page : (page.items || [])
+      remoteApps.value = items.map((app) => ({
+        apaas_app_id: String(app.appId ?? ''),
+        app_name: app.appName || app.appCode || '未命名应用',
+        app_code: app.appCode || '',
+        description: app.description || '',
+        status: app.status || '已上线',
+        already_imported: Boolean(app.already_imported ?? app.alreadyImported),
+      }))
+    }
   } catch (e: any) {
     ElMessage.error(e?.message || '加载平台应用失败')
     remoteApps.value = []
@@ -225,10 +265,14 @@ async function loadRemoteApps(envId: number) {
 }
 
 async function doImport() {
-  if (!selectedEnvId.value || !selectedAppId.value) return
+  if (!selectedAppId.value) return
   importing.value = true
   try {
-    await applicationApi.importFromPlatform(selectedEnvId.value, selectedAppId.value)
+    if (importSource.value === 'control-plane') {
+      await controlPlaneApaasApi.importApplication(selectedAppId.value)
+    } else {
+      await standaloneApaasApi.importApplication(selectedAppId.value)
+    }
     ElMessage.success('应用导入成功')
     visible.value = false
     emit('imported')

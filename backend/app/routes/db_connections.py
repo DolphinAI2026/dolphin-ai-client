@@ -21,7 +21,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crypto import encrypt_password, decrypt_password
 from app.database import get_db
-from app.deps import AuthContext, get_auth_context, resolve_effective_tenant_id
+from app.deps import (
+    AuthContext,
+    get_auth_context,
+    is_control_plane_context,
+    resolve_effective_tenant_id,
+)
 from app.models import DbConnection
 
 # 直接复用 quick_db 的 MySQL 读取实现，避免 connector 重复造轮子。
@@ -36,6 +41,22 @@ except ImportError:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/db-connections", tags=["db-connections"])
+
+
+def _reject_control_plane_local_database(ctx: AuthContext) -> None:
+    if is_control_plane_context(ctx):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "CONTROL_PLANE_REMOTE_MANAGEMENT_REQUIRED",
+                "message": "远程数据库连接由 Control Plane 管理，本地 Builder 不使用租户 SQLite 配置",
+            },
+        )
+
+
+async def _local_database_tenant_id(db: AsyncSession, ctx: AuthContext) -> int:
+    _reject_control_plane_local_database(ctx)
+    return await resolve_effective_tenant_id(db, ctx)
 
 
 # ============================================================
@@ -161,7 +182,7 @@ async def create_db_connection(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """创建数据库连接（password 必填，存 fernet 加密）。"""
-    tenant_id = await resolve_effective_tenant_id(db, ctx)
+    tenant_id = await _local_database_tenant_id(db, ctx)
     conn = DbConnection(
         tenant_id=tenant_id,
         created_by_user_id=ctx.user.id,
@@ -191,7 +212,7 @@ async def list_db_connections(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """列出当前租户的所有数据库连接（不返 password）。"""
-    tenant_id = await resolve_effective_tenant_id(db, ctx)
+    tenant_id = await _local_database_tenant_id(db, ctx)
     result = await db.execute(
         select(DbConnection)
         .where(DbConnection.tenant_id == tenant_id)
@@ -207,7 +228,7 @@ async def get_db_connection(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """单条详情（不返 password）。"""
-    tenant_id = await resolve_effective_tenant_id(db, ctx)
+    tenant_id = await _local_database_tenant_id(db, ctx)
     conn = await _get_owned_conn(db, conn_id, tenant_id)
     return _to_resp(conn)
 
@@ -220,7 +241,7 @@ async def update_db_connection(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """更新；password 省略则保留原密码，传新值则重新加密。"""
-    tenant_id = await resolve_effective_tenant_id(db, ctx)
+    tenant_id = await _local_database_tenant_id(db, ctx)
     conn = await _get_owned_conn(db, conn_id, tenant_id)
 
     if data.name is not None:
@@ -256,7 +277,7 @@ async def delete_db_connection(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """删除连接。"""
-    tenant_id = await resolve_effective_tenant_id(db, ctx)
+    tenant_id = await _local_database_tenant_id(db, ctx)
     conn = await _get_owned_conn(db, conn_id, tenant_id)
     await db.delete(conn)
     await db.commit()
@@ -275,7 +296,7 @@ async def test_db_connection(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """重新测试连接 → 成功更新 last_tested_at + table_count，失败仅标 disconnected 不抛 500。"""
-    tenant_id = await resolve_effective_tenant_id(db, ctx)
+    tenant_id = await _local_database_tenant_id(db, ctx)
     conn = await _get_owned_conn(db, conn_id, tenant_id)
 
     if not conn.password_enc:
@@ -310,7 +331,7 @@ async def list_db_tables(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """拉表清单 + 分类结果（复用 quick_db 路径）。"""
-    tenant_id = await resolve_effective_tenant_id(db, ctx)
+    tenant_id = await _local_database_tenant_id(db, ctx)
     conn = await _get_owned_conn(db, conn_id, tenant_id)
 
     if not conn.password_enc:
