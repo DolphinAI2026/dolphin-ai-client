@@ -1,0 +1,357 @@
+name: Publish DolphinAI desktop release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Desktop SemVer without the v prefix
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  AGENT_RUNTIME_REPO_URL: https://git.dfy.definesys.cn/orcamatrix/agent-runtime.git
+  AGENT_RUNTIME_REVISION: c98437dbde5c803670a8694c7558870a05eb4c6e
+  AGENTIC_CODING_REPO_URL: https://git.dfy.definesys.cn/support/agentic-coding.git
+  AGENTIC_CODING_REVISION: 14844c2b8d85a20b2c1c17aa46eb88f07eb8d5c7
+  CODEX_VERSION: 0.147.0
+
+jobs:
+  release-metadata:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - id: release
+        name: Validate release version and signing secrets
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          DEFINESYS_GIT_USERNAME: ${{ secrets.DEFINESYS_GIT_USERNAME }}
+          DEFINESYS_GIT_TOKEN: ${{ secrets.DEFINESYS_GIT_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="v${REQUESTED_VERSION}"
+          fi
+          [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]] || {
+            echo "::error::Desktop release tag must be vX.Y.Z SemVer."
+            exit 1
+          }
+          [[ -n "${TAURI_SIGNING_PRIVATE_KEY}" ]] || {
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is required before desktop Release builds."
+            exit 1
+          }
+          [[ -n "${DEFINESYS_GIT_USERNAME}" && -n "${DEFINESYS_GIT_TOKEN}" ]] || {
+            echo "::error::DEFINESYS_GIT_USERNAME and DEFINESYS_GIT_TOKEN are required to checkout runtime dependencies."
+            exit 1
+          }
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "version=${tag#v}" >> "${GITHUB_OUTPUT}"
+
+  build-windows:
+    needs: release-metadata
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Checkout fixed internal runtime dependencies
+        shell: pwsh
+        env:
+          DEFINESYS_GIT_USERNAME: ${{ secrets.DEFINESYS_GIT_USERNAME }}
+          DEFINESYS_GIT_TOKEN: ${{ secrets.DEFINESYS_GIT_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $credentialUrl = "https://$($env:DEFINESYS_GIT_USERNAME):$($env:DEFINESYS_GIT_TOKEN)@git.dfy.definesys.cn/"
+          git config --global "url.$credentialUrl.insteadOf" 'https://git.dfy.definesys.cn/'
+          git clone $env:AGENT_RUNTIME_REPO_URL "$env:GITHUB_WORKSPACE\..\agent-runtime"
+          git -C "$env:GITHUB_WORKSPACE\..\agent-runtime" checkout --detach $env:AGENT_RUNTIME_REVISION
+          git clone $env:AGENTIC_CODING_REPO_URL "$env:GITHUB_WORKSPACE\..\agentic-coding"
+          git -C "$env:GITHUB_WORKSPACE\..\agentic-coding" checkout --detach $env:AGENTIC_CODING_REVISION
+
+      - name: Build agent-runtime Builder frontend
+        shell: pwsh
+        run: |
+          Set-Location "$env:GITHUB_WORKSPACE\..\agent-runtime\web\builder"
+          npm ci
+          npm run build
+
+      - name: Create agentic-coding Python environment
+        shell: pwsh
+        run: |
+          Set-Location "$env:GITHUB_WORKSPACE\..\agentic-coding"
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+      - name: Install fixed Codex native package
+        shell: pwsh
+        run: |
+          npm install --prefix .codex-native --no-save --no-package-lock --ignore-scripts "@openai/codex@$env:CODEX_VERSION"
+          $codexRoot = Join-Path $env:GITHUB_WORKSPACE '.codex-native\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc'
+          if (-not (Test-Path "$codexRoot\bin\codex.exe" -PathType Leaf)) { throw "Fixed Codex package is incomplete." }
+          "CODEX_NATIVE_ROOT=$codexRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build signed Windows release artifacts
+        shell: pwsh
+        env:
+          DOLPHIN_RELEASE_BUILD: '1'
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: ./scripts/build-desktop-windows.ps1 -Version '${{ needs.release-metadata.outputs.version }}' -Bundle nsis
+
+      - name: Upload Windows Release boundary
+        uses: actions/upload-artifact@v4
+        with:
+          name: dolphin-ai-windows-${{ needs.release-metadata.outputs.version }}
+          if-no-files-found: error
+          path: |
+            dist-desktop/windows/dolphin-ai-${{ needs.release-metadata.outputs.version }}-windows-x86_64-setup.exe
+            dist-desktop/windows/dolphin-ai-${{ needs.release-metadata.outputs.version }}-windows-x86_64-updater.nsis.zip
+            dist-desktop/windows/dolphin-ai-${{ needs.release-metadata.outputs.version }}-windows-x86_64-updater.nsis.zip.sig
+
+  build-macos:
+    needs: release-metadata
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Checkout fixed internal runtime dependencies
+        shell: bash
+        env:
+          DEFINESYS_GIT_USERNAME: ${{ secrets.DEFINESYS_GIT_USERNAME }}
+          DEFINESYS_GIT_TOKEN: ${{ secrets.DEFINESYS_GIT_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config --global url."https://${DEFINESYS_GIT_USERNAME}:${DEFINESYS_GIT_TOKEN}@git.dfy.definesys.cn/".insteadOf 'https://git.dfy.definesys.cn/'
+          git clone "${AGENT_RUNTIME_REPO_URL}" ../agent-runtime
+          git -C ../agent-runtime checkout --detach "${AGENT_RUNTIME_REVISION}"
+          git clone "${AGENTIC_CODING_REPO_URL}" ../agentic-coding
+          git -C ../agentic-coding checkout --detach "${AGENTIC_CODING_REVISION}"
+
+      - name: Build agent-runtime Builder frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ../agent-runtime/web/builder
+          npm ci
+          npm run build
+
+      - name: Create agentic-coding Python environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ../agentic-coding
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r requirements.txt
+
+      - name: Install fixed Codex native package
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --prefix .codex-native --no-save --no-package-lock --ignore-scripts "@openai/codex@${CODEX_VERSION}"
+          codex_root="${GITHUB_WORKSPACE}/.codex-native/node_modules/@openai/codex-darwin-arm64"
+          test -x "${codex_root}/vendor/aarch64-apple-darwin/bin/codex"
+          echo "CODEX_NATIVE_ROOT=${codex_root}" >> "${GITHUB_ENV}"
+
+      - name: Stamp desktop version
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
+        run: node -e 'const fs=require("node:fs"); const file="src-tauri/tauri.conf.json"; const config=JSON.parse(fs.readFileSync(file)); config.version=process.env.RELEASE_VERSION; fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);'
+
+      - name: Build signed macOS arm64 Release artifacts
+        shell: bash
+        env:
+          DOLPHIN_RELEASE_BUILD: '1'
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bash scripts/build-desktop.sh
+
+      - name: Upload macOS Release boundary
+        uses: actions/upload-artifact@v4
+        with:
+          name: dolphin-ai-macos-${{ needs.release-metadata.outputs.version }}
+          if-no-files-found: error
+          path: |
+            dist-desktop/release/dolphin-ai-${{ needs.release-metadata.outputs.version }}-macos-aarch64.dmg
+            dist-desktop/release/dolphin-ai-${{ needs.release-metadata.outputs.version }}-macos-aarch64-updater.app.tar.gz
+            dist-desktop/release/dolphin-ai-${{ needs.release-metadata.outputs.version }}-macos-aarch64-updater.app.tar.gz.sig
+
+  build-linux:
+    needs: release-metadata
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux desktop build packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Checkout fixed internal runtime dependencies
+        shell: bash
+        env:
+          DEFINESYS_GIT_USERNAME: ${{ secrets.DEFINESYS_GIT_USERNAME }}
+          DEFINESYS_GIT_TOKEN: ${{ secrets.DEFINESYS_GIT_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config --global url."https://${DEFINESYS_GIT_USERNAME}:${DEFINESYS_GIT_TOKEN}@git.dfy.definesys.cn/".insteadOf 'https://git.dfy.definesys.cn/'
+          git clone "${AGENT_RUNTIME_REPO_URL}" ../agent-runtime
+          git -C ../agent-runtime checkout --detach "${AGENT_RUNTIME_REVISION}"
+          git clone "${AGENTIC_CODING_REPO_URL}" ../agentic-coding
+          git -C ../agentic-coding checkout --detach "${AGENTIC_CODING_REVISION}"
+
+      - name: Build agent-runtime Builder frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ../agent-runtime/web/builder
+          npm ci
+          npm run build
+
+      - name: Create agentic-coding Python environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ../agentic-coding
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r requirements.txt
+
+      - name: Install fixed Codex native package
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --prefix .codex-native --no-save --no-package-lock --ignore-scripts "@openai/codex@${CODEX_VERSION}"
+          codex_root="${GITHUB_WORKSPACE}/.codex-native/node_modules/@openai/codex-linux-x64"
+          test -x "${codex_root}/vendor/x86_64-unknown-linux-musl/bin/codex"
+          echo "CODEX_NATIVE_ROOT=${codex_root}" >> "${GITHUB_ENV}"
+
+      - name: Stamp desktop version
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
+        run: node -e 'const fs=require("node:fs"); const file="src-tauri/tauri.conf.json"; const config=JSON.parse(fs.readFileSync(file)); config.version=process.env.RELEASE_VERSION; fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);'
+
+      - name: Build signed Linux Release artifacts
+        shell: bash
+        env:
+          DOLPHIN_RELEASE_BUILD: '1'
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bash scripts/build-desktop.sh
+
+      - name: Upload Linux Release boundary
+        uses: actions/upload-artifact@v4
+        with:
+          name: dolphin-ai-linux-${{ needs.release-metadata.outputs.version }}
+          if-no-files-found: error
+          path: |
+            dist-desktop/release/dolphin-ai-${{ needs.release-metadata.outputs.version }}-linux-x86_64.AppImage
+            dist-desktop/release/dolphin-ai-${{ needs.release-metadata.outputs.version }}-linux-x86_64.deb
+            dist-desktop/release/dolphin-ai-${{ needs.release-metadata.outputs.version }}-linux-x86_64-updater.AppImage.tar.gz
+            dist-desktop/release/dolphin-ai-${{ needs.release-metadata.outputs.version }}-linux-x86_64-updater.AppImage.tar.gz.sig
+
+  release:
+    needs: [release-metadata, build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    outputs:
+      release_url: ${{ steps.report.outputs.release_url }}
+      windows_setup_url: ${{ steps.report.outputs.windows_setup_url }}
+      macos_dmg_url: ${{ steps.report.outputs.macos_dmg_url }}
+      linux_appimage_url: ${{ steps.report.outputs.linux_appimage_url }}
+      linux_deb_url: ${{ steps.report.outputs.linux_deb_url }}
+      latest_json_url: ${{ steps.report.outputs.latest_json_url }}
+      checksums_url: ${{ steps.report.outputs.checksums_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Download Windows Release boundary
+        uses: actions/download-artifact@v4
+        with:
+          name: dolphin-ai-windows-${{ needs.release-metadata.outputs.version }}
+          path: dist-desktop/release
+
+      - name: Download macOS Release boundary
+        uses: actions/download-artifact@v4
+        with:
+          name: dolphin-ai-macos-${{ needs.release-metadata.outputs.version }}
+          path: dist-desktop/release
+
+      - name: Download Linux Release boundary
+        uses: actions/download-artifact@v4
+        with:
+          name: dolphin-ai-linux-${{ needs.release-metadata.outputs.version }}
+          path: dist-desktop/release
+
+      - name: Prepare signed updater manifest and checksums
+        run: >-
+          node scripts/prepare-desktop-release.mjs
+          --version '${{ needs.release-metadata.outputs.version }}'
+          --repository '${{ github.repository }}'
+          --tag '${{ needs.release-metadata.outputs.tag }}'
+          --input dist-desktop/release
+          --output dist-desktop/publish
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.release-metadata.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          files: dist-desktop/publish/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: report
+        name: Read published download addresses
+        env:
+          GITHUB_REF_NAME: ${{ needs.release-metadata.outputs.tag }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/report-desktop-release.mjs

@@ -22,6 +22,24 @@ artifact。非 Release 本地构建缺少 `TAURI_SIGNING_PRIVATE_KEY` 时，脚�
 artifact，并在输出中标记该降级；标签构建（`DOLPHIN_RELEASE_BUILD=1`、`GITHUB_REF_TYPE=tag` 或
 `GITHUB_REF=refs/tags/...`）缺少密钥会立即失败，绝不生成未签名的正式 Release 包。
 
+## GitHub 标签发布
+
+正式包由 `.github/workflows/desktop-release.yml` 在 `vX.Y.Z` 标签或手动填写 `X.Y.Z` 后发布。它在构建前
+校验 updater 签名私钥，并在 Windows x64、macOS arm64、Linux x64 上分别准备固定 revision 的
+`agent-runtime`、`agentic-coding`、Builder 前端、Python 环境和固定版本 Codex。三端只上传正式主包及
+Tauri updater 有效载荷；Release job 汇总为 `dist-desktop/publish/`，生成 `latest.json` 和
+`SHA256SUMS.txt` 后发布。
+
+GitHub Actions 需要以下 Secrets：`TAURI_SIGNING_PRIVATE_KEY`、可选的
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`、`DEFINESYS_GIT_USERNAME`、`DEFINESYS_GIT_TOKEN` 和默认
+`GITHUB_TOKEN`。缺少签名私钥时标签发布会在任一平台构建开始前失败。
+
+客户端 updater 固定读取
+`https://github.com/Mars-hub404/apaas-builder-ai/releases/latest/download/latest.json`。工作流在 Release
+创建后再通过 GitHub API 回读实际附件的 `browser_download_url`，输出 Windows 安装包、macOS DMG、Linux
+AppImage、Linux DEB、manifest 和 checksum 下载地址。旧 `desktop-windows.yml` 仅生成不签名的 portable
+调试包，不能用于正式发布。
+
 ## 自动构建门禁
 
 以下检查由构建脚本按顺序执行。任一步失败都不会生成或复制“可下载包”。

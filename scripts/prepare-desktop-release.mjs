@@ -1,0 +1,221 @@
+#!/usr/bin/env node
+import { createHash } from 'node:crypto';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import process from 'node:process';
+
+const semverPattern = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
+function artifactNames(version) {
+  const prefix = `dolphin-ai-${version}`;
+  return {
+    windowsSetup: `${prefix}-windows-x86_64-setup.exe`,
+    windowsUpdater: `${prefix}-windows-x86_64-updater.nsis.zip`,
+    macosDmg: `${prefix}-macos-aarch64.dmg`,
+    macosUpdater: `${prefix}-macos-aarch64-updater.app.tar.gz`,
+    linuxAppImage: `${prefix}-linux-x86_64.AppImage`,
+    linuxDeb: `${prefix}-linux-x86_64.deb`,
+    linuxUpdater: `${prefix}-linux-x86_64-updater.AppImage.tar.gz`,
+  };
+}
+
+function normalizeTag(tag) {
+  if (!tag?.startsWith('v') || !semverPattern.test(tag.slice(1))) {
+    throw new Error(`Tag must be vX.Y.Z SemVer: ${tag ?? ''}`);
+  }
+  return tag.slice(1);
+}
+
+function parseArgs(argv) {
+  const options = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
+    if (argument === '--self-test' || argument === '--help' || argument === '-h') {
+      options[argument.slice(2) || 'help'] = true;
+      continue;
+    }
+    if (!['--version', '--repository', '--tag', '--input', '--output'].includes(argument)) {
+      throw new Error(`Unknown argument: ${argument}`);
+    }
+    const value = argv[index + 1];
+    if (!value || value.startsWith('--')) {
+      throw new Error(`Missing value for ${argument}`);
+    }
+    options[argument.slice(2)] = value;
+    index += 1;
+  }
+  return options;
+}
+
+async function filesNamed(root, fileName) {
+  const matches = [];
+  async function walk(directory) {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const absolute = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await walk(absolute);
+      } else if (entry.isFile() && entry.name === fileName) {
+        matches.push(absolute);
+      }
+    }
+  }
+  await walk(root);
+  return matches;
+}
+
+async function requireSingleFile(input, name) {
+  const matches = await filesNamed(input, name);
+  if (matches.length !== 1) {
+    throw new Error(`Expected exactly one ${name} under ${input}, found ${matches.length}`);
+  }
+  return matches[0];
+}
+
+async function sha256(file) {
+  return createHash('sha256').update(await readFile(file)).digest('hex');
+}
+
+function releaseUrl(repository, tag, asset) {
+  return `https://github.com/${repository}/releases/download/${tag}/${encodeURIComponent(asset)}`;
+}
+
+export async function prepareRelease({ version, repository, tag, input, output }) {
+  if (!semverPattern.test(version ?? '')) {
+    throw new Error(`Version must be X.Y.Z SemVer: ${version ?? ''}`);
+  }
+  if (normalizeTag(tag) !== version) {
+    throw new Error(`Tag ${tag} does not match version ${version}`);
+  }
+  if (!/^[^/\s]+\/[^/\s]+$/.test(repository ?? '')) {
+    throw new Error(`Repository must be owner/repo: ${repository ?? ''}`);
+  }
+
+  const names = artifactNames(version);
+  const required = [
+    names.windowsSetup,
+    names.windowsUpdater,
+    `${names.windowsUpdater}.sig`,
+    names.macosDmg,
+    names.macosUpdater,
+    `${names.macosUpdater}.sig`,
+    names.linuxAppImage,
+    names.linuxDeb,
+    names.linuxUpdater,
+    `${names.linuxUpdater}.sig`,
+  ];
+  const sources = new Map();
+  for (const name of required) {
+    sources.set(name, await requireSingleFile(input, name));
+  }
+
+  await rm(output, { recursive: true, force: true });
+  await mkdir(output, { recursive: true });
+  for (const [name, source] of sources) {
+    await copyFile(source, path.join(output, name));
+  }
+
+  const platforms = {
+    'windows-x86_64': {
+      signature: (await readFile(path.join(output, `${names.windowsUpdater}.sig`), 'utf8')).trim(),
+      url: releaseUrl(repository, tag, names.windowsUpdater),
+    },
+    'darwin-aarch64': {
+      signature: (await readFile(path.join(output, `${names.macosUpdater}.sig`), 'utf8')).trim(),
+      url: releaseUrl(repository, tag, names.macosUpdater),
+    },
+    'linux-x86_64': {
+      signature: (await readFile(path.join(output, `${names.linuxUpdater}.sig`), 'utf8')).trim(),
+      url: releaseUrl(repository, tag, names.linuxUpdater),
+    },
+  };
+  for (const [platform, update] of Object.entries(platforms)) {
+    if (!update.signature) {
+      throw new Error(`Updater signature is empty for ${platform}`);
+    }
+  }
+
+  const latest = {
+    version,
+    notes: `DolphinAI ${version}`,
+    pub_date: new Date().toISOString(),
+    platforms,
+  };
+  await writeFile(path.join(output, 'latest.json'), `${JSON.stringify(latest, null, 2)}\n`);
+
+  const checksumNames = [...required, 'latest.json'].sort();
+  const sums = await Promise.all(
+    checksumNames.map(async (name) => `${await sha256(path.join(output, name))}  ${name}`),
+  );
+  await writeFile(path.join(output, 'SHA256SUMS.txt'), `${sums.join('\n')}\n`);
+  return { names, latest, output };
+}
+
+async function expectFailure(action, expectedText) {
+  try {
+    await action();
+  } catch (error) {
+    if (error.message.includes(expectedText)) return;
+    throw error;
+  }
+  throw new Error(`Expected failure containing: ${expectedText}`);
+}
+
+async function selfTest() {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'dolphin-release-'));
+  try {
+    const version = normalizeTag('v0.2.70');
+    if (version !== '0.2.70') throw new Error('Tag normalization failed');
+    const names = artifactNames(version);
+    const input = path.join(root, 'input');
+    const output = path.join(root, 'output');
+    await mkdir(input, { recursive: true });
+    const fixtures = [
+      names.windowsSetup, names.windowsUpdater, `${names.windowsUpdater}.sig`, names.macosDmg,
+      names.macosUpdater, `${names.macosUpdater}.sig`, names.linuxAppImage, names.linuxDeb,
+      names.linuxUpdater, `${names.linuxUpdater}.sig`,
+    ];
+    await Promise.all(fixtures.map((name) => writeFile(path.join(input, name), name.endsWith('.sig') ? `signature-${name}` : name)));
+    const result = await prepareRelease({
+      version,
+      repository: 'Mars-hub404/apaas-builder-ai',
+      tag: 'v0.2.70',
+      input,
+      output,
+    });
+    const latest = JSON.parse(await readFile(path.join(output, 'latest.json'), 'utf8'));
+    const expectedUrl = releaseUrl('Mars-hub404/apaas-builder-ai', 'v0.2.70', names.linuxUpdater);
+    if (latest.platforms['linux-x86_64'].url !== expectedUrl || result.latest.version !== version) {
+      throw new Error('latest.json does not use the release download URL');
+    }
+    await rm(path.join(input, names.macosDmg));
+    await expectFailure(
+      () => prepareRelease({ version, repository: 'Mars-hub404/apaas-builder-ai', tag: 'v0.2.70', input, output }),
+      names.macosDmg,
+    );
+    console.log('prepare-desktop-release self-test passed');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+async function main() {
+  const options = parseArgs(process.argv.slice(2));
+  if (options.help) {
+    console.log('Usage: node scripts/prepare-desktop-release.mjs --version X.Y.Z --repository owner/repo --tag vX.Y.Z --input dist-desktop/release --output dist-desktop/publish');
+    return;
+  }
+  if (options['self-test']) {
+    await selfTest();
+    return;
+  }
+  for (const required of ['version', 'repository', 'tag', 'input', 'output']) {
+    if (!options[required]) throw new Error(`Missing --${required}`);
+  }
+  await prepareRelease(options);
+}
+
+main().catch((error) => {
+  console.error(`Desktop Release preparation failed: ${error.message}`);
+  process.exitCode = 1;
+});
