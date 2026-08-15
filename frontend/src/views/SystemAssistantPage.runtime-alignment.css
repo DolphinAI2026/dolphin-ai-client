@@ -1,0 +1,270 @@
+.system-assistant-page {
+  --system-assistant-canvas: color-mix(in srgb, var(--text) 2%, var(--surface));
+  --system-assistant-running: #1d4ed8;
+  --system-assistant-success: #059669;
+  --system-assistant-error: #dc2626;
+  --system-assistant-muted: #64748b;
+  --system-assistant-pending: #94a3b8;
+}
+
+.system-assistant-conversation {
+  background: var(--system-assistant-canvas);
+}
+
+.system-assistant-conversation :deep(.ac-list) {
+  gap: 14px;
+}
+
+.system-assistant-conversation :deep(.ac-bubble.assistant-naked) {
+  max-width: min(880px, 92%);
+}
+
+.system-assistant-conversation :deep(.ac-user-wrap) {
+  max-width: min(620px, 75%);
+}
+
+.system-assistant-conversation :deep(.tool-row .ac-bubble.process) {
+  max-width: min(680px, calc(100% - 38px));
+  flex: 0 1 680px;
+}
+
+.system-assistant-conversation :deep(.tool-card) {
+  display: flex;
+  width: 100%;
+  max-width: 680px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+}
+
+.system-assistant-conversation :deep(.tool-card.expanded),
+.system-assistant-conversation :deep(.tool-card.status-running),
+.system-assistant-conversation :deep(.tool-card.status-error),
+.system-assistant-conversation :deep(.tool-card.status-aborted) {
+  border-radius: 0;
+  background: transparent;
+}
+
+.system-assistant-conversation :deep(.tc-head) {
+  min-width: 0;
+  min-height: 32px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  gap: 6px;
+  white-space: normal;
+}
+
+.system-assistant-conversation :deep(.tc-head:hover),
+.system-assistant-conversation :deep(.tool-card.expanded .tc-head) {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.system-assistant-conversation :deep(.tc-status-label) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  font-weight: 600;
+}
+
+.system-assistant-conversation :deep(.tc-status-label.running) {
+  color: var(--system-assistant-running);
+}
+
+.system-assistant-conversation :deep(.tc-status-label.running::before) {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  content: '';
+  animation: system-assistant-pulse 1.2s ease-in-out infinite;
+}
+
+.system-assistant-conversation :deep(.tc-status-label.success) {
+  color: var(--system-assistant-success);
+}
+
+.system-assistant-conversation :deep(.tc-status-label.error) {
+  color: var(--system-assistant-error);
+}
+
+.system-assistant-conversation :deep(.tc-status-label.aborted) {
+  color: var(--system-assistant-muted);
+}
+
+.system-assistant-conversation :deep(.tc-status-label.pending) {
+  color: var(--system-assistant-pending);
+}
+
+.system-assistant-conversation :deep(.tc-verb),
+.system-assistant-conversation :deep(.tc-meta),
+.system-assistant-conversation :deep(.tc-duration) {
+  color: var(--system-assistant-muted);
+}
+
+.system-assistant-conversation :deep(.tc-sep),
+.system-assistant-conversation :deep(.tc-toggle) {
+  color: var(--system-assistant-pending);
+}
+
+.system-assistant-conversation :deep(.tc-name),
+.system-assistant-conversation :deep(.tc-args),
+.system-assistant-conversation :deep(.tc-result-summary) {
+  min-width: 0;
+}
+
+.system-assistant-conversation :deep(.tc-spacer) {
+  flex: 0 0 2px;
+  min-width: 0;
+}
+
+.system-assistant-conversation :deep(.tc-name) {
+  overflow-wrap: anywhere;
+}
+
+.system-assistant-conversation :deep(.tc-args) {
+  flex: 0 1 auto;
+  max-width: 240px;
+}
+
+.system-assistant-conversation :deep(.tc-result-summary) {
+  flex: 0 1 auto;
+  max-width: 280px;
+}
+
+.system-assistant-conversation :deep(.tool-card.status-success .tc-result-summary) {
+  color: var(--system-assistant-success);
+}
+
+.system-assistant-conversation :deep(.tool-card.status-error .tc-result-summary) {
+  color: var(--system-assistant-error);
+}
+
+.system-assistant-conversation :deep(.tool-card.status-aborted .tc-result-summary) {
+  color: var(--system-assistant-muted);
+}
+
+.system-assistant-conversation :deep(.tc-body) {
+  margin: 2px 0 4px 15px;
+  padding: 4px 0 2px 14px;
+  border-top: 0;
+  border-left: 1px solid color-mix(in srgb, var(--system-assistant-muted) 20%, transparent);
+  gap: 8px;
+}
+
+.system-assistant-conversation :deep(.tool-card.status-running .tc-body) {
+  border-left: 2px solid color-mix(in srgb, var(--system-assistant-running) 58%, transparent);
+}
+
+.system-assistant-conversation :deep(.tool-card.status-error .tc-body) {
+  margin-left: 14px;
+  padding: 7px 8px 7px 14px;
+  border-left: 2px solid #fecaca;
+  border-radius: 0 6px 6px 0;
+  background: #fef2f2;
+}
+
+.system-assistant-conversation :deep(.tc-section pre) {
+  max-height: 220px;
+  border-radius: 6px;
+}
+
+.system-assistant-conversation :deep(.ac-tool-group) {
+  width: 100%;
+  max-width: 680px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+}
+
+.system-assistant-conversation :deep(.ac-tool-head) {
+  min-height: 32px;
+  padding: 5px 8px;
+  border-radius: 6px;
+}
+
+.system-assistant-conversation :deep(.ac-tool-head:hover),
+.system-assistant-conversation :deep(.ac-tool-group.expanded .ac-tool-head) {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.system-assistant-conversation :deep(.ac-group-body) {
+  gap: 2px;
+  margin-left: 14px;
+  padding: 2px 0 2px 14px;
+  border-left: 1px solid color-mix(in srgb, var(--system-assistant-muted) 20%, transparent);
+}
+
+.system-assistant-working {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: 38px;
+  color: var(--system-assistant-running);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.system-assistant-working-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: system-assistant-pulse 1.2s ease-in-out infinite;
+}
+
+.system-assistant-working-time {
+  color: var(--system-assistant-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.system-assistant-composer :deep(.ucc-box) {
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.system-assistant-composer :deep(.ucc-input) {
+  padding: 10px 12px 2px;
+}
+
+.system-assistant-composer :deep(.ucc-box:focus-within) {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 10%, transparent);
+}
+
+@keyframes system-assistant-pulse {
+  0%, 100% {
+    opacity: 0.3;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 0.72;
+    transform: scale(1);
+  }
+}
+
+@media (max-width: 720px) {
+  .system-assistant-conversation :deep(.tool-row .ac-bubble.process) {
+    max-width: calc(100% - 38px);
+  }
+
+  .system-assistant-conversation :deep(.tc-head) {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .system-assistant-conversation :deep(.tc-args),
+  .system-assistant-conversation :deep(.tc-result-summary) {
+    max-width: min(100%, 220px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .system-assistant-working-dot,
+  .system-assistant-conversation :deep(.tc-status-label.running::before) {
+    animation: none;
+  }
+}
