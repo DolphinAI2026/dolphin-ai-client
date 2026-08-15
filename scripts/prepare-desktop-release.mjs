@@ -89,6 +89,7 @@ async function publishStagedOutput(staging, output, operations = {}) {
   await rmImpl(backup, { recursive: true, force: true });
   let movedExistingOutput = false;
   let published = false;
+  let primaryError;
   try {
     try {
       await renameImpl(output, backup);
@@ -110,13 +111,33 @@ async function publishStagedOutput(staging, output, operations = {}) {
       try {
         await renameImpl(backup, output);
       } catch (rollbackError) {
-        throw new Error(`${error.message}; rollback failed; backup retained at ${backup}: ${rollbackError.message}`);
+        primaryError = new Error(`${error.message}; rollback failed; backup retained at ${backup}: ${rollbackError.message}`);
+        throw primaryError;
       }
     }
+    primaryError = error;
     throw error;
   } finally {
-    if (!published) await rmImpl(staging, { recursive: true, force: true });
-    if (!movedExistingOutput) await rmImpl(backup, { recursive: true, force: true });
+    const cleanupErrors = [];
+    if (!published) {
+      try {
+        await rmImpl(staging, { recursive: true, force: true });
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+    if (!movedExistingOutput) {
+      try {
+        await rmImpl(backup, { recursive: true, force: true });
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+    if (cleanupErrors.length > 0) {
+      const cleanupMessage = cleanupErrors.map((error) => error.message).join('; ');
+      if (primaryError) warn(`Desktop Release failed: ${primaryError.message}; cleanup also failed: ${cleanupMessage}`);
+      else throw new Error(`Desktop Release cleanup failed: ${cleanupMessage}`);
+    }
   }
 }
 
@@ -285,12 +306,38 @@ async function selfTest() {
       throw new Error('A failed publication rename must restore the previous release boundary');
     }
 
+    const primaryCleanupOutput = path.join(transactionRoot, 'primary-cleanup-output');
+    const primaryCleanupStaging = path.join(transactionRoot, 'primary-cleanup-staging');
+    await mkdir(primaryCleanupOutput);
+    await mkdir(primaryCleanupStaging);
+    await writeFile(path.join(primaryCleanupOutput, 'release.txt'), 'previous release');
+    await writeFile(path.join(primaryCleanupStaging, 'release.txt'), 'next release');
+    const primaryCleanupWarnings = [];
+    await expectFailure(
+      () => publishStagedOutput(primaryCleanupStaging, primaryCleanupOutput, {
+        rename: async (from, to) => {
+          if (from === primaryCleanupStaging && to === primaryCleanupOutput) throw new Error('injected primary rename failure');
+          return rename(from, to);
+        },
+        rm: async (target, options) => {
+          if (target === primaryCleanupStaging) throw new Error('injected staging cleanup failure');
+          return rm(target, options);
+        },
+        warn: (message) => primaryCleanupWarnings.push(message),
+      }),
+      'injected primary rename failure',
+    );
+    if (primaryCleanupWarnings.length !== 1) {
+      throw new Error('Primary publication failures must retain cleanup diagnostics as warnings');
+    }
+
     const rollbackOutput = path.join(transactionRoot, 'rollback-output');
     const rollbackStaging = path.join(transactionRoot, 'rollback-staging');
     await mkdir(rollbackOutput);
     await mkdir(rollbackStaging);
     await writeFile(path.join(rollbackOutput, 'release.txt'), 'previous release');
     await writeFile(path.join(rollbackStaging, 'release.txt'), 'next release');
+    const rollbackWarnings = [];
     await expectFailure(
       () => publishStagedOutput(rollbackStaging, rollbackOutput, {
         rename: async (from, to) => {
@@ -298,11 +345,16 @@ async function selfTest() {
           if (to === rollbackOutput) throw new Error('injected rollback rename failure');
           return rename(from, to);
         },
+        rm: async (target, options) => {
+          if (target === rollbackStaging) throw new Error('injected staging cleanup failure');
+          return rm(target, options);
+        },
+        warn: (message) => rollbackWarnings.push(message),
       }),
       'backup retained at',
     );
-    if (await readFile(path.join(rollbackStaging, 'release.txt'), 'utf8').catch(() => null) !== null) {
-      throw new Error('A failed publication must remove the abandoned staging directory');
+    if (rollbackWarnings.length !== 1) {
+      throw new Error('Rollback failures must retain cleanup diagnostics as warnings');
     }
 
     const cleanupOutput = path.join(transactionRoot, 'cleanup-output');

@@ -253,24 +253,11 @@ jobs:
           .venv/bin/python -m pip install --upgrade pip
           .venv/bin/python -m pip install -r requirements.txt
 
-      - name: Download fixed macOS portable Python runtime
+      - name: Prepare fixed macOS portable Python runtime
         shell: bash
         run: |
           set -euo pipefail
-          archive="${RUNNER_TEMP}/cpython-3.11.16-macos-arm64.tar.gz"
-          destination="${GITHUB_WORKSPACE}/.portable-python"
-          curl --fail --location --retry 3 --output "${archive}" \
-            'https://github.com/astral-sh/python-build-standalone/releases/download/20260814/cpython-3.11.16%2B20260814-aarch64-apple-darwin-install_only.tar.gz'
-          printf '%s  %s\n' 'fcba9f3f676c83e07225e38116649f0c6eb94cb4fcc166632cf92769462b6e39' "${archive}" | shasum -a 256 --check --status
-          mkdir -p "${destination}"
-          tar -xzf "${archive}" -C "${destination}"
-          portable_python="$(find "${destination}" -path '*/python/bin/python3' -print)"
-          [ "$(printf '%s\n' "${portable_python}" | sed '/^$/d' | wc -l | tr -d ' ')" = 1 ] || {
-            echo '::error::Fixed macOS portable Python archive must contain exactly one python/bin/python3.'
-            exit 1
-          }
-          portable_root="$(cd "$(dirname "${portable_python}")/.." && pwd)"
-          "${portable_root}/bin/python3" -c 'import sys; assert sys.prefix == sys.base_prefix'
+          portable_root="$(bash scripts/prepare-portable-python-runtime.sh --platform macos-aarch64 --destination "${GITHUB_WORKSPACE}/.portable-python")"
           printf 'PORTABLE_PYTHON_ROOT=%s\n' "${portable_root}" >> "${GITHUB_ENV}"
 
       - name: Install fixed Codex native package
@@ -387,24 +374,11 @@ jobs:
           .venv/bin/python -m pip install --upgrade pip
           .venv/bin/python -m pip install -r requirements.txt
 
-      - name: Download fixed Linux portable Python runtime
+      - name: Prepare fixed Linux portable Python runtime
         shell: bash
         run: |
           set -euo pipefail
-          archive="${RUNNER_TEMP}/cpython-3.11.16-linux-x86_64.tar.gz"
-          destination="${GITHUB_WORKSPACE}/.portable-python"
-          curl --fail --location --retry 3 --output "${archive}" \
-            'https://github.com/astral-sh/python-build-standalone/releases/download/20260814/cpython-3.11.16%2B20260814-x86_64-unknown-linux-gnu-install_only.tar.gz'
-          printf '%s  %s\n' '33994fad90145ba559ebbe8a18d69fa7e56653502f7ba14ba07199b52cde3775' "${archive}" | sha256sum --check --status
-          mkdir -p "${destination}"
-          tar -xzf "${archive}" -C "${destination}"
-          portable_python="$(find "${destination}" -path '*/python/bin/python3' -print)"
-          [ "$(printf '%s\n' "${portable_python}" | sed '/^$/d' | wc -l | tr -d ' ')" = 1 ] || {
-            echo '::error::Fixed Linux portable Python archive must contain exactly one python/bin/python3.'
-            exit 1
-          }
-          portable_root="$(cd "$(dirname "${portable_python}")/.." && pwd)"
-          "${portable_root}/bin/python3" -c 'import sys; assert sys.prefix == sys.base_prefix'
+          portable_root="$(bash scripts/prepare-portable-python-runtime.sh --platform linux-x86_64 --destination "${GITHUB_WORKSPACE}/.portable-python")"
           printf 'PORTABLE_PYTHON_ROOT=%s\n' "${portable_root}" >> "${GITHUB_ENV}"
 
       - name: Install fixed Codex native package
