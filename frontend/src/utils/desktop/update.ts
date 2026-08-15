@@ -3,6 +3,8 @@
 // 动态 import tauri 插件 → 在线 build 里这分支被 tree-shake 掉, 不进在线包。
 import { ElMessageBox, ElMessage } from 'element-plus'
 
+let updateCheckPromise: Promise<void> | null = null
+
 function errText(e: any): string {
   if (!e) return '未知错误'
   if (typeof e === 'string') return e
@@ -12,6 +14,16 @@ function errText(e: any): string {
 export async function checkAndPromptUpdate(opts: { silentIfNone: boolean }): Promise<void> {
   if (!__DESKTOP__ || __DESKTOP_WEB_PREVIEW__) return
 
+  // App.vue and the desktop rail both mount during startup. Share one check so
+  // a single launch cannot produce duplicate network requests or dialogs.
+  if (updateCheckPromise) return updateCheckPromise
+  updateCheckPromise = checkAndPromptUpdateOnce().finally(() => {
+    updateCheckPromise = null
+  })
+  return updateCheckPromise
+}
+
+async function checkAndPromptUpdateOnce(): Promise<void> {
   // check() 失败自动重试一次(扛瞬时网络抖动);仍失败则报真实错误。
   let update: any = null
   let lastErr: any = null
@@ -27,13 +39,12 @@ export async function checkAndPromptUpdate(opts: { silentIfNone: boolean }): Pro
     }
   }
   if (lastErr) {
-    // 真实错误透出(之前写死"无法连接"会误导诊断)。
-    if (!opts.silentIfNone) ElMessage.error(`检查更新失败:${errText(lastErr)}`)
+    // 更新检查不是桌面主流程，失败只记日志，不能打断登录或工作台。
+    console.warn('[update] check failed', errText(lastErr))
     return
   }
 
   if (!update) {
-    if (!opts.silentIfNone) ElMessage.success('已是最新版本')
     return
   }
   try {
@@ -53,7 +64,7 @@ export async function checkAndPromptUpdate(opts: { silentIfNone: boolean }): Pro
     await proc.relaunch()
   } catch (e) {
     loading.close()
-    ElMessage.error(`更新失败:${errText(e)}`)
-    console.error('[update] downloadAndInstall 失败', e)
+    console.error('[update] downloadAndInstall failed', e)
+    ElMessage.error('更新失败，请稍后重试')
   }
 }

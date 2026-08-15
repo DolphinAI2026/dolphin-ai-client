@@ -371,12 +371,9 @@ export function useCodingPipeline(deps: PipelineDeps) {
           localStorage.setItem('coding_last_workspace_id', ws.id)
         } catch { /* ignore */ }
       }
-      if ('Notification' in window && Notification.permission === 'granted') {
-        const _notifyBody = parsed.waiting_clarification
-          ? '有几个问题想先和你对齐一下，回答后继续'
-          : (parsed.waiting_confirmation ? '开发 SPEC 已生成，请确认后开始生成代码' : '代码已生成完成，快来看看吧')
-        new Notification('aPaaS Builder', { body: _notifyBody })
-      }
+      // Desktop uses the in-page stream/status state as the single feedback
+      // surface. Browser Notification creates an unexpected OS popup and can
+      // duplicate the visible completion message, especially in Tauri.
       playDoneChime()
     },
     error: (parsed) => {
