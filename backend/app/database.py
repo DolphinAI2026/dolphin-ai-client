@@ -4,6 +4,7 @@ import re
 from sqlalchemy import event, inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
+from app.application_member_role_migration import migrate_application_member_roles
 from app.config import settings
 from app.code_runtime.workspace_path_identity import migrate_registered_workspace_path_identity
 from app.tenant_public_id import TenantPublicIdStrictError, reconcile_tenant_public_ids
@@ -165,6 +166,7 @@ async def init_db():
     import app.models.spec_applied_version  # noqa: F401
     import app.models.spec_document  # noqa: F401
     import app.models.agent_observability  # noqa: F401  — Agent 可观测底座
+    import app.models.audit_log  # noqa: F401
     # 代码会话 git 远程仓绑定（2026-06-25）— WorkspaceGitRemote
     import app.models.workspace_git  # noqa: F401
     async with engine.begin() as conn:
@@ -338,6 +340,8 @@ async def init_db():
 
         await migrate_ai_chat_session_profile(conn)
         await migrate_code_application_location_contract(conn)
+
+        await migrate_application_member_roles(conn)
 
         await _migrate_code_runtime_binding_app_id_nullable(conn, inspect)
 

@@ -38,8 +38,8 @@ async def _seed_owner_app(db_session, *, with_project: bool = False):
     return tenant, owner, outsider, app, project
 
 
-def _ctx(user: User, tenant_id: int) -> AuthContext:
-    return AuthContext(user=user, tenant_id=tenant_id, tenant_role="tenant_admin", org_permissions={})
+def _ctx(user: User, tenant_id: int, tenant_role: str = "member") -> AuthContext:
+    return AuthContext(user=user, tenant_id=tenant_id, tenant_role=tenant_role, org_permissions={})
 
 
 @pytest.mark.asyncio
@@ -87,3 +87,75 @@ async def test_ensure_application_git_project_rejects_non_owner_legacy_app(db_se
         await ensure_application_git_project(app.id, _ctx(outsider, tenant.id), db_session)
 
     assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_ensure_application_git_project_checks_permission_before_reuse(db_session):
+    tenant, _, outsider, app, _ = await _seed_owner_app(db_session, with_project=True)
+
+    with pytest.raises(HTTPException) as exc:
+        await ensure_application_git_project(app.id, _ctx(outsider, tenant.id), db_session)
+
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_ensure_application_git_project_allows_non_owner_tenant_admin(db_session):
+    tenant, owner, outsider, app, _ = await _seed_owner_app(db_session)
+
+    result = await ensure_application_git_project(
+        app.id,
+        _ctx(outsider, tenant.id, "tenant_admin"),
+        db_session,
+    )
+
+    assert result["application_id"] == app.id
+    assert result["created"] is True
+    project = await db_session.get(Project, result["project_id"])
+    members = list((await db_session.scalars(
+        select(ProjectMember).where(ProjectMember.project_id == project.id)
+    )).all())
+    assert project.user_id == owner.id
+    assert [(member.user_id, member.role) for member in members] == [(owner.id, "owner")]
+
+    with pytest.raises(HTTPException) as denied_after_admin_fallback_removed:
+        await ensure_application_git_project(
+            app.id,
+            _ctx(outsider, tenant.id, "member"),
+            db_session,
+        )
+    assert denied_after_admin_fallback_removed.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("creator_state", ["missing", "other_tenant"])
+async def test_ensure_application_git_project_rejects_invalid_tenant_creator(
+    db_session,
+    creator_state,
+):
+    tenant, _, outsider, app, _ = await _seed_owner_app(db_session)
+    if creator_state == "missing":
+        app.created_by = 999999
+    else:
+        other_tenant = Tenant(tenant_name="other", tenant_code="git-project-other")
+        other_creator = User(username="other-tenant-creator", hashed_password="x")
+        db_session.add_all([other_tenant, other_creator])
+        await db_session.flush()
+        db_session.add(UserTenant(
+            user_id=other_creator.id,
+            tenant_id=other_tenant.id,
+            status=1,
+        ))
+        app.created_by = other_creator.id
+    await db_session.commit()
+
+    with pytest.raises(HTTPException) as invalid_creator:
+        await ensure_application_git_project(
+            app.id,
+            _ctx(outsider, tenant.id, "tenant_admin"),
+            db_session,
+        )
+
+    assert invalid_creator.value.status_code == 409
+    await db_session.refresh(app)
+    assert app.project_id is None

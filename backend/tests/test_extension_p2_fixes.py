@@ -16,6 +16,7 @@ from fastapi import HTTPException
 
 from app.deps import AuthContext
 from app.models import Application, Tenant, User
+from app.models.collaboration import ApplicationMember
 from app.models.tenant import UserTenant
 from app.permissions import Action
 
@@ -191,3 +192,34 @@ async def test_republish_dedup_window_expires_allows_second_call():
         fake_now[0] = 1006.0
         deduped3, _ = await ext_mod._should_dedup_republish(999)
         assert deduped3 is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identity", ["collaborator", "outsider"])
+async def test_republish_requires_publish_permission(db_session, identity):
+    from app.routes.applications import extension as ext_mod
+
+    seed = await _seed_app_with_owner_and_viewer(db_session)
+    collaborator = await _make_user(db_session, "ext-collaborator")
+    db_session.add(UserTenant(
+        user_id=collaborator.id,
+        tenant_id=seed["tenant"].id,
+        status=1,
+    ))
+    db_session.add(ApplicationMember(
+        application_id=seed["app"].id,
+        user_id=collaborator.id,
+        role="collaborator",
+        invited_by=seed["owner"].id,
+    ))
+    await db_session.commit()
+
+    user = collaborator if identity == "collaborator" else seed["viewer"]
+    with pytest.raises(HTTPException) as denied:
+        await ext_mod.republish_application(
+            app_id=seed["app"].id,
+            ctx=_ctx_viewer(user, seed["tenant"].id),
+            db=db_session,
+        )
+
+    assert denied.value.status_code == 403

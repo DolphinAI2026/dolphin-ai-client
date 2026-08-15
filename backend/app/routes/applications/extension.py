@@ -40,6 +40,8 @@ from app.error_messages import APAAS_LOGIN_FAILED, is_apaas_token_error
 from app.models import Application, PlatformEnv, User
 from app.permissions import Action, check_resource_permission
 
+from .crud import _require_application_permission
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -403,7 +405,7 @@ async def notify_extension_update(
     """
     # _load_app_and_env 已经做了 VIEW 检查 + app 存在性, 这里追加 EDIT 卡 viewer.
     app, _env = await _load_app_and_env(app_id, ctx, db)
-    await check_resource_permission(ctx, db, app, "application", Action.EDIT)
+    await _require_application_permission(ctx, db, app, Action.EDIT)
     delivered = await publish_extension_update(app_id, body.event_type, body.payload)
     return NotifyExtensionUpdateResponse(ok=True, delivered=delivered)
 
@@ -424,7 +426,7 @@ async def republish_application(
     用 _should_dedup_republish() in-memory dict (单进程 P0 假设, 多 pod 时换 redis).
     """
     app, env = await _load_app_and_env(app_id, ctx, db)
-    await check_resource_permission(ctx, db, app, "application", Action.EDIT)
+    await _require_application_permission(ctx, db, app, "publish")
 
     if not app.apaas_app_id:
         return RepublishResponse(ok=False, note="应用尚未部署到平台, 无法重发")

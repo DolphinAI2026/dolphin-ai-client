@@ -12,6 +12,10 @@ from sqlalchemy import select, desc, func as sa_func, delete, and_, not_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import User, Application, DocumentVersion, ChangePlan, ApiCallLog, PlatformEnv, Conversation, ConfigSnapshot, Tenant, APaaSUserCredential
+from app.application_access import (
+    application_visible_to_user_clause,
+    resolve_effective_application_role,
+)
 from app.auth import get_current_user
 from app.schemas import ApplicationCreate, ApplicationPageResponse, ApplicationResponse, MergedAppResponse
 from app.deps import (
@@ -275,6 +279,8 @@ async def _list_remote_apps_for_current_builder_tenant(
 
 def _apply_application_list_filters(stmt, ctx: AuthContext, team_scope: str | None, source_filter: str | None, stage: str | None = None):
     stmt = stmt.where(Application.tenant_id == ctx.tenant_id)
+    if ctx.tenant_role not in {"tenant_admin", "platform_admin"}:
+        stmt = stmt.where(application_visible_to_user_clause(ctx.user.id))
     if team_scope and team_scope.isdigit():
         stmt = stmt.where(Application.team_id == int(team_scope))
 
@@ -302,15 +308,22 @@ async def _get_application_permissions(
     db: AsyncSession,
     app: Application,
 ) -> Optional[dict[str, bool]]:
+    if ctx.tenant_role in {"tenant_admin", "platform_admin"}:
+        role = "tenant_admin"
+    else:
+        role = await resolve_effective_application_role(db, app, ctx.user.id)
+        if role is None:
+            return None
+    elevated = role in {"tenant_admin", "owner", "admin"}
     return {
         Action.VIEW: True,
         Action.EDIT: True,
-        Action.DELETE: True,
+        Action.DELETE: elevated,
         Action.CLONE: True,
-        "publish": True,
-        "can_manage_members": True,
-        "can_manage_member_roles": True,
-        "access_role": "tenant",
+        "publish": elevated,
+        "can_manage_members": elevated,
+        "can_manage_member_roles": elevated,
+        "access_role": role,
     }
 
 
@@ -320,7 +333,10 @@ async def _require_application_permission(
     app: Application,
     action: str,
 ) -> dict[str, bool]:
-    return await _get_application_permissions(ctx, db, app)
+    permissions = await _get_application_permissions(ctx, db, app)
+    if not permissions or not permissions.get(action, False):
+        raise HTTPException(status_code=403, detail="无权执行此应用操作")
+    return permissions
 
 
 
@@ -438,6 +454,8 @@ async def match_applications_by_name(
         select(Application)
         .where(Application.tenant_id == ctx.tenant_id)
     )
+    if ctx.tenant_role not in {"tenant_admin", "platform_admin"}:
+        stmt = stmt.where(application_visible_to_user_clause(ctx.user.id))
     # 先用租户约束取轻量候选，再在 Python 里做归一化相似匹配。
     # 只用 SQL ILIKE 会漏掉「客户拜访管理应用」→「客户拜访管理」这类反向包含。
     stmt = stmt.order_by(desc(Application.updated_at)).limit(min(max(limit * 100, 500), 2000))
@@ -1178,6 +1196,17 @@ async def auto_create_application(
     )
     # 如果有 conversation_id，检查是否已有关联应用
     if data.conversation_id:
+        conversation = (
+            await db.execute(
+                select(Conversation).where(
+                    Conversation.id == data.conversation_id,
+                    Conversation.tenant_id == ctx.tenant_id,
+                    Conversation.user_id == ctx.user.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not conversation:
+            raise HTTPException(status_code=404, detail="对话不存在或无权访问")
         result = await db.execute(
             select(Application).where(
                 Application.conversation_id == data.conversation_id,
@@ -1186,6 +1215,7 @@ async def auto_create_application(
         )
         existing = result.scalar_one_or_none()
         if existing:
+            await _require_application_permission(ctx, db, existing, Action.EDIT)
             # 更新配置，并把本次对话里尚未绑定的最新文档版本挂到当前应用
             preview_data = data.config_preview.get("data", data.config_preview) if isinstance(data.config_preview, dict) else {}
             existing_code = (
@@ -1295,6 +1325,7 @@ async def auto_create_application(
         )
         existing_app = existing_q.scalar_one_or_none()
         if existing_app:
+            await _require_application_permission(ctx, db, existing_app, Action.EDIT)
             # 增量合并 config (按 code 并集模型/表单/角色/字典/权限), 保留 apaas_app_id
             try:
                 merged_data = _merge_preview_data(

@@ -106,6 +106,7 @@ const isSystemAssistantRoute = computed(() => route.path === '/code/system-assis
 // 会话历史 —— 收进左栏单一导航(参考 Claude Code), 页面内层 sidebar 隐掉。
 // 统一使用 aiChatApi 会话; Code 模式只展示 mode=code 的应用会话。
 const aiSessions = ref<AIChatSession[]>([])
+const systemAssistantSessionData = ref<AIChatSession[]>([])
 const codeRailHistory = ref<CodeRailHistoryResponse | null>(null)
 const showRecent = computed(() => !effectiveCollapsed.value)
 let railAppsSeq = 0
@@ -116,7 +117,7 @@ let systemAssistantSessionsTimer: ReturnType<typeof setInterval> | null = null
 const appNameById = ref<Map<number, string>>(new Map())
 
 const systemAssistantSessions = computed<RailSession[]>(() =>
-  sortRailSessionsByUpdatedAt(normalizeAiSessions(aiSessions.value)),
+  sortRailSessionsByUpdatedAt(normalizeAiSessions(systemAssistantSessionData.value)),
 )
 const systemAssistantApplicationGroups = computed<CodeRailSessionGroup[]>(() =>
   groupCodeRailHistoryByApplication(codeRailHistory.value),
@@ -177,36 +178,27 @@ async function loadRailSessions() {
   const seq = ++railSessionsSeq
   const mode = currentMode.value
   try {
-    if (isSystemAssistantRoute.value) {
+    if (mode === 'code') {
       const [systemResult, applicationResult] = await Promise.allSettled([
         aiChatApi.listSessions({ mode: 'code', assistant_profile: 'system_assistant' }),
         codeRuntimeApi.listRailHistory(),
       ])
-      if (seq !== railSessionsSeq || !isSystemAssistantRoute.value) return
-      aiSessions.value = systemResult.status === 'fulfilled'
+      if (seq !== railSessionsSeq || mode !== currentMode.value) return
+      systemAssistantSessionData.value = systemResult.status === 'fulfilled'
         ? systemResult.value?.sessions || []
-        : []
+        : systemAssistantSessionData.value
       codeRailHistory.value = applicationResult.status === 'fulfilled'
         ? applicationResult.value
-        : { apps: [] }
-      return
-    }
-    if (mode === 'code') {
-      const history = await codeRuntimeApi.listRailHistory()
-      if (seq !== railSessionsSeq || mode !== currentMode.value) return
-      codeRailHistory.value = history
-      aiSessions.value = []
+        : codeRailHistory.value
       return
     }
     const d = await aiChatApi.listSessions()
     if (seq !== railSessionsSeq || mode !== currentMode.value) return
-    codeRailHistory.value = null
     const sessions = d?.sessions || []
     aiSessions.value = sessions.filter(s => s.mode !== 'code')
   } catch {
     if (seq !== railSessionsSeq || mode !== currentMode.value) return
-    aiSessions.value = []
-    if (mode === 'code') codeRailHistory.value = { apps: [] }
+    if (mode !== 'code') aiSessions.value = []
   }
 }
 
@@ -215,7 +207,7 @@ function syncSystemAssistantSessionPolling() {
     clearInterval(systemAssistantSessionsTimer)
     systemAssistantSessionsTimer = null
   }
-  if (!isSystemAssistantRoute.value) return
+  if (currentMode.value !== 'code') return
   systemAssistantSessionsTimer = setInterval(() => {
     if (document.visibilityState === 'visible') void loadRailSessions()
   }, 6000)
@@ -263,6 +255,7 @@ watch(currentMode, () => {
   groupBy.value = loadGroupByForMode(currentMode.value)
   void loadRailApps()
   void loadRailSessions()
+  syncSystemAssistantSessionPolling()
 })
 watch(isSystemAssistantRoute, () => {
   void loadRailApps()
@@ -305,7 +298,7 @@ const sessionGroups = computed<(RailSessionGroup | CodeRailSessionGroup)[]>(() =
 
 async function openSession(session: RailSession) {
   const intent = railNavigationIntent.begin()
-  if (isSystemAssistantRoute.value && session.source !== 'code-agent' && session.source !== 'code-shell') {
+  if (currentMode.value === 'code' && session.source !== 'code-agent' && session.source !== 'code-shell') {
     if (railNavigationIntent.isCurrent(intent)) {
       router.push({ path: '/code/system-assistant', query: { ...route.query, session: String(session.id) } })
     }
@@ -328,6 +321,12 @@ function openCodeLocationSession(
   if (!('locationSessions' in group)) return
   const session = group.locationSessions[location]
   if (session) void openSession(session)
+}
+
+function codeGroupStandardShellSessionId(
+  group: RailSessionGroup | CodeRailSessionGroup,
+): string | undefined {
+  return 'standardShellSessionId' in group ? group.standardShellSessionId : undefined
 }
 
 function createSystemAssistantSession() {
@@ -424,7 +423,7 @@ async function createBuilderSession(appId?: number | null) {
 
 async function createCodeAgentSession(
   shellSessionId?: string | null,
-  group?: CodeRailSessionGroup,
+  group?: RailSessionGroup | CodeRailSessionGroup,
 ) {
   if (creatingCodeAgentSession.value) return
   const isCodeMode = currentMode.value === 'code'
@@ -433,7 +432,7 @@ async function createCodeAgentSession(
   creatingCodeAgentSession.value = true
   try {
     let targetShellSessionId = shellSessionId || ''
-    if (!targetShellSessionId && group) {
+    if (!targetShellSessionId && group && 'locationSessions' in group) {
       const representative = group.locationSessions.local || group.locationSessions.remote
       if (representative) {
         const standardShell = await codeRuntimeApi.createSessionFromExternalApp({
@@ -531,7 +530,8 @@ const NAV = computed<NavItem[]>(() => {
   }))
   return items.filter(item => !desktopHidden(item.path))
 })
-// 桌面包不含 admin-spa, /platform-admin 内嵌 iframe 会白屏; 桌面下直接进自渲染的配置页 /platform-envs。
+const auditLogNavItem: NavItem = { key: 'audit-logs', label: '管理审计日志', icon: 'activity', path: '/audit-logs' }
+
 const userAccount = computed(() => user.user?.username || '')
 const userName = computed(() => user.user?.display_name || userAccount.value || '未登录')
 const userAvatarText = computed(() => Array.from(userName.value.trim())[0]?.toUpperCase() || 'U')
@@ -885,7 +885,7 @@ function renderIcon(name: string): string {
       </a>
 
       <SystemAssistantSessionSections
-        v-if="showRecent && isSystemAssistantRoute"
+        v-if="showRecent && currentMode === 'code'"
         class="rail-sessions rail-system-assistant-sessions"
         :system-sessions="systemAssistantSessions"
         :application-groups="systemAssistantApplicationGroups"
@@ -938,7 +938,7 @@ function renderIcon(name: string): string {
                 title="新建对话"
                 aria-label="新建对话"
                 :disabled="currentMode === 'code' ? creatingCodeAgentSession : creatingBuilderSession"
-                @click.stop="currentMode === 'code' ? createCodeAgentSession(g.standardShellSessionId, g) : createBuilderSession(g.appId)"
+                @click.stop="currentMode === 'code' ? createCodeAgentSession(codeGroupStandardShellSessionId(g), g) : createBuilderSession(g.appId)"
               >
                 <span v-html="renderIcon('plus')" />
               </button>
@@ -974,50 +974,63 @@ function renderIcon(name: string): string {
       <!-- 老的 .rail-collapse-btn 已移到顶部 brand 区，这里删掉减少重复入口 -->
 
       <div v-if="!effectiveCollapsed" class="rail-console" @click.stop>
-        <!-- 组织切换、平台/桌面配置和能力入口统一收进设置页。 -->
+        <!-- 组织切换和配置入口统一收进头像菜单。 -->
         <div v-show="userMenuOpen" class="rail-user-menu">
-        <div class="user-menu-tenant" @click.stop>
-          <div class="user-menu-tenant-label">{{ isDesktop ? '当前组织' : '当前租户' }}</div>
-          <div class="tenant-switch-wrap">
-            <button
-              type="button"
-              class="tenant-switch"
-              :class="{ open: tenantMenuOpen }"
-              aria-haspopup="menu"
-              :aria-expanded="tenantMenuOpen"
-              @click="toggleTenantMenu"
-            >
-              <span class="tenant-icon" v-html="renderIcon('bldg')" />
-              <span class="tenant-name" :title="user.user?.tenant_name || currentTenantLabel">{{ currentTenantLabel }}</span>
-              <span class="tenant-arrow" v-html="renderIcon('chevronDown')" />
-            </button>
-            <div v-if="tenantMenuOpen" class="tenant-menu" role="menu">
+          <div class="user-menu-tenant" @click.stop>
+            <div class="user-menu-tenant-label">{{ isDesktop ? '当前组织' : '当前租户' }}</div>
+            <div class="tenant-switch-wrap">
               <button
-                v-for="tenant in tenantOptions"
-                :key="tenant.tenant_id"
                 type="button"
-                class="tenant-option"
-                :class="{ active: String(tenant.tenant_id) === currentTenantValue }"
-                role="menuitem"
-                @click="selectTenant(String(tenant.tenant_id))"
+                class="tenant-switch"
+                :class="{ open: tenantMenuOpen }"
+                aria-haspopup="menu"
+                :aria-expanded="tenantMenuOpen"
+                @click="toggleTenantMenu"
               >
-                <span class="tenant-option-name" :title="tenant.tenant_name">{{ tenantLabel(tenant) }}</span>
-                <span v-if="tenantSubtitle(tenant)" class="tenant-option-code">{{ tenantSubtitle(tenant) }}</span>
+                <span class="tenant-icon" v-html="renderIcon('bldg')" />
+                <span class="tenant-name" :title="user.user?.tenant_name || currentTenantLabel">{{ currentTenantLabel }}</span>
+                <span class="tenant-arrow" v-html="renderIcon('chevronDown')" />
               </button>
-              <div v-if="!tenantOptions.length" class="tenant-empty">暂无可切换组织</div>
+              <div v-if="tenantMenuOpen" class="tenant-menu" role="menu">
+                <button
+                  v-for="tenant in tenantOptions"
+                  :key="tenant.tenant_id"
+                  type="button"
+                  class="tenant-option"
+                  :class="{ active: String(tenant.tenant_id) === currentTenantValue }"
+                  role="menuitem"
+                  @click="selectTenant(String(tenant.tenant_id))"
+                >
+                  <span class="tenant-option-name" :title="tenant.tenant_name">{{ tenantLabel(tenant) }}</span>
+                  <span v-if="tenantSubtitle(tenant)" class="tenant-option-code">{{ tenantSubtitle(tenant) }}</span>
+                </button>
+                <div v-if="!tenantOptions.length" class="tenant-empty">暂无可切换组织</div>
+              </div>
             </div>
           </div>
-        </div>
 
-        <button type="button" class="console-row settings-entry-row" @click="go(isDesktop ? '/desktop-settings' : '/settings?section=ai')">
-          <span class="console-row-icon" v-html="renderIcon('settings')" />
-          <span>设置</span>
-        </button>
+          <a
+            v-if="user.isTenantAdmin"
+            class="console-row"
+            :class="{ active: isActive(auditLogNavItem.path) }"
+            :href="resolveHref(auditLogNavItem.path)"
+            title="管理审计日志"
+            @click="onMenuClick($event, auditLogNavItem)"
+            @auxclick="onMenuClick($event, auditLogNavItem)"
+          >
+            <span class="console-row-icon" v-html="renderIcon('activity')" />
+            <span>管理审计日志</span>
+          </a>
 
-        <button type="button" class="console-row logout-row" title="退出登录" @click="onLogout">
-          <span class="console-row-icon" v-html="renderIcon('logout')" />
-          <span>退出登录</span>
-        </button>
+          <button type="button" class="console-row settings-entry-row" @click="go(isDesktop ? '/desktop-settings' : '/settings?section=ai')">
+            <span class="console-row-icon" v-html="renderIcon('settings')" />
+            <span>设置</span>
+          </button>
+
+          <button type="button" class="console-row logout-row" title="退出登录" @click="onLogout">
+            <span class="console-row-icon" v-html="renderIcon('logout')" />
+            <span>退出登录</span>
+          </button>
         </div><!-- /rail-user-menu -->
 
         <button

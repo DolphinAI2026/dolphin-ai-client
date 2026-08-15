@@ -169,6 +169,16 @@ export const routes: RouteRecordRaw[] = [
       meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
     },
     {
+      path: '/audit-logs', name: 'AuditLogs',
+      component: () => import('@/views/TenantAuditLogsPage.vue'),
+      meta: { requiresAuth: true, tenantContext: 'required', requiresTenantAdmin: true, product: 'builder' }
+    },
+    {
+      path: '/applications/:id/audit-logs', name: 'ApplicationAuditLogs',
+      component: () => import('@/views/ApplicationAuditLogsPage.vue'),
+      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
+    },
+    {
       path: '/hub',
       name: 'CapabilitiesHub',
       redirect: to => {
@@ -229,10 +239,26 @@ export const routes: RouteRecordRaw[] = [
       meta: { requiresAuth: true, tenantContext: 'none', navExpanded: true }
     },
     {
+      // Legacy CodingPage is kept only for the workspace preview iframe.
+      // User-facing Code sessions live under /code/* now.
       path: '/coding',
       name: 'Coding',
       component: () => import('@/views/CodingPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true, product: 'code' }
+      meta: {
+        requiresAuth: true,
+        tenantContext: 'required',
+        navExpanded: true,
+        product: 'code',
+        deprecated: true,
+      },
+      beforeEnter: (to, _from, next) => {
+        // The embedded Code preview is the only supported legacy entry.
+        if (String(to.query.embed || '') === 'true') {
+          next()
+          return
+        }
+        next({ path: '/code/apps', replace: true })
+      },
     },
     {
       path: '/admin/mcp',

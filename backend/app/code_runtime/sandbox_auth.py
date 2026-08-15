@@ -225,7 +225,10 @@ async def _renew_browser_runtime_session(
                 try:
                     bootstrap_kwargs = (
                         {"runtime_base_url": opened.get("runtimeBaseUrl")}
-                        if "runtimeBaseUrl" in opened
+                        if (
+                            "runtimeBaseUrl" in opened
+                            and not settings.dolphin_code_ignore_runtime_base_url
+                        )
                         else {}
                     )
                     runtime_bootstrap = await asyncio.wait_for(

@@ -1,7 +1,7 @@
-"""403 文案应渲染权限码 (application:view)，而非 py3.13 str-enum 的 repr (Action.VIEW)。
+"""403 文案应渲染权限码 (conversation:view)，而非 py3.13 str-enum 的 repr (Action.VIEW)。
 
 f"{action}" 在 Python 3.13 的 class Action(str, Enum) 上返回 'Action.VIEW'，
-导致用户看到 "你的角色没有 application:Action.VIEW 权限" 这种天书。应是 application:view。
+导致用户看到 "你的角色没有 conversation:Action.VIEW 权限" 这种天书。应是 conversation:view。
 """
 import pytest
 from fastapi import HTTPException
@@ -27,7 +27,7 @@ def _denied_ctx() -> AuthContext:
 @pytest.mark.asyncio
 async def test_layer1_denial_message_uses_permission_code():
     with pytest.raises(HTTPException) as ei:
-        await check_resource_permission(_denied_ctx(), None, _Resource(), "application", Action.VIEW)
+        await check_resource_permission(_denied_ctx(), None, _Resource(), "conversation", Action.VIEW)
     detail = ei.value.detail
-    assert "application:view" in detail
+    assert "conversation:view" in detail
     assert "Action.VIEW" not in detail

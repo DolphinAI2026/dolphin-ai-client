@@ -2185,6 +2185,69 @@ async def test_open_code_session_upserts_runtime_binding(db_session):
 
 
 @pytest.mark.asyncio
+async def test_open_code_session_can_ignore_control_plane_runtime_base_url(
+    db_session,
+    monkeypatch,
+):
+    from app.code_runtime import service
+    from app.code_runtime.service import open_code_session
+    from app.models.ai_chat import CodeRuntimeBinding
+    from sqlalchemy import select
+
+    monkeypatch.setattr(service.settings, "dolphin_code_ignore_runtime_base_url", True)
+
+    app = Application(
+        id=101,
+        tenant_id=7,
+        user_id=11,
+        created_by=11,
+        app_name="销售应用",
+        app_code="sales",
+        app_type="ai-code",
+        status="completed",
+        apaas_app_id="91001",
+    )
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        app_id=101,
+        title="销售应用 Code",
+        mode="code",
+        status="active",
+    )
+    db_session.add_all([app, session])
+    await db_session.commit()
+    await db_session.refresh(session)
+
+    async def fake_open(external_application_id: str, handoff_id: str | None = None):
+        return {
+            "applicationId": external_application_id,
+            "workspaceId": "93001",
+            "sandboxInstanceId": "sandbox-93001",
+            "conversationId": "conversation-93001",
+            "specReviewUrl": "https://sandbox.example.com/workspaces/93001/builder?token=entry-token",
+            "runtimeBaseUrl": "http://om-agent-runtime-93001.dolphin-code.svc.cluster.local:8080",
+        }
+
+    result = await open_code_session(
+        db=db_session,
+        session_id=session.id,
+        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7, tenant_role="member"),
+        workspace_open=fake_open,
+        embed_token_factory=lambda **_: "dolphin-embed",
+    )
+
+    binding = (
+        await db_session.execute(
+            select(CodeRuntimeBinding).where(CodeRuntimeBinding.session_id == session.id)
+        )
+    ).scalar_one()
+    assert binding.runtime_base_url == "https://sandbox.example.com/workspaces/93001"
+    assert "svc.cluster.local" not in binding.runtime_base_url
+    assert "svc.cluster.local" not in repr(result)
+
+
+@pytest.mark.asyncio
 async def test_open_local_code_session_defers_agent_creation_to_serialized_route(
     db_session,
     monkeypatch,

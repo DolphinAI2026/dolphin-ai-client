@@ -200,6 +200,7 @@
                 <AppIcon name="files" :size="13" />
                 <span>资产</span>
               </button>
+              <button v-if="canViewAuditLogs(app)" class="apps-mini-action" type="button" @click="openAuditLogs(app)">审计</button>
               <button v-if="canBuildApp(app)" class="apps-mini-action primary" type="button" @click="buildApp(app)">构建</button>
               <button
                 v-if="canPublishApp(app)"
@@ -277,6 +278,7 @@
                 <AppIcon name="files" :size="13" />
                 <span>资产</span>
               </button>
+              <button v-if="canViewAuditLogs(app)" class="apps-mini-action" type="button" @click="openAuditLogs(app)">审计</button>
               <button v-if="canBuildApp(app)" class="apps-mini-action" type="button" @click="buildApp(app)">构建</button>
               <button
                 v-if="canPublishApp(app)"
@@ -835,7 +837,10 @@ async function openCodeApplicationLocation(
       shellSessionRef,
     )
     window.dispatchEvent(new CustomEvent('code-rail-refresh'))
-    router.push(`/code/${shellSessionRef}`)
+    router.push({
+      path: `/code/${shellSessionRef}`,
+      query: { source: executionLocation },
+    })
   } catch (error: any) {
     if (showCodeApplicationOpenError(app, executionLocation, error)) return
     ElMessage.error(error?.response?.data?.detail || error?.message || '创建 Code 会话失败')
@@ -920,6 +925,15 @@ function openApp(app: MergedApplication) {
 function openDialog(app: MergedApplication) {
   // Builder 模式走跟 openApp 一样的 tab 化逻辑
   openApp(app)
+}
+
+function openAuditLogs(app: MergedApplication) {
+  const id = appNumericId(app)
+  if (id) router.push(`/applications/${id}/audit-logs`)
+}
+
+function canViewAuditLogs(app: MergedApplication) {
+  return !isCodeMode.value && Boolean(app.permissions?.can_manage_members)
 }
 
 /* ── Fix 15 (2026-05-21): 卡片视图 "更多" 菜单 ───────────────────────────
@@ -1256,7 +1270,7 @@ async function refreshApps(forceCode = false) {
       codeMode ? Promise.resolve([]) : conversationApi.listWithApps({ agent_type: 'builder' }).catch(() => []),
     ])
     if (seq !== refreshAppsSeq || codeMode !== isCodeMode.value) return
-    apps.value = Array.isArray(list) ? list : (list?.items || [])
+    apps.value = list
     appHistoryMap.value = buildAppHistoryMap(Array.isArray(conversations) ? conversations : [])
   } catch (error) {
     if (seq !== refreshAppsSeq || codeMode !== isCodeMode.value) return

@@ -7,7 +7,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
-from app.models import Application, ApiCallLog, PlatformEnv, Project, ProjectMember
+from app.models import Application, ApiCallLog, PlatformEnv, Project, ProjectMember, User
+from app.models.tenant import UserTenant
 from app.deps import get_auth_context, AuthContext
 from app.permissions import check_resource_permission, Action
 from app.config import APP_DEPLOY_ABSTRACT
@@ -61,7 +62,7 @@ async def publish_application(
             detail="应用还在生成中（模型/表单/权限尚未全部就绪），请等生成完成（status=completed）后再上线。可轮询 get_application / 步骤状态查进度。",
         )
 
-    await _require_application_permission(ctx, db, app, Action.EDIT)
+    await _require_application_permission(ctx, db, app, "publish")
 
     env = None
     if app.platform_env_id:
@@ -464,6 +465,7 @@ async def get_application_default_mode(
     )).scalar_one_or_none()
     if not app:
         raise HTTPException(404, "应用不存在")
+    await _require_application_permission(ctx, db, app, Action.VIEW)
     return {"application_id": app.id, "default_mode": app.default_mode}
 
 
@@ -481,6 +483,7 @@ async def patch_application_default_mode(
     )).scalar_one_or_none()
     if not app:
         raise HTTPException(404, "应用不存在")
+    await _require_application_permission(ctx, db, app, Action.EDIT)
     if not app.project_id:
         raise HTTPException(400, "应用未关联 project，无法设置默认模式")
     if req.default_mode not in (None, "simple", "pro"):
@@ -505,19 +508,32 @@ async def ensure_application_git_project(
     )).scalar_one_or_none()
     if not app:
         raise HTTPException(404, "应用不存在")
+    await _require_application_permission(ctx, db, app, "can_manage_members")
 
     if app.project_id:
         return {"application_id": app.id, "project_id": app.project_id, "created": False}
 
+    creator = (await db.execute(
+        select(User)
+        .join(UserTenant, UserTenant.user_id == User.id)
+        .where(
+            User.id == app.created_by,
+            UserTenant.tenant_id == app.tenant_id,
+            UserTenant.status == 1,
+        )
+    )).scalar_one_or_none()
+    if not creator:
+        raise HTTPException(409, "应用创建者不是当前组织的有效成员")
+
     project = Project(
         name=app.app_name or app.app_code or f"应用 {app.id}",
         description=f"应用「{app.app_name or app.app_code or app.id}」的 Git/GitHub 集成项目",
-        user_id=ctx.user.id,
+        user_id=creator.id,
         tenant_id=ctx.tenant_id,
     )
     db.add(project)
     await db.flush()
-    db.add(ProjectMember(project_id=project.id, user_id=ctx.user.id, role="owner"))
+    db.add(ProjectMember(project_id=project.id, user_id=creator.id, role="owner"))
     app.project_id = project.id
     await db.commit()
     await db.refresh(app)
@@ -748,6 +764,7 @@ async def deploy_from_artifact(
         .where(
             AIChatArtifact.id == payload.artifact_id,
             AIChatSession.tenant_id == ctx.tenant_id,
+            AIChatSession.user_id == ctx.user.id,
         )
     )).one_or_none()
     if not row:
@@ -844,6 +861,7 @@ async def deploy_from_artifact(
     ).scalar_one_or_none()
 
     if reused:
+        await _require_application_permission(ctx, db, reused, Action.EDIT)
         # 增量合并 config (按 code 并集模型/表单/角色/字典/权限), 保留 apaas_app_id
         try:
             merged_data = _merge_preview_data(
@@ -929,6 +947,7 @@ async def deploy_status(
     if not app:
         raise HTTPException(status_code=404, detail="task 对应的应用不存在或不属于当前租户")
 
+    await _require_application_permission(ctx, db, app, Action.VIEW)
     status = app.status or "draft"
     progress_map = {
         "draft": 10,

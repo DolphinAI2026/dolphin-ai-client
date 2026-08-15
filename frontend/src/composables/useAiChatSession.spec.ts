@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
 import { createAiChatSseReducer, useAiChatSession } from './useAiChatSession'
 import type { AIChatArtifact, AIChatMessage, AIChatSession, AIChatToolCall } from '@/api/aiChat'
@@ -104,6 +104,11 @@ describe('createAiChatSseReducer', () => {
 })
 
 describe('useAiChatSession', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.clearAllMocks()
+  })
+
   it('filters and creates sessions with the requested assistant profile', async () => {
     vi.mocked(aiChatApi.listSessions).mockResolvedValueOnce({ sessions: [] })
     vi.mocked(aiChatApi.createSession).mockResolvedValueOnce({
@@ -204,5 +209,45 @@ describe('useAiChatSession', () => {
         },
       },
     ])
+  })
+
+  it('polls a running send every three seconds and clears the stuck working state', async () => {
+    vi.useFakeTimers()
+    const runningSession = makeSession()
+    vi.mocked(aiChatApi.createSession).mockResolvedValueOnce(runningSession)
+    vi.mocked(aiChatApi.getRunStatus).mockResolvedValue({ running: false, last_seq: 1, run_id: null })
+    vi.mocked(aiChatApi.getSession).mockResolvedValue({
+      session: runningSession,
+      messages: [{
+        id: 101,
+        session_id: runningSession.id,
+        role: 'user',
+        content: 'hello',
+        created_at: null,
+      }],
+      tool_calls: [],
+      attachments: [],
+      artifacts: [],
+    })
+    vi.mocked(aiChatApi.sendMessage).mockImplementationOnce((_id, _body, options) => new Promise<void>((_resolve, reject) => {
+      options.signal?.addEventListener('abort', () => {
+        const error = new Error('aborted')
+        error.name = 'AbortError'
+        reject(error)
+      })
+    }))
+
+    const session = useAiChatSession()
+    const sendPromise = session.send('hello')
+    await vi.advanceTimersByTimeAsync(2999)
+    expect(aiChatApi.getRunStatus).not.toHaveBeenCalled()
+    expect(session.sending.value).toBe(true)
+
+    await vi.advanceTimersByTimeAsync(1)
+    await sendPromise
+
+    expect(aiChatApi.getRunStatus).toHaveBeenCalledWith(runningSession.id)
+    expect(session.sending.value).toBe(false)
+    expect(session.agentMessages.value).toMatchObject([{ kind: 'user', content: 'hello' }])
   })
 })
