@@ -26,13 +26,11 @@ export function createLatestRailNavigationIntent() {
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  checkAndPromptUpdate,
   getDesktopState,
   resolveDesktopProductScope,
   type DesktopWorkspaceEntryScope,
 } from '@/utils/desktop'
 import { useUserStore } from '@/stores/user'
-import { useThemeStore } from '@/stores/theme'
 import { useCodeApplicationsStore } from '@/stores/codeApplications'
 import {
   desktopModeLabel,
@@ -53,6 +51,7 @@ import { aiChatApi, type AIChatSession } from '@/api/aiChat'
 import {
   CODE_APPLICATION_SOURCE_CHANGED_EVENT,
   codeRuntimeApi,
+  loadStoredCodeApplicationSource,
   type CodeApplicationSource,
   type CodeExecutionLocation,
 } from '@/api/codeRuntime'
@@ -84,11 +83,10 @@ const props = defineProps<{ collapsed?: boolean }>()
 const route = useRoute()
 const router = useRouter()
 const user = useUserStore()
-const theme = useThemeStore()
 const modeStore = useModeStore()
 const codeApplications = useCodeApplicationsStore()
 const codeApplicationSource = ref<CodeApplicationSource>(
-  'remote',
+  __DESKTOP__ ? loadStoredCodeApplicationSource('local') : 'remote',
 )
 const productAvailability = ref<ProductAvailability>({ builder: true, code: true })
 
@@ -534,14 +532,6 @@ const NAV = computed<NavItem[]>(() => {
   return items.filter(item => !desktopHidden(item.path))
 })
 // 桌面包不含 admin-spa, /platform-admin 内嵌 iframe 会白屏; 桌面下直接进自渲染的配置页 /platform-envs。
-const platformNavItem: NavItem = __DESKTOP__
-  ? { key: 'platform', label: '平台配置', icon: 'shield', path: '/platform-envs' }
-  : { key: 'platform', label: '平台管理', icon: 'shield', path: '/platform-admin' }
-
-// 三模式共用的「能力中心」入口 → hub 页(技能/知识/MCP/AI网关 4 tab)
-const hubNavItem: NavItem = { key: 'hub', label: '能力中心', icon: 'spark', path: '/hub' }
-const desktopSettingsItem = { path: '/desktop-settings' }
-
 const userAccount = computed(() => user.user?.username || '')
 const userName = computed(() => user.user?.display_name || userAccount.value || '未登录')
 const userAvatarText = computed(() => Array.from(userName.value.trim())[0]?.toUpperCase() || 'U')
@@ -587,13 +577,6 @@ const currentTenantLabel = computed(() => {
     tenant_id: user.tenantId,
   })
 })
-const isDark = computed(() => theme.mode === 'dark')
-const platformActive = computed(() => route.path.startsWith(platformNavItem.path))
-const platformHref = computed(() => resolveHref(platformNavItem.path))
-// 桌面: 租户管理员就能进 /platform-envs 配自己的 LLM/aPaaS(每人独立租户)。
-// 在线版: 那条入口指向 admin-spa(仅平台管理员), 保持 isPlatformAdmin 避免租户管理员点进去被弹。
-const platformEntryVisible = computed(() => __DESKTOP__ ? user.isTenantAdmin : user.isPlatformAdmin)
-
 const userMenuOpen = ref(false)
 function toggleUserMenu(e: MouseEvent) {
   e.stopPropagation()
@@ -633,7 +616,6 @@ function onDesktopWorkspaceEntryScopeChanged(event: Event) {
 function onCodeApplicationSourceChanged(event: Event) {
   const source = (event as CustomEvent<CodeApplicationSource | undefined>).detail
   if (source !== 'local' && source !== 'remote') return
-  if (__DESKTOP__ && source === 'local') return
   codeApplicationSource.value = source
   refreshCodeRail()
 }
@@ -761,11 +743,6 @@ function switchMode(mode: AppMode) {
   router.push(MODE_META[mode].home)
 }
 
-function goPlatformAdmin() {
-  tenantMenuOpen.value = false
-  router.push(platformNavItem.path)
-}
-
 // 2026-05-23: rail nav 改 <a href> 让 Cmd+click / 中键 / 右键"在新标签中打开"
 // 真开 chrome tab — 跟 admin-spa AdminLayout 一致体验
 function resolveHref(path: string): string {
@@ -785,24 +762,7 @@ function onMenuClick(e: MouseEvent, item: NavItem) {
   goNav(item)
 }
 
-function onPlatformClick(e: MouseEvent) {
-  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
-    return
-  }
-  e.preventDefault()
-  goPlatformAdmin()
-}
-
-// __DESKTOP__/__APP_VERSION__ 是编译期常量, 但直接写进 <template> 会被 Vue 当成
-// 组件实例属性(_ctx.__DESKTOP__)而 Vite define 不替换点号后属性 → 永远 undefined。
-// 必须经脚本 const 暴露给模板。
 const isDesktop = __DESKTOP__
-const appVersion = __APP_VERSION__
-
-// 桌面端手动检查更新(在线版不渲染按钮)。silentIfNone=false → 已是最新也提示。
-function onCheckUpdate() {
-  void checkAndPromptUpdate({ silentIfNone: false })
-}
 
 function onLogout() {
   tenantMenuOpen.value = false
@@ -1010,108 +970,48 @@ function renderIcon(name: string): string {
       </div>
     </nav>
 
-    <!-- 能力中心(三模式共用入口): 技能 / 知识库 / MCP / AI 网关。常驻所有模式 → 切模式不丢这些能力。 -->
-    <a
-      class="rail-item rail-hub"
-      :href="resolveHref('/hub')"
-      :class="{ active: isActive('/hub') }"
-      title="能力中心(技能 / 知识库 / MCP / AI 网关)"
-      @click="onMenuClick($event, hubNavItem)"
-      @auxclick="onMenuClick($event, hubNavItem)"
-    >
-      <span class="rail-item-icon" v-html="renderIcon('spark')" />
-      <span class="rail-item-label">能力中心</span>
-    </a>
-
     <div class="rail-foot">
       <!-- 老的 .rail-collapse-btn 已移到顶部 brand 区，这里删掉减少重复入口 -->
 
       <div v-if="!effectiveCollapsed" class="rail-console" @click.stop>
-        <div class="rail-console-label">{{ isDesktop ? '当前组织' : '当前租户' }}</div>
-        <div class="tenant-switch-wrap" @click.stop>
-          <button
-            type="button"
-            class="tenant-switch"
-            :class="{ open: tenantMenuOpen }"
-            aria-haspopup="menu"
-            :aria-expanded="tenantMenuOpen"
-            @click="toggleTenantMenu"
-          >
-            <span class="tenant-icon" v-html="renderIcon('bldg')" />
-            <span class="tenant-name" :title="user.user?.tenant_name || currentTenantLabel">{{ currentTenantLabel }}</span>
-            <span class="tenant-arrow" v-html="renderIcon('chevronDown')" />
-          </button>
-          <div v-if="tenantMenuOpen" class="tenant-menu" role="menu">
+        <!-- 组织切换、平台/桌面配置和能力入口统一收进设置页。 -->
+        <div v-show="userMenuOpen" class="rail-user-menu">
+        <div class="user-menu-tenant" @click.stop>
+          <div class="user-menu-tenant-label">{{ isDesktop ? '当前组织' : '当前租户' }}</div>
+          <div class="tenant-switch-wrap">
             <button
-              v-for="tenant in tenantOptions"
-              :key="tenant.tenant_id"
               type="button"
-              class="tenant-option"
-              :class="{ active: String(tenant.tenant_id) === currentTenantValue }"
-              role="menuitem"
-              @click="selectTenant(String(tenant.tenant_id))"
+              class="tenant-switch"
+              :class="{ open: tenantMenuOpen }"
+              aria-haspopup="menu"
+              :aria-expanded="tenantMenuOpen"
+              @click="toggleTenantMenu"
             >
-              <span class="tenant-option-name" :title="tenant.tenant_name">{{ tenantLabel(tenant) }}</span>
-              <span v-if="tenantSubtitle(tenant)" class="tenant-option-code">{{ tenantSubtitle(tenant) }}</span>
+              <span class="tenant-icon" v-html="renderIcon('bldg')" />
+              <span class="tenant-name" :title="user.user?.tenant_name || currentTenantLabel">{{ currentTenantLabel }}</span>
+              <span class="tenant-arrow" v-html="renderIcon('chevronDown')" />
             </button>
-            <div v-if="!tenantOptions.length" class="tenant-empty">暂无可切换租户</div>
+            <div v-if="tenantMenuOpen" class="tenant-menu" role="menu">
+              <button
+                v-for="tenant in tenantOptions"
+                :key="tenant.tenant_id"
+                type="button"
+                class="tenant-option"
+                :class="{ active: String(tenant.tenant_id) === currentTenantValue }"
+                role="menuitem"
+                @click="selectTenant(String(tenant.tenant_id))"
+              >
+                <span class="tenant-option-name" :title="tenant.tenant_name">{{ tenantLabel(tenant) }}</span>
+                <span v-if="tenantSubtitle(tenant)" class="tenant-option-code">{{ tenantSubtitle(tenant) }}</span>
+              </button>
+              <div v-if="!tenantOptions.length" class="tenant-empty">暂无可切换组织</div>
+            </div>
           </div>
         </div>
 
-        <!-- 头像点开的菜单只保留账户操作，组织切换在左下角常驻。 -->
-        <div v-show="userMenuOpen" class="rail-user-menu">
-        <a
-          v-if="platformEntryVisible && !desktopHidden(platformNavItem.path)"
-          class="console-row platform-row"
-          :class="{ active: platformActive }"
-          :href="platformHref"
-          title="平台管理"
-          @click="onPlatformClick"
-          @auxclick="onPlatformClick"
-        >
-          <span class="console-row-icon" v-html="renderIcon('shield')" />
-          <span>平台管理</span>
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left:auto;opacity:0.5">
-            <path d="M7 17 17 7" />
-            <path d="M7 7h10v10" />
-          </svg>
-        </a>
-
-        <!-- 知识库已并入「得小帆·共性能力」hub(/hub?tab=knowledge), 不再单列 footer 入口 -->
-
-        <button
-          v-if="isDesktop"
-          type="button"
-          class="theme-row"
-          @click="go(desktopSettingsItem.path)"
-        >
-          <span class="theme-row-icon" v-html="renderIcon('settings')" />
-          <span class="theme-row-label">桌面设置</span>
-        </button>
-
-        <!-- v3 2026-05-20: 删主题色 picker 让 admin/frontend brand 始终一致蓝；只保留浅深切换 -->
-        <!-- 2026-05-21 整 row 改成 button — 之前 label 跟太阳 icon 视觉分离体验割裂。
-             现在 icon + 文字 + 切换方向提示一体，跟 admin-spa AdminLayout 一致 -->
-        <button
-          type="button"
-          class="theme-row"
-          :aria-label="isDark ? '切换到浅色模式' : '切换到深色模式'"
-          @click="theme.toggle()"
-        >
-          <span class="theme-row-icon" v-html="renderIcon(isDark ? 'moon' : 'sun')" />
-          <span class="theme-row-label">{{ isDark ? '深色模式 · 切到浅色' : '浅色模式 · 切到深色' }}</span>
-        </button>
-
-        <!-- 桌面端: 版本号 + 手动检查更新(在线版不渲染) -->
-        <button
-          v-if="isDesktop"
-          type="button"
-          class="theme-row"
-          :title="`当前版本 v${appVersion} · 点击检查更新`"
-          @click="onCheckUpdate"
-        >
-          <span class="theme-row-icon" v-html="renderIcon('refresh')" />
-          <span class="theme-row-label">检查更新<span v-if="appVersion" class="rail-version">v{{ appVersion }}</span></span>
+        <button type="button" class="console-row settings-entry-row" @click="go(isDesktop ? '/desktop-settings' : '/settings?section=ai')">
+          <span class="console-row-icon" v-html="renderIcon('settings')" />
+          <span>设置</span>
         </button>
 
         <button type="button" class="console-row logout-row" title="退出登录" @click="onLogout">
@@ -1633,7 +1533,7 @@ function renderIcon(name: string): string {
   font-weight: var(--fw-medium, 500);
   cursor: pointer;
   text-align: left;
-  /* v3 2026-05-20: 兼容 <a> 元素（平台管理行用 a 标签）
+  /* v3 2026-05-20: 兼容历史链接行
      去掉 <a> 默认下划线，跟其他 console-row（button）视觉一致 */
   text-decoration: none;
   transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
@@ -2220,6 +2120,20 @@ html[data-theme="dark"] .rail-item { color: #a8b5c8; }
   border: 1px solid var(--line-2, #333); border-radius: 10px;
   background: var(--surface-1, var(--surface, #161616)); padding: 8px; margin-bottom: 8px;
 }
+.user-menu-tenant {
+  padding: 2px 2px 8px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+.user-menu-tenant-label {
+  margin: 0 8px 5px;
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.settings-entry-row { margin-top: 2px; }
 .account-toggle {
   display: flex; align-items: center; gap: 10px; width: 100%;
   border: 1px solid transparent; background: none; cursor: pointer;

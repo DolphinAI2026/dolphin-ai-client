@@ -552,10 +552,9 @@ describe('route redirect tenant context', () => {
   })
 
   it.each([
-    ['/skills', '/hub', { tab: 'skills' }],
-    ['/settings', '/platform-envs', { tab: 'envs' }],
+    ['/skills', '/skills', {}],
     ['/work/42', '/chat', { app_id: '42' }],
-    ['/knowledge', '/hub', { tab: 'knowledge' }],
+    ['/knowledge', '/knowledge', {}],
     ['/generate/42', '/chat', { deploy_app_id: '42' }],
   ])('preserves tenant context through %s redirects', async (sourcePath, targetPath, redirectQuery) => {
     const { memoryRouter, switchTenantContext } = createRedirectRouter()
@@ -600,6 +599,16 @@ describe('route redirect tenant context', () => {
     expect(memoryRouter.currentRoute.value.path).toBe('/')
     expect(memoryRouter.currentRoute.value.query.tenantId).toBe(currentUuid)
     expect(switchTenantContext).not.toHaveBeenCalled()
+  })
+})
+
+describe('unified settings route', () => {
+  it('does not require tenant URL context and preserves the selected section', async () => {
+    const { memoryRouter } = createRedirectRouter()
+    await memoryRouter.push('/settings?section=system&tenantId=stale')
+    expect(memoryRouter.currentRoute.value.path).toBe('/settings')
+    expect(memoryRouter.currentRoute.value.query.section).toBe('system')
+    expect(memoryRouter.currentRoute.value.query.tenantId).toBeUndefined()
   })
 })
 

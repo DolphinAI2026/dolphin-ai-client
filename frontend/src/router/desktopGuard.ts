@@ -41,9 +41,35 @@ const DESKTOP_WORKSPACE_SCOPE_EXEMPT_PATHS = new Set([
   '/desktop-setup',
   '/login',
   '/tenant-select',
+  '/workspace-catalog',
   '/desktop-settings',
   '/desktop-unavailable',
 ])
+
+// Desktop settings is the only local configuration surface. These routes are
+// retained for web compatibility and old bookmarks, but must never mount the
+// tenant-scoped Builder settings pages inside the desktop shell.
+const DESKTOP_LEGACY_SETTINGS_PATHS = new Set([
+  '/settings',
+  '/platform-envs',
+  '/skills',
+  '/knowledge',
+  '/admin/mcp',
+  '/hub',
+])
+
+export function resolveDesktopSettingsRedirect(
+  isDesktop: boolean,
+  targetPath: string,
+): string | null {
+  if (!isDesktop) return null
+  const isLegacyPath = DESKTOP_LEGACY_SETTINGS_PATHS.has(targetPath)
+    || targetPath.startsWith('/skills/')
+    || targetPath.startsWith('/knowledge/')
+    || targetPath.startsWith('/admin/mcp/')
+  if (!isLegacyPath) return null
+  return '/desktop-settings'
+}
 
 export function resolveDesktopWorkspaceRedirect(
   scope: DesktopWorkspaceEntryScope,

@@ -21,6 +21,7 @@ import { getCachedDesktopState, getDesktopState, resolveDesktopProductScope } fr
 import {
   loadDesktopBootstrapDecision,
   resolveDesktopRedirect,
+  resolveDesktopSettingsRedirect,
   resolveDesktopWorkspaceRedirect,
 } from './desktopGuard'
 import { normalizeTenantPublicId, resolveTenantUrl } from './tenantUrlGuard'
@@ -170,18 +171,31 @@ export const routes: RouteRecordRaw[] = [
     {
       path: '/hub',
       name: 'CapabilitiesHub',
-      component: () => import('@/views/CapabilitiesHubPage.vue'),
+      redirect: to => {
+        const tab = String(Array.isArray(to.query.tab) ? to.query.tab[0] : to.query.tab || 'skills')
+        const target = tab === 'knowledge'
+          ? '/knowledge'
+          : tab === 'mcp'
+            ? '/admin/mcp'
+            : tab === 'models' || tab === 'gateway'
+              ? '/settings'
+              : '/skills'
+        const query = target === '/settings'
+          ? { ...to.query, section: 'ai' }
+          : (() => {
+              const next = { ...to.query }
+              delete next.tab
+              return next
+            })()
+        return { path: target, query, hash: to.hash }
+      },
       meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true, product: 'builder' }
     },
     {
-      // 技能库已并入 hub;老链接 / router.push('/skills') 重定向到 hub 的技能 tab
+      // 技能库由统一设置页进入；保留直达路径兼容旧书签。
       path: '/skills',
       name: 'Skills',
-      redirect: to => ({
-        path: '/hub',
-        query: { ...to.query, tab: 'skills' },
-        hash: to.hash,
-      }),
+      component: () => import('@/views/SkillLibraryPage.vue'),
       meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
     },
     {
@@ -211,21 +225,8 @@ export const routes: RouteRecordRaw[] = [
     {
       path: '/settings',
       name: 'Settings',
-      redirect: to => {
-        const rawTab = Array.isArray(to.query.tab) ? to.query.tab[0] : to.query.tab
-        const tab = String(rawTab || 'llm')
-        if (tab === 'envs') {
-          return { path: '/platform-envs', query: { ...to.query, tab: 'envs' }, hash: to.hash }
-        }
-        if (tab === 'assistant') {
-          return { path: '/platform-envs', query: { ...to.query, tab: 'assistant' }, hash: to.hash }
-        }
-        if (tab === 'team' || tab === 'members') {
-          return { path: '/tenant-users', query: { ...to.query }, hash: to.hash }
-        }
-        return { path: '/platform-envs', query: { ...to.query, tab: 'llm' }, hash: to.hash }
-      },
-      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true, product: 'builder' }
+      component: () => import('@/views/SettingsHubPage.vue'),
+      meta: { requiresAuth: true, tenantContext: 'none', navExpanded: true }
     },
     {
       path: '/coding',
@@ -268,6 +269,11 @@ export const routes: RouteRecordRaw[] = [
       path: '/platform-envs',
       name: 'PlatformEnvs',
       component: () => import('@/views/PlatformEnvs.vue'),
+      // The settings hub links to a single-purpose view. Keep the old
+      // unqualified route as the compatibility page with both tabs.
+      props: route => ({
+        only: route.query.tab === 'llm' ? 'llm' : route.query.tab === 'envs' ? 'envs' : undefined,
+      }),
       meta: { requiresAuth: true, tenantContext: 'required', requiresTenantAdmin: true, navExpanded: true, product: 'builder' }
     },
     {
@@ -289,14 +295,10 @@ export const routes: RouteRecordRaw[] = [
       meta: { requiresAuth: true, tenantContext: 'none', requiresPlatformAdmin: true, navExpanded: true, desktop: 'hidden', product: 'builder' }
     },
     {
-      // 知识库已并入 hub;老链接重定向到 hub 的知识 tab(hub 内按 isPlatformAdmin 过滤可见性)
+      // 知识库由统一设置页进入；保留直达路径兼容旧书签。
       path: '/knowledge',
       name: 'knowledge-base',
-      redirect: to => ({
-        path: '/hub',
-        query: { ...to.query, tab: 'knowledge' },
-        hash: to.hash,
-      }),
+      component: () => import('@/views/KnowledgeBasePage.vue'),
       meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
     },
     ...desktopRoutes,
@@ -354,6 +356,12 @@ export function installRouterGuards(targetRouter: Router): void {
         next({ path: desktopDecision.redirect, replace: true })
         return
       }
+    }
+
+    const settingsRedirect = resolveDesktopSettingsRedirect(true, to.path)
+    if (settingsRedirect) {
+      next({ path: settingsRedirect, replace: true })
+      return
     }
 
     const workspaceEntryScope = resolveDesktopProductScope(getCachedDesktopState()?.config)

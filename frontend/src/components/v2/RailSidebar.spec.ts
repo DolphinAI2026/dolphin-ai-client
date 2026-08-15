@@ -249,13 +249,13 @@ describe('RailSidebar unified session source (SP2b)', () => {
     expect(railSidebarSource).toContain('@click="selectTenant(String(tenant.tenant_id))"')
   })
 
-  it('keeps the desktop organization switcher directly reachable in the rail footer', () => {
-    const tenantSwitcher = railSidebarSource.indexOf('<div class="tenant-switch-wrap" @click.stop>')
+  it('keeps organization switching inside the unified account menu', () => {
+    const tenantSwitcher = railSidebarSource.indexOf('<div class="user-menu-tenant" @click.stop>')
     const userMenu = railSidebarSource.indexOf('<div v-show="userMenuOpen" class="rail-user-menu">')
 
     expect(tenantSwitcher).toBeGreaterThan(-1)
     expect(userMenu).toBeGreaterThan(-1)
-    expect(tenantSwitcher).toBeLessThan(userMenu)
+    expect(tenantSwitcher).toBeGreaterThan(userMenu)
   })
 
   it('listens for Code rail refresh events from the app list', () => {
@@ -294,18 +294,12 @@ describe('RailSidebar tenant navigation', () => {
 })
 
 describe('RailSidebar desktop settings', () => {
-  it('桌面用户菜单提供桌面设置且 Web 不显示', () => {
-    const settingsClick = railSidebarSource.indexOf('@click="go(desktopSettingsItem.path)"')
-    const settingsButtonStart = railSidebarSource.lastIndexOf('<button', settingsClick)
-    const settingsButtonEnd = railSidebarSource.indexOf('</button>', settingsClick)
-    const settingsButtonSource = railSidebarSource.slice(settingsButtonStart, settingsButtonEnd)
-    const themeToggle = railSidebarSource.indexOf('@click="theme.toggle()"')
-
-    expect(railSidebarSource).toContain("path: '/desktop-settings'")
-    expect(settingsClick).toBeGreaterThan(-1)
-    expect(settingsButtonSource).toContain('v-if="isDesktop"')
-    expect(settingsButtonSource).toContain("renderIcon('settings')")
-    expect(settingsButtonSource).toContain('桌面设置')
-    expect(settingsClick).toBeLessThan(themeToggle)
+  it('uses one settings entry and removes duplicate top-level capability entries', () => {
+    expect(railSidebarSource).toContain("@click=\"go(isDesktop ? '/desktop-settings' : '/settings?section=ai')\"")
+    expect(railSidebarSource).toContain('<span>设置</span>')
+    expect(railSidebarSource).not.toContain('能力中心</span>')
+    expect(railSidebarSource).not.toContain('<span>平台管理</span>')
+    expect(railSidebarSource).not.toContain('桌面设置</span>')
+    expect(railSidebarSource).not.toContain("@click=\"theme.toggle()\"")
   })
 })

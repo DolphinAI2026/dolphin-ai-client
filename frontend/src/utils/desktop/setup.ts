@@ -70,29 +70,6 @@ export interface DesktopStateSnapshot {
   error: { code: string; message: string } | null
 }
 
-export type DesktopSetupStep = 'login_service' | 'local_storage'
-export type DesktopSetupRecovery = 'none' | 'edit_config' | 'retry_start'
-export type DesktopSetupEvent = 'next' | 'back' | 'pick_directory' | 'poll_tick' | 'ready'
-
-export interface DesktopSetupViewDecision {
-  rootDir: string
-  directoryEditable: boolean
-  recovery: DesktopSetupRecovery
-}
-
-export interface DesktopSetupMachineState {
-  scope: DesktopSetupScope
-  step: DesktopSetupStep
-}
-
-export interface DesktopSetupTransition {
-  step: DesktopSetupStep
-  pickerRequests: 0 | 1
-  pollAfterMs: number | null
-  stopPolling: boolean
-  navigation: null
-}
-
 export const DESKTOP_LOGIN_SERVICES: readonly DesktopLoginServiceOption[] = [
   { mode: 'control_plane', label: 'AI中台', defaultUrl: 'https://om-demo.dfy.definesys.cn', enabled: true },
   { mode: 'apaas', label: 'aPaaS平台', defaultUrl: 'https://apaas-trial.definesys.cn/backend', enabled: true },
@@ -125,45 +102,6 @@ export function buildDesktopSetupInput(
   }
 }
 
-export function resolveDesktopSetupView(state: DesktopStateSnapshot): DesktopSetupViewDecision {
-  const directoryEditable = state.setup_scope === 'full'
-  const recovery = state.error?.code === 'DESKTOP_SETUP_CONFIG_INVALID'
-    ? 'edit_config'
-    : state.phase === 'failed'
-      ? 'retry_start'
-      : 'none'
-
-  return {
-    rootDir: state.config?.root_dir || state.default_root_dir,
-    directoryEditable,
-    recovery,
-  }
-}
-
-export function transitionDesktopSetup(
-  state: DesktopSetupMachineState,
-  event: DesktopSetupEvent,
-): DesktopSetupTransition {
-  const step = event === 'next' && state.scope === 'full'
-    ? 'local_storage'
-    : event === 'back'
-      ? 'login_service'
-      : state.step
-  const pickerRequests = event === 'pick_directory'
-    && state.scope === 'full'
-    && state.step === 'local_storage'
-    ? 1
-    : 0
-
-  return {
-    step,
-    pickerRequests,
-    pollAfterMs: event === 'poll_tick' ? 300 : null,
-    stopPolling: event === 'ready',
-    navigation: null,
-  }
-}
-
 async function invokeDesktop<T>(
   command: string,
   args?: Record<string, unknown>,
@@ -173,16 +111,74 @@ async function invokeDesktop<T>(
   return invoke<T>(command, args)
 }
 
-export function desktopErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message.trim()) return error.message
-  if (error && typeof error === 'object') {
-    const message = 'message' in error ? String((error as { message?: unknown }).message ?? '') : ''
-    if (message.trim()) return message
-    const code = 'code' in error ? String((error as { code?: unknown }).code ?? '') : ''
-    if (code.trim()) return code
+function normalizeSensitiveKey(key: string): string {
+  return key.replace(/[^A-Za-z0-9]/g, '').toLowerCase()
+}
+
+function isSensitiveKey(key: string): boolean {
+  const normalized = normalizeSensitiveKey(key)
+  return normalized === 'authorization'
+    || normalized.endsWith('password')
+    || normalized.endsWith('token')
+    || normalized.endsWith('apikey')
+    || normalized.endsWith('secret')
+    || normalized.endsWith('encryptionkey')
+    || normalized.endsWith('privatekey')
+    || normalized.endsWith('authenticationresponse')
+}
+
+function containsSensitiveText(value: string): boolean {
+  if (/traceback/i.test(value) || /\bbearer\s+\S+/i.test(value)) return true
+  if (value.split(/[\s"'(),;[\]{}]+/).some((candidate) => {
+    const parts = candidate.split('.')
+    return parts.length === 3
+      && parts[0].startsWith('eyJ')
+      && parts.every(part => part.length > 0 && /^[A-Za-z0-9_-]+$/.test(part))
+  })) return true
+  for (let index = 0; index < value.length; index += 1) {
+    const match = value.slice(index).match(/^["']?([A-Za-z0-9 _-]{1,80})["']?\s*[:=]/)
+    if (match && isSensitiveKey(match[1])) return true
   }
-  if (typeof error === 'string' && error.trim()) return error
-  return fallback
+  for (const match of value.matchAll(/https?:\/\/[^\s"'<>]+/gi)) {
+    try {
+      const url = new URL(match[0].replace(/[,;\)\]\}]+$/, ''))
+      if (url.username || url.password) return true
+      if ([...url.searchParams.keys()].some(isSensitiveKey)) return true
+    } catch {
+      // Malformed URLs remain ordinary error text.
+    }
+  }
+  return false
+}
+
+function containsSensitiveValue(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(containsSensitiveValue)
+  if (value && typeof value === 'object') {
+    return Object.entries(value).some(([key, item]) => (
+      isSensitiveKey(key) || containsSensitiveValue(item)
+    ))
+  }
+  return typeof value === 'string' && containsSensitiveText(value)
+}
+
+export function desktopErrorMessage(error: unknown, fallback: string): string {
+  const raw = error instanceof Error
+    ? error.message
+    : error && typeof error === 'object' && 'message' in error
+      ? String((error as { message?: unknown }).message ?? '')
+      : typeof error === 'string'
+        ? error
+        : ''
+  if (!raw.trim()) {
+    const code = error && typeof error === 'object' && 'code' in error
+      ? String((error as { code?: unknown }).code ?? '').trim()
+      : ''
+    return code && !containsSensitiveText(code) ? code.slice(0, 240) : fallback
+  }
+  let parsed: unknown = raw
+  try { parsed = JSON.parse(raw) } catch { /* Plain text is checked below. */ }
+  if (containsSensitiveValue(parsed)) return fallback
+  return raw.split(/\r?\n/).find(line => line.trim())?.trim().slice(0, 240) || fallback
 }
 
 let cachedDesktopState: DesktopStateSnapshot | null = null

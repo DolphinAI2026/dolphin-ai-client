@@ -3,18 +3,16 @@ import {
   loadDesktopBootstrapDecision,
   resolveDesktopBootstrapRedirect,
   resolveDesktopRedirect,
+  resolveDesktopSettingsRedirect,
   resolveDesktopWorkspaceRedirect,
 } from './desktopGuard'
 import {
   DESKTOP_LOGIN_SERVICES,
   buildDesktopSetupInput,
-  resolveDesktopSetupView,
-  transitionDesktopSetup,
-  type DesktopSetupMachineState,
+  desktopErrorMessage,
 } from '@/utils/desktop/setup'
 import routerSource from './index.ts?raw'
 import setupWizardSource from '@/views/DesktopSetupWizard.vue?raw'
-import * as setupWizardModule from '@/views/DesktopSetupWizard.vue'
 import loginSource from '@/views/Login.vue?raw'
 import * as loginModule from '@/views/Login.vue'
 import desktopSettingsSource from '@/views/DesktopSettings.vue?raw'
@@ -117,56 +115,56 @@ describe('resolveDesktopRedirect', () => {
     expect(settingsRouteStart).toBeGreaterThan(-1)
     expect(settingsRouteSource).toContain("name: 'DesktopSettings'")
     expect(settingsRouteSource).toContain("component: () => import('@/views/DesktopSettings.vue')")
+    expect(settingsRouteSource).not.toContain("path: '/settings'")
+    expect(settingsRouteSource).not.toContain("section: 'desktop'")
     expect(settingsRouteSource).toContain("meta: { requiresAuth: true, tenantContext: 'none' }")
+  })
+
+  it('桌面设置提供关于、版本与手动更新入口', () => {
+    expect(desktopSettingsSource).toContain("label: '关于与更新'")
+    expect(desktopSettingsSource).toContain('当前版本')
+    expect(desktopSettingsSource).toContain('__APP_VERSION__')
+    expect(desktopSettingsSource).toContain('checkAndPromptUpdate({ silentIfNone: false })')
+    expect(desktopSettingsSource).toContain('仅桌面客户端可用')
   })
 
   it('登录页显示桌面服务摘要并通过 packaged setup 更改服务', () => {
     expect(loginSource).toContain('desktopService.label')
     expect(loginSource).toContain('desktopService.host')
     expect(loginSource).toContain('更改登录服务')
-    expect(loginSource).toContain('new URL(snapshot.config.login.base_url).host')
+    expect(loginSource).toContain('const loginUrl = discovery?.auth.login_url || config.login.base_url')
+    expect(loginSource).toContain('host: new URL(loginUrl).host')
     const logoutIndex = loginSource.indexOf('userStore.logout()')
     const setupIndex = loginSource.indexOf('await enterDesktopLoginSetup()')
     expect(logoutIndex).toBeGreaterThan(-1)
     expect(setupIndex).toBeGreaterThan(logoutIndex)
   })
 
-  it('桌面设置只修改登录服务且本地根目录保持只读', () => {
+  it('桌面设置重新发现远程能力并保持本地根目录只读', () => {
     expect(desktopSettingsSource).toContain('<BuilderFrame')
-    expect(desktopSettingsSource).toContain('DESKTOP_LOGIN_SERVICES')
-    expect(desktopSettingsSource).toContain('service.label')
     expect(desktopSettingsSource).toContain('服务地址')
     expect(desktopSettingsSource).toContain('readonly')
-    expect(desktopSettingsSource).toContain('不提供编辑或迁移操作')
     expect(desktopSettingsSource).toContain("@click=\"openPath('root')\"")
     expect(desktopSettingsSource).toContain("@click=\"openPath('logs')\"")
     expect(desktopSettingsSource).toContain('await openDesktopPath(kind)')
     expect(desktopSettingsSource).not.toContain('pickDirectory')
-    expect(desktopSettingsSource).not.toContain('saveDesktopSetup')
-    expect(desktopSettingsSource).not.toContain('root_dir:')
+    expect(desktopSettingsSource).toContain('await discoverDesktopService(serviceUrl.value.trim())')
+    expect(desktopSettingsSource).toContain('await saveDesktopSetup(buildDesktopSetupInput(')
+    expect(desktopSettingsSource).toContain("rootDir.value || snapshot.value?.default_root_dir || ''")
     expect(desktopSettingsSource).toContain('new URL(value.trim())')
     expect(desktopSettingsSource).toContain("['http:', 'https:'].includes(url.protocol)")
-
-    const logoutIndex = desktopSettingsSource.indexOf('user.logout()')
-    const updateIndex = desktopSettingsSource.indexOf('await updateDesktopLogin({')
-    expect(logoutIndex).toBeGreaterThan(-1)
-    expect(updateIndex).toBeGreaterThan(logoutIndex)
   })
 
-  it('桌面设置入队成功保持锁定且仅 invoke 失败解锁', () => {
-    const handlerStart = desktopSettingsSource.indexOf('async function saveLoginSettings()')
+  it('桌面设置原生重连期间保持锁定，ready 或失败后解锁', () => {
+    const handlerStart = desktopSettingsSource.indexOf('async function saveConnection()')
     const handlerEnd = desktopSettingsSource.indexOf('onMounted(() =>', handlerStart)
     const handlerSource = desktopSettingsSource.slice(handlerStart, handlerEnd)
-    const catchIndex = handlerSource.indexOf('} catch {')
-    const unlockIndex = handlerSource.indexOf('saving.value = false')
 
     expect(handlerStart).toBeGreaterThan(-1)
     expect(handlerSource).toContain('saving.value = true')
-    expect(handlerSource).not.toContain('finally')
-    expect(catchIndex).toBeGreaterThan(-1)
-    expect(unlockIndex).toBeGreaterThan(catchIndex)
-    expect(handlerSource.match(/saving\.value = false/g)).toHaveLength(1)
-    expect(desktopSettingsSource).toContain(':disabled="saving || Boolean(urlError)"')
+    expect(handlerSource).toContain("if (__DESKTOP_WEB_PREVIEW__ || snapshot.value?.phase === 'ready'")
+    expect(handlerSource.match(/saving\.value = false/g)).toHaveLength(2)
+    expect(desktopSettingsSource).toContain(':disabled="!discovery || Boolean(urlError)"')
   })
 
   it('登录服务切换成功保持锁定且旧 sidecar 登录入口全部停用', () => {
@@ -178,7 +176,7 @@ describe('resolveDesktopRedirect', () => {
     const formStart = loginSource.indexOf('<el-form')
     const formEnd = loginSource.indexOf('</el-form>', formStart)
     const formSource = loginSource.slice(formStart, formEnd)
-    const refreshStart = loginSource.indexOf('const refreshCaptcha = async () =>')
+    const refreshStart = loginSource.indexOf('const refreshCaptcha = async')
     const refreshEnd = loginSource.indexOf('async function loadDesktopService()', refreshStart)
     const refreshSource = loginSource.slice(refreshStart, refreshEnd)
     const loginHandlerStart = loginSource.indexOf('const handleLogin = async () =>')
@@ -345,129 +343,29 @@ describe('resolveDesktopRedirect', () => {
         root_dir: 'C:\\Users\\Administrator\\DolphinCode',
         login: { mode: 'control_plane', base_url: 'https://example.com' },
         workspace_entry_scope: 'ai_platform',
+        discovery_url: 'https://example.com',
+        discovery: null,
+        local_ai_enabled: true,
       })
   })
 
-  it('full scope 固定为两步并开放本地目录字段', () => {
-    expect(resolveDesktopSetupView({
-      phase: 'needs_setup',
-      setup_scope: 'full',
-      config: null,
-      default_root_dir: 'C:\\Users\\Administrator\\DolphinCode',
-      error: null,
-    })).toEqual({
-      rootDir: 'C:\\Users\\Administrator\\DolphinCode',
-      directoryEditable: true,
-      recovery: 'none',
-    })
+  it('初始化页只输入远程地址并消费服务发现结果', () => {
+    expect(setupWizardSource).toContain('await discoverDesktopService(serviceUrl.value.trim())')
+    expect(setupWizardSource).toContain('discovery.value.auth.provider')
+    expect(setupWizardSource).toContain('discovery.value.auth.login_url')
+    expect(setupWizardSource).toContain('saveDesktopSetup(buildDesktopSetupInput(')
+    expect(setupWizardSource).not.toContain('pickDirectory')
   })
 
-  it('login_only 只显示登录服务并保留已保存 root', () => {
-    expect(resolveDesktopSetupView({
-      phase: 'needs_setup',
-      setup_scope: 'login_only',
-      config: {
-        schema_version: 1,
-        root_dir: 'D:\\DolphinCode',
-        login: { mode: 'apaas', base_url: 'https://apaas.example.com/backend' },
-        workspace_entry_scope: 'both',
-      },
-      default_root_dir: 'C:\\Users\\Administrator\\DolphinCode',
-      error: null,
-    })).toEqual({
-      rootDir: 'D:\\DolphinCode',
-      directoryEditable: false,
-      recovery: 'none',
-    })
-  })
-
-  it('启动失败进入重试恢复，配置无效直接回到编辑表单', () => {
-    const baseState = {
-      setup_scope: 'full' as const,
-      config: null,
-      default_root_dir: 'C:\\Users\\Administrator\\DolphinCode',
-    }
-
-    expect(resolveDesktopSetupView({
-      ...baseState,
-      phase: 'failed',
-      error: { code: 'DESKTOP_SETUP_RUNTIME_START_FAILED', message: '启动失败' },
-    }).recovery).toBe('retry_start')
-    expect(resolveDesktopSetupView({
-      ...baseState,
-      phase: 'failed',
-      error: { code: 'DESKTOP_SETUP_CONFIG_INVALID', message: '目录无效' },
-    }).recovery).toBe('edit_config')
-  })
-
-  it('full setup 连续执行 next/back 驱动真实两步切换', () => {
-    let machine: DesktopSetupMachineState = { scope: 'full', step: 'login_service' }
-
-    const next = transitionDesktopSetup(machine, 'next')
-    expect(next.step).toBe('local_storage')
-    machine = { ...machine, step: next.step }
-
-    expect(transitionDesktopSetup(machine, 'back').step).toBe('login_service')
-  })
-
-  it('login_only 无 storage 且拒绝目录选择 effect', () => {
-    const machine = { scope: 'login_only' as const, step: 'login_service' as const }
-
-    expect(transitionDesktopSetup(machine, 'next').step).toBe('login_service')
-    expect(transitionDesktopSetup(machine, 'pick_directory').pickerRequests).toBe(0)
-  })
-
-  it('full 每次目录选择 event 只产生一次 picker effect', () => {
-    const machine = { scope: 'full' as const, step: 'local_storage' as const }
-
-    expect(transitionDesktopSetup(machine, 'pick_directory').pickerRequests).toBe(1)
-    expect(transitionDesktopSetup(machine, 'pick_directory').pickerRequests).toBe(1)
-  })
-
-  it('poll_tick 延迟 300ms，ready 停止并等待 Tauri 导航', () => {
-    const machine = { scope: 'full' as const, step: 'local_storage' as const }
-
-    expect(transitionDesktopSetup(machine, 'poll_tick')).toEqual({
-      step: 'local_storage',
-      pickerRequests: 0,
-      pollAfterMs: 300,
-      stopPolling: false,
-      navigation: null,
-    })
-    expect(transitionDesktopSetup(machine, 'ready')).toEqual({
-      step: 'local_storage',
-      pickerRequests: 0,
-      pollAfterMs: null,
-      stopPolling: true,
-      navigation: null,
-    })
-  })
-
-  it('向导真实交互消费统一 transition/effect', () => {
-    expect(setupWizardSource).toContain("transitionDesktopSetup(machineState(), 'next')")
-    expect(setupWizardSource).toContain("transitionDesktopSetup(machineState(), 'back')")
-    expect(setupWizardSource).toContain("transitionDesktopSetup(machineState(), 'pick_directory')")
-    expect(setupWizardSource).toContain("snapshot.phase === 'ready' ? 'ready' : 'poll_tick'")
-    expect(setupWizardSource).not.toContain('useRouter')
-  })
-
-  it('卸载后阻止 in-flight polling 重新调度', () => {
-    expect(setupWizardSource).toContain('if (polling || disposed) return')
-    expect(setupWizardSource).toContain('if (disposed) return')
-    expect(setupWizardSource).toContain('disposed = true')
+  it('初始化轮询使用 single-flight 且卸载后不再调度', () => {
+    expect(setupWizardSource).toContain('if (polling || disposed.value) return')
+    expect(setupWizardSource).toContain('polling = true')
+    expect(setupWizardSource).toContain('polling = false')
+    expect(setupWizardSource).toContain('if (!disposed.value) scheduleRefresh(')
     expect(setupWizardSource).toContain('onBeforeUnmount(disposePolling)')
   })
 
   it('失败页拒绝展示各种凭据语法、URL secret、JWT 和 traceback', () => {
-    const safeDesktopFailureMessage = (
-      setupWizardModule as typeof setupWizardModule & {
-        safeDesktopFailureMessage?: (error: unknown, fallback: string) => string
-      }
-    ).safeDesktopFailureMessage
-
-    expect(safeDesktopFailureMessage).toBeTypeOf('function')
-    if (!safeDesktopFailureMessage) return
-
     const fallback = '本地环境未能启动，请重试或查看日志'
     for (const sensitive of [
       'Authorization : Bearer auth-space',
@@ -482,9 +380,24 @@ describe('resolveDesktopRedirect', () => {
       'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.signature',
       'Traceback (most recent call last):\n  File "app.py", line 1',
     ]) {
-      expect(safeDesktopFailureMessage(sensitive, fallback)).toBe(fallback)
+      expect(desktopErrorMessage(sensitive, fallback)).toBe(fallback)
     }
-    expect(safeDesktopFailureMessage('sidecar 健康检查超时\nignored detail', fallback))
+    expect(desktopErrorMessage('sidecar 健康检查超时\nignored detail', fallback))
       .toBe('sidecar 健康检查超时')
+    expect(setupWizardSource).toContain('const stateErrorMessage = computed(() => desktopErrorMessage(')
+    expect(setupWizardSource).toContain('state.value?.error,')
+  })
+})
+
+describe('resolveDesktopSettingsRedirect', () => {
+  it('桌面端将旧设置入口统一收口到桌面设置', () => {
+    for (const path of ['/settings', '/platform-envs', '/skills', '/skills/example/workspace', '/knowledge', '/admin/mcp', '/hub']) {
+      expect(resolveDesktopSettingsRedirect(true, path)).toBe('/desktop-settings')
+    }
+  })
+
+  it('桌面端保留工作区目录入口，Web 端不拦截旧设置路径', () => {
+    expect(resolveDesktopSettingsRedirect(true, '/workspace-catalog')).toBeNull()
+    expect(resolveDesktopSettingsRedirect(false, '/settings')).toBeNull()
   })
 })
