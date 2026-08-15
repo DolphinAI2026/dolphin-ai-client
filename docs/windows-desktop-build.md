@@ -7,10 +7,10 @@ Windows sidecar。
 
 ```powershell
 # 本地绿色验证包（不进入正式发布目录）
-.\scripts\build-desktop-windows.ps1 -Version 0.2.66 -Bundle portable
+.\scripts\build-desktop-windows.ps1 -Version 0.2.70 -Bundle portable
 
 # Windows 正式 NSIS 安装包
-.\scripts\build-desktop-windows.ps1 -Version 0.2.66 -Bundle nsis
+.\scripts\build-desktop-windows.ps1 -Version 0.2.70 -Bundle nsis
 ```
 
 `-UsePreparedRuntimeAppliance`、`-SkipFrontendBuild`、`-SkipSidecarBuild` 和 `-SkipTauriBuild` 只用于确认对应
@@ -24,6 +24,13 @@ artifact，并在输出中标记该降级；标签构建（`DOLPHIN_RELEASE_BUIL
 
 ## GitHub 标签发布
 
+发布 `0.2.70` 时执行：
+
+```bash
+git tag v0.2.70
+git push github v0.2.70
+```
+
 正式包由 `.github/workflows/desktop-release.yml` 在 `vX.Y.Z` 标签或手动填写 `X.Y.Z` 后发布。它在构建前
 校验 updater 签名私钥，并在 Windows x64、macOS arm64、Linux x64 上分别从固定 revision 准备
 `agent-runtime`、`agentic-coding`、Superpowers、Builder 前端、Python 环境和固定版本 Codex，并在构建前
@@ -34,6 +41,9 @@ macOS 和 Linux appliance 使用已校验 SHA-256 的 `python-build-standalone` 
 三端只上传正式主包及
 Tauri updater 有效载荷；Release job 汇总为 `dist-desktop/publish/`，生成 `latest.json` 和
 `SHA256SUMS.txt` 后发布。
+
+正式工作流只接受纯 `X.Y.Z` / `vX.Y.Z`，会在创建 Release 前拒绝 `rc`、`beta` 和 build metadata；portable
+调试包仍可使用完整 SemVer 标记测试版本。
 
 GitHub Actions 需要以下 Secrets：`TAURI_SIGNING_PRIVATE_KEY`、可选的
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`、`DEFINESYS_GIT_USERNAME`、`DEFINESYS_GIT_TOKEN` 和默认
@@ -76,7 +86,7 @@ AppImage、Linux DEB、manifest 和 checksum 下载地址。旧 `desktop-windows
 ```powershell
 .\scripts\verify-desktop-windows-package.ps1 `
   -PackageRoot "C:\path\to\DolphinAI" `
-  -ExpectedVersion "0.2.66" `
+  -ExpectedVersion "0.2.70" `
   -ExpectedSourceRevision "<git-revision>"
 ```
 
@@ -85,9 +95,24 @@ AppImage、Linux DEB、manifest 和 checksum 下载地址。旧 `desktop-windows
 ```powershell
 node .\scripts\verify-desktop-release-brand.mjs `
   --root .\dist-desktop\windows `
-  --version 0.2.66 `
+  --version 0.2.70 `
   --platform windows
 ```
+
+## 0.2.70 Windows 候选包
+
+2026-08-16 已在原生 Windows 上从源码提交 `b768a2df4705459aad654d737c487bbec9a43ff3` 生成 NSIS 候选包：
+
+```text
+D:\downloads\dolphin-ai-build-0.2.70\dist-desktop\windows\dolphin-ai-0.2.70-windows-x86_64-setup.exe
+SHA-256: 03A53D2BE7516A94510BE9B1BCAA16E8A346DB1F40D2E2934CF18162B2F9739B
+大小: 202840890 bytes
+```
+
+候选包的 `ProductName` 为 `DolphinAI`，文件版本为 `0.2.70`；包内主程序、`dolphin-ai-sidecar.exe`、
+Runtime、Codex、Python、能力包和 Builder 入口均通过自动门禁。该本地候选包没有 Tauri updater 私钥和
+Windows 代码签名，只用于发布前验证；GitHub 标签构建必须生成签名 updater 产物。为避免覆盖当前客户端，
+本次未静默安装候选包，真实账号、本地应用和 Code 流式会话仍按下节执行。
 
 ## 客户端放行检查
 

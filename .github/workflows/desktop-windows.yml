@@ -60,23 +60,12 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           if (-not $env:DEFINESYS_GIT_USERNAME -or -not $env:DEFINESYS_GIT_TOKEN) { throw 'Internal Git read credentials are required.' }
-          $temporaryConfig = Join-Path $env:RUNNER_TEMP ("dolphin-internal-git-" + [Guid]::NewGuid().ToString('N') + '.config')
-          $previousGitConfig = $env:GIT_CONFIG_GLOBAL
-          try {
-            $env:GIT_CONFIG_GLOBAL = $temporaryConfig
-            $credentialUrl = "https://$($env:DEFINESYS_GIT_USERNAME):$($env:DEFINESYS_GIT_TOKEN)@git.dfy.definesys.cn/"
-            git config --global "url.$credentialUrl.insteadOf" 'https://git.dfy.definesys.cn/'
-            git clone $env:AGENT_RUNTIME_REPO_URL "$env:GITHUB_WORKSPACE\..\agent-runtime"
-            git -C "$env:GITHUB_WORKSPACE\..\agent-runtime" checkout --detach $env:AGENT_RUNTIME_REVISION
-            git clone $env:AGENTIC_CODING_REPO_URL "$env:GITHUB_WORKSPACE\..\agentic-coding"
-            git -C "$env:GITHUB_WORKSPACE\..\agentic-coding" checkout --detach $env:AGENTIC_CODING_REVISION
-          } finally {
-            if ($previousGitConfig) { $env:GIT_CONFIG_GLOBAL = $previousGitConfig } else { Remove-Item Env:GIT_CONFIG_GLOBAL -ErrorAction Stop }
-            Remove-Item -LiteralPath $temporaryConfig -Force -ErrorAction Stop
-          }
-          git clone $env:SUPERPOWERS_REPO_URL "$env:GITHUB_WORKSPACE\..\superpowers"
-          git -C "$env:GITHUB_WORKSPACE\..\superpowers" checkout --detach $env:SUPERPOWERS_REVISION
-          if (-not (Test-Path "$env:GITHUB_WORKSPACE\..\superpowers\.codex-plugin\plugin.json" -PathType Leaf)) { throw 'Fixed Superpowers source is incomplete.' }
+          & ./scripts/checkout-desktop-release-dependencies.ps1 `
+            -AgentRuntimeRepoUrl $env:AGENT_RUNTIME_REPO_URL -AgentRuntimeRevision $env:AGENT_RUNTIME_REVISION `
+            -AgenticCodingRepoUrl $env:AGENTIC_CODING_REPO_URL -AgenticCodingRevision $env:AGENTIC_CODING_REVISION `
+            -SuperpowersRepoUrl $env:SUPERPOWERS_REPO_URL -SuperpowersRevision $env:SUPERPOWERS_REVISION `
+            -GitUsername $env:DEFINESYS_GIT_USERNAME -GitToken $env:DEFINESYS_GIT_TOKEN `
+            -Workspace $env:GITHUB_WORKSPACE -RunnerTemp $env:RUNNER_TEMP
 
       - name: Build Builder and Python runtime dependencies
         shell: pwsh

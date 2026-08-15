@@ -10,16 +10,13 @@ param(
   [switch]$SkipSidecarBuild,
   [switch]$SkipTauriBuild
 )
-
 $ErrorActionPreference = "Stop"
-
 $IsWin = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
   [System.Runtime.InteropServices.OSPlatform]::Windows
 )
 if (-not $IsWin) {
   throw "Windows desktop packages must be built on Windows because PyInstaller cannot cross-compile the sidecar exe."
 }
-
 if ($env:CARGO_TARGET_DIR) {
   $env:CARGO_TARGET_DIR = $env:CARGO_TARGET_DIR.Trim()
 }

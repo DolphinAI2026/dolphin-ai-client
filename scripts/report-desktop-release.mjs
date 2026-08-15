@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 
-const semverPattern = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const releaseVersionPattern = /^\d+\.\d+\.\d+$/;
 
 function primaryOutputAssets(version) {
   const prefix = `dolphin-ai-${version}`;
@@ -32,7 +32,7 @@ function requiredAssets(version) {
 }
 
 function releaseVersion(tag) {
-  if (!tag?.startsWith('v') || !semverPattern.test(tag.slice(1))) {
+  if (!tag?.startsWith('v') || !releaseVersionPattern.test(tag.slice(1))) {
     throw new Error(`GITHUB_REF_NAME must be a vX.Y.Z SemVer tag: ${tag ?? ''}`);
   }
   return tag.slice(1);
@@ -157,6 +157,19 @@ async function selfTest() {
   const version = '0.2.70';
   const fetchFixture = (release) => async () => ({ ok: true, status: 200, json: async () => release });
   try {
+    for (const invalidTag of ['v0.2.70-rc.1', 'v0.2.70+build.7']) {
+      await expectFailure(
+        () => reportRelease({
+          repository: 'Mars-hub404/apaas-builder-ai',
+          tag: invalidTag,
+          token: 'test-token',
+          outputPath,
+          summaryPath,
+          fetchImpl: fetchFixture(releaseFixture(version)),
+        }),
+        'GITHUB_REF_NAME must be a vX.Y.Z SemVer tag',
+      );
+    }
     await writeFile(outputPath, 'output before failure\n');
     await writeFile(summaryPath, 'summary before failure\n');
     await assertUnchanged(

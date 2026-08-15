@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 
-const semverPattern = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const releaseVersionPattern = /^\d+\.\d+\.\d+$/;
 
 function artifactNames(version) {
   const prefix = `dolphin-ai-${version}`;
@@ -21,7 +21,7 @@ function artifactNames(version) {
 }
 
 function normalizeTag(tag) {
-  if (!tag?.startsWith('v') || !semverPattern.test(tag.slice(1))) {
+  if (!tag?.startsWith('v') || !releaseVersionPattern.test(tag.slice(1))) {
     throw new Error(`Tag must be vX.Y.Z SemVer: ${tag ?? ''}`);
   }
   return tag.slice(1);
@@ -144,7 +144,7 @@ async function publishStagedOutput(staging, output, operations = {}) {
 export async function prepareRelease({ version, repository, tag, input, output, operations = {} }) {
   const rmImpl = operations.rm ?? rm;
   const warn = operations.warn ?? ((message) => console.warn(message));
-  if (!semverPattern.test(version ?? '')) {
+  if (!releaseVersionPattern.test(version ?? '')) {
     throw new Error(`Version must be X.Y.Z SemVer: ${version ?? ''}`);
   }
   if (normalizeTag(tag) !== version) {
@@ -237,6 +237,18 @@ async function expectFailure(action, expectedText) {
 async function selfTest() {
   const root = await mkdtemp(path.join(os.tmpdir(), 'dolphin-release-'));
   try {
+    for (const invalidVersion of ['0.2.70-rc.1', '0.2.70+build.7']) {
+      await expectFailure(
+        () => prepareRelease({
+          version: invalidVersion,
+          repository: 'Mars-hub404/apaas-builder-ai',
+          tag: `v${invalidVersion}`,
+          input: root,
+          output: path.join(root, 'invalid-output'),
+        }),
+        'Version must be X.Y.Z SemVer',
+      );
+    }
     const version = normalizeTag('v0.2.70');
     if (version !== '0.2.70') throw new Error('Tag normalization failed');
     const names = artifactNames(version);
