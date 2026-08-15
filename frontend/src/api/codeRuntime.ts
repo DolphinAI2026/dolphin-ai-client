@@ -112,6 +112,8 @@ type LegacyCreateCodeSessionFromApplicationRequest = Pick<
 export interface CodeRuntimeOpenResponse {
   session_id: string
   route_id: string
+  logical_application_id?: string | null
+  execution_location?: CodeExecutionLocation | null
   session_purpose: CodeSessionPurpose
   app_id: number | null
   external_application_id: string
@@ -123,6 +125,34 @@ export interface CodeRuntimeOpenResponse {
   cache_profile?: 'normal' | 'performance'
   browser_hot_frames?: number
   server_warm_sandboxes_per_user?: number
+}
+
+export interface CodeRuntimeOpenErrorContext {
+  shell_session_id: string
+  logical_application_id: string
+  execution_location: CodeExecutionLocation
+  session_purpose: CodeSessionPurpose
+  alternative_location?: CodeExecutionLocation | null
+  alternative_availability?: CodeLocationAvailability | null
+}
+
+export function codeRuntimeOpenErrorContext(error: any): CodeRuntimeOpenErrorContext | null {
+  const detail = error?.response?.data?.detail
+  const context = detail && typeof detail === 'object' ? detail.context : null
+  if (!context || (context.execution_location !== 'local' && context.execution_location !== 'remote')) {
+    return null
+  }
+  return context as CodeRuntimeOpenErrorContext
+}
+
+export function codeRuntimeErrorMessage(error: any, fallback: string): string {
+  const detail = error?.response?.data?.detail
+  if (detail && typeof detail === 'object') {
+    const code = String(detail.code || '').trim()
+    const message = String(detail.message || '').trim()
+    return [code, message].filter(Boolean).join(': ') || fallback
+  }
+  return String(detail || error?.message || fallback)
 }
 
 export type CodeWorkspaceOpenPhase = 'checking_project' | 'starting_runtime' | 'opening_workbench'

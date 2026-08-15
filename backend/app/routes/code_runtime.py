@@ -882,6 +882,29 @@ async def create_code_session_from_external_app(
             return await create_or_resume()
 
 
+def _code_location_error_detail(
+    session: AIChatSession,
+    location: dict[str, str],
+    *,
+    code: str,
+    message: str,
+    alternative_location: str | None = None,
+    alternative_availability: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "code": code,
+        "message": message,
+        "context": {
+            "shell_session_id": ensure_code_session_public_id(session),
+            "logical_application_id": location["logical_application_id"],
+            "execution_location": location["execution_location"],
+            "session_purpose": str(session.session_purpose or "standard"),
+            "alternative_location": alternative_location,
+            "alternative_availability": alternative_availability,
+        },
+    }
+
+
 @router.post("/sessions/{session_ref}/open")
 async def open_code_runtime_session(
     session_ref: str,
@@ -907,7 +930,12 @@ async def open_code_runtime_session(
             except CodeApplicationLocationUnavailableError as exc:
                 raise HTTPException(
                     status_code=exc.status_code,
-                    detail=f"{exc.code}: {exc}",
+                    detail=_code_location_error_detail(
+                        session,
+                        location,
+                        code=exc.code,
+                        message=str(exc),
+                    ),
                 ) from exc
         uses_local_builder = bool(
             session
@@ -943,6 +971,17 @@ async def open_code_runtime_session(
                 auth_provider=auth_provider,
                 **open_kwargs,
             )
+            if (
+                uses_local_builder
+                and "runtime_session_id" in result
+                and not str(result.get("runtime_session_id") or "").strip()
+            ):
+                result["runtime_session_id"] = await _ensure_opened_local_runtime_agent_session(
+                    session,
+                    request,
+                    ctx,
+                    db,
+                )
         except HTTPException as exc:
             if (
                 session is not None
@@ -963,7 +1002,16 @@ async def open_code_runtime_session(
                 )
                 raise HTTPException(
                     status_code=exc.status_code,
-                    detail=f"{code}: 远程应用位置当前不可用",
+                    detail=_code_location_error_detail(
+                        session,
+                        location,
+                        code=code,
+                        message="远程应用位置当前不可用",
+                        alternative_location=(
+                            "local" if local_availability is not None else None
+                        ),
+                        alternative_availability=local_availability,
+                    ),
                 ) from exc
             raise
         if uses_local_builder:
@@ -978,6 +1026,12 @@ async def open_code_runtime_session(
         return {
             **result,
             **_resolved_code_sandbox_cache_config(),
+            "logical_application_id": (
+                location["logical_application_id"] if location is not None else None
+            ),
+            "execution_location": (
+                location["execution_location"] if location is not None else None
+            ),
             "session_purpose": str(
                 getattr(session, "session_purpose", "standard") or "standard"
             ),
@@ -1913,14 +1967,13 @@ async def list_code_runtime_rail_history(
     return result
 
 
-@router.post("/sessions/{session_id}/agent-sessions")
-async def create_code_runtime_agent_session(
-    session_id: str,
+async def _create_host_runtime_agent_session_locked(
+    session: AIChatSession,
+    binding: CodeRuntimeBinding,
     request: Request,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
+    ctx: AuthContext,
+    db: AsyncSession,
+) -> tuple[str, dict[str, Any]]:
     payload = await _runtime_json_request_for_session(
         session,
         binding,
@@ -1940,8 +1993,54 @@ async def create_code_runtime_agent_session(
     if not runtime_session_id:
         raise HTTPException(status_code=502, detail="Code runtime 未返回新会话 ID")
     binding.runtime_session_id = runtime_session_id
-    await _remember_runtime_agent_session(db, session, binding, runtime_session_id, payload)
-    await db.commit()
+    await _remember_runtime_agent_session(
+        db, session, binding, runtime_session_id, payload
+    )
+    return runtime_session_id, payload
+
+
+async def _ensure_opened_local_runtime_agent_session(
+    session: AIChatSession,
+    request: Request,
+    ctx: AuthContext,
+    db: AsyncSession,
+) -> str:
+    binding = (
+        await db.execute(
+            select(CodeRuntimeBinding).where(CodeRuntimeBinding.session_id == session.id)
+        )
+    ).scalar_one_or_none()
+    if binding is None or binding.id is None:
+        raise HTTPException(status_code=503, detail="本地 Runtime binding 不可用")
+    async with code_runtime_agent_activation_transaction(db, binding.id) as locked_binding:
+        runtime_session_id = str(locked_binding.runtime_session_id or "").strip()
+        if not runtime_session_id:
+            runtime_session_id, _ = await _create_host_runtime_agent_session_locked(
+                session,
+                locked_binding,
+                request,
+                ctx,
+                db,
+            )
+    return runtime_session_id
+
+
+@router.post("/sessions/{session_id}/agent-sessions")
+async def create_code_runtime_agent_session(
+    session_id: str,
+    request: Request,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
+    async with code_runtime_agent_activation_transaction(db, binding.id) as locked_binding:
+        runtime_session_id, payload = await _create_host_runtime_agent_session_locked(
+            session,
+            locked_binding,
+            request,
+            ctx,
+            db,
+        )
     return {
         "shell_session_id": ensure_code_session_public_id(session),
         "runtime_session_id": runtime_session_id,
@@ -2340,6 +2439,35 @@ async def _ensure_browser_runtime_current_session(
         ).strip() or None
         return True, authorization
     return False, authorization
+
+
+async def _ensure_browser_runtime_current_session_serialized(
+    session: AIChatSession,
+    binding: CodeRuntimeBinding,
+    authorization: ProxyAuthorization,
+    path: str,
+    *,
+    request: Request,
+    session_id: CodeSessionRef,
+    db: AsyncSession,
+    recovery_budget: ProxyRecoveryBudget | None = None,
+) -> tuple[bool, ProxyAuthorization, CodeRuntimeBinding]:
+    if not str(binding.runtime_session_id or "").strip() or not _path_requires_runtime_current_alignment(path):
+        return False, authorization, binding
+    if binding.id is None:
+        raise RuntimeError("Code runtime binding must be persisted before current alignment")
+    async with code_runtime_agent_activation_transaction(db, binding.id) as locked_binding:
+        changed, authorization = await _ensure_browser_runtime_current_session(
+            session,
+            locked_binding,
+            authorization,
+            path,
+            request=request,
+            session_id=session_id,
+            db=db,
+            recovery_budget=recovery_budget,
+        )
+    return changed, authorization, locked_binding
 
 
 def _path_with_forwarded_prefix(path: str, forwarded_prefix: str = "") -> str:
@@ -3388,23 +3516,36 @@ async def create_browser_authenticated_agent_session(
     )
     if authorization.response is not None:
         return authorization.response
-    try:
-        payload, authorization = await _browser_runtime_json_request_for_session(
-            session,
-            binding,
-            authorization,
-            "POST",
-            "/api/agent/sessions",
-            request=request,
-            session_id=session_id,
-            db=db,
-            json_body={},
-        )
-    except SandboxRenewalFailure as exc:
-        return _sandbox_renewal_failure_response(
-            exc,
-            session_id=session_id,
-            forwarded_prefix=request.headers.get("x-forwarded-prefix", ""),
+    async with code_runtime_agent_activation_transaction(db, binding.id) as locked_binding:
+        try:
+            payload, authorization = await _browser_runtime_json_request_for_session(
+                session,
+                locked_binding,
+                authorization,
+                "POST",
+                "/api/agent/sessions",
+                request=request,
+                session_id=session_id,
+                db=db,
+                json_body={},
+            )
+        except SandboxRenewalFailure as exc:
+            return _sandbox_renewal_failure_response(
+                exc,
+                session_id=session_id,
+                forwarded_prefix=request.headers.get("x-forwarded-prefix", ""),
+            )
+        runtime_session_id = str(
+            (payload or {}).get("runtimeSessionId")
+            or (payload or {}).get("runtime_session_id")
+            or (payload or {}).get("id")
+            or ""
+        ).strip()
+        if not runtime_session_id:
+            raise HTTPException(status_code=502, detail="Code runtime 未返回新会话 ID")
+        locked_binding.runtime_session_id = runtime_session_id
+        await _remember_runtime_agent_session(
+            db, session, locked_binding, runtime_session_id, payload
         )
     if authorization.proxy_cookie_reissue_required and authorization.runtime_cookie:
         _set_runtime_cookie(
@@ -3413,17 +3554,6 @@ async def create_browser_authenticated_agent_session(
             session_id,
             request.headers.get("x-forwarded-prefix", ""),
         )
-    runtime_session_id = str(
-        (payload or {}).get("runtimeSessionId")
-        or (payload or {}).get("runtime_session_id")
-        or (payload or {}).get("id")
-        or ""
-    ).strip()
-    if not runtime_session_id:
-        raise HTTPException(status_code=502, detail="Code runtime 未返回新会话 ID")
-    binding.runtime_session_id = runtime_session_id
-    await _remember_runtime_agent_session(db, session, binding, runtime_session_id, payload)
-    await db.commit()
     return {
         "shell_session_id": ensure_code_session_public_id(session),
         "runtime_session_id": runtime_session_id,
@@ -3626,7 +3756,7 @@ async def proxy_code_runtime(
     recovery_budget = ProxyRecoveryBudget()
 
     try:
-        binding_changed, authorization = await _ensure_browser_runtime_current_session(
+        binding_changed, authorization, binding = await _ensure_browser_runtime_current_session_serialized(
             session,
             binding,
             authorization,
@@ -3650,8 +3780,6 @@ async def proxy_code_runtime(
             forwarded_prefix=forwarded_prefix,
         )
     cookie_reissue_required |= authorization.proxy_cookie_reissue_required
-    if binding_changed:
-        await db.commit()
     target = _target_url(binding, path, request)
     try:
         body = b"" if request.method in {"GET", "HEAD"} else await request.body()

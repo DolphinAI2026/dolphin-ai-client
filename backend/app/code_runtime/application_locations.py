@@ -55,6 +55,13 @@ def local_workspace_path_identity(value: str | Path) -> str:
     return normalized.casefold() if os.name == "nt" else normalized
 
 
+def local_workspace_path_digest(value: str | Path) -> str:
+    """Return the full canonical path digest used by device-wide uniqueness."""
+
+    identity = local_workspace_path_identity(value)
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
 def prepare_local_application_workspace(
     value: str | Path,
     *,
@@ -142,8 +149,7 @@ def prepare_local_application_workspace(
 def local_location_id(workspace_path: str | Path) -> str:
     """Build a path-stable local location identifier without exposing the path."""
 
-    identity = local_workspace_path_identity(workspace_path)
-    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    digest = local_workspace_path_digest(workspace_path)
     return f"local-{digest[:32]}"
 
 

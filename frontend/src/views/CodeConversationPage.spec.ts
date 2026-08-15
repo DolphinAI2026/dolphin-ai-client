@@ -18,6 +18,8 @@ describe('CodeConversationPage', () => {
     expect(pageSource).toContain('import CodeApplicationRecoveryPanel')
     expect(pageSource).toContain('<CodeApplicationRecoveryPanel')
     expect(pageSource).toContain('codeApplicationRecoveryStateFromError')
+    expect(pageSource).toContain('codeRuntimeOpenErrorContext')
+    expect(pageSource).not.toContain("const sessionExecutionLocation = ref<'local' | 'remote'>('remote')")
   })
 
   it('formats the session location without exposing an absolute path', () => {

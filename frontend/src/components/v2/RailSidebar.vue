@@ -313,11 +313,6 @@ async function openSession(session: RailSession) {
     }
     return
   }
-  if (currentMode.value === 'code' && session.source === 'code-agent' && session.shellSessionId && session.runtimeSessionId) {
-    try {
-      await codeRuntimeApi.activateAgentSession(session.shellSessionId, session.runtimeSessionId)
-    } catch { /* iframe will surface runtime errors on open */ }
-  }
   if (!railNavigationIntent.isCurrent(intent)) return
   router.push(railSessionTarget(currentMode.value, session, route.query))
 }
@@ -429,29 +424,49 @@ async function createBuilderSession(appId?: number | null) {
   }
 }
 
-async function createCodeAgentSession(shellSessionId?: string | null) {
+async function createCodeAgentSession(
+  shellSessionId?: string | null,
+  group?: CodeRailSessionGroup,
+) {
   if (creatingCodeAgentSession.value) return
   const isCodeMode = currentMode.value === 'code'
   if (!isCodeMode) return
-  if (!shellSessionId) {
-    ElMessage.warning('请先打开一个 Code 应用')
-    return
-  }
-
   const intent = railNavigationIntent.begin()
   creatingCodeAgentSession.value = true
   try {
-    const result = await codeRuntimeApi.createAgentSession(shellSessionId)
+    let targetShellSessionId = shellSessionId || ''
+    if (!targetShellSessionId && group) {
+      const representative = group.locationSessions.local || group.locationSessions.remote
+      if (representative) {
+        const standardShell = await codeRuntimeApi.createSessionFromExternalApp({
+          logical_application_id: representative.logicalApplicationId,
+          external_application_id: representative.externalApplicationId,
+          execution_location: representative.executionLocation,
+          session_policy: 'resume_recent',
+          session_purpose: 'standard',
+          app_name: representative.appName,
+        })
+        targetShellSessionId = String(
+          standardShell.route_id || standardShell.public_id || standardShell.id || '',
+        )
+      }
+    }
+    if (!targetShellSessionId) {
+      ElMessage.warning('请先打开一个 Code 应用')
+      return
+    }
+    if (!railNavigationIntent.isCurrent(intent)) return
+    const result = await codeRuntimeApi.createAgentSession(targetShellSessionId)
     if (!railNavigationIntent.isCurrent(intent)) return
     if (result.runtime_session_id) {
-      upsertOptimisticCodeAgentSession(shellSessionId, result.runtime_session_id, result.session)
+      upsertOptimisticCodeAgentSession(targetShellSessionId, result.runtime_session_id, result.session)
       router.push({
-        path: `/code/${result.shell_session_id || shellSessionId}`,
+        path: `/code/${result.shell_session_id || targetShellSessionId}`,
         query: nextAgentQuery(route.query, result.runtime_session_id),
       })
     } else {
       router.push({
-        path: `/code/${shellSessionId}`,
+        path: `/code/${targetShellSessionId}`,
         query: nextAgentQuery(route.query),
       })
     }
@@ -957,13 +972,13 @@ function renderIcon(name: string): string {
                 @click.stop="openCodeLocationSession(g, 'remote')"
               >远程打开</button>
               <button
-                v-if="effectiveGroupBy === 'app' && ((currentMode === 'code' && g.shellSessionId) || (currentMode === 'builder' && g.appId))"
+                v-if="effectiveGroupBy === 'app' && ((currentMode === 'code' && ('locationSessions' in g)) || (currentMode === 'builder' && g.appId))"
                 type="button"
                 class="rail-sess-group-new"
                 title="新建对话"
                 aria-label="新建对话"
                 :disabled="currentMode === 'code' ? creatingCodeAgentSession : creatingBuilderSession"
-                @click.stop="currentMode === 'code' ? createCodeAgentSession(g.shellSessionId) : createBuilderSession(g.appId)"
+                @click.stop="currentMode === 'code' ? createCodeAgentSession(g.standardShellSessionId, g) : createBuilderSession(g.appId)"
               >
                 <span v-html="renderIcon('plus')" />
               </button>

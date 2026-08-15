@@ -2661,11 +2661,30 @@ async def test_open_local_code_runtime_session_does_not_require_control_plane_au
         raise AssertionError("local Code sessions must not request Control Plane auth")
 
     async def fake_open_code_session(**_kwargs):
+        db = _kwargs["db"]
+        db.add(CodeRuntimeBinding(
+            tenant_id=7,
+            user_id=11,
+            session_id=session.id,
+            external_application_id="local-code-smoke",
+            runtime_base_url="http://runtime.local/shared",
+            builder_url="http://runtime.local/shared/builder",
+            runtime_service_session_enc=_runtime_service_session_enc(),
+            sandbox_instance_id="shared-local-runtime",
+            status="ready",
+        ))
+        await db.flush()
         return {
             "external_application_id": "local-code-smoke",
             "route_id": "s1",
             "embed_url": "/api/code-runtime/s1/builder/?token=test",
+            "runtime_session_id": None,
         }
+
+    async def fake_runtime_request(_session, _binding, method, path, **_kwargs):
+        assert method == "POST"
+        assert path == "/api/agent/sessions"
+        return {"runtimeSessionId": "runtime-opened"}
 
     monkeypatch.setattr(
         code_runtime_routes,
@@ -2673,6 +2692,11 @@ async def test_open_local_code_runtime_session_does_not_require_control_plane_au
         fail_if_control_plane_auth_is_requested,
     )
     monkeypatch.setattr(code_runtime_routes, "open_code_session", fake_open_code_session)
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_runtime_json_request_for_session",
+        fake_runtime_request,
+    )
 
     result = await open_code_runtime_session(
         session.public_id,
@@ -2684,6 +2708,11 @@ async def test_open_local_code_runtime_session_does_not_require_control_plane_au
     assert result["external_application_id"] == "local-code-smoke"
     assert result["route_id"] == "s1"
     assert result["embed_url"].startswith("/api/code-runtime/s1/builder/?")
+    assert result["runtime_session_id"] == "runtime-opened"
+    binding = (await db_session.execute(
+        select(CodeRuntimeBinding).where(CodeRuntimeBinding.session_id == session.id)
+    )).scalar_one()
+    assert binding.runtime_session_id == "runtime-opened"
 
 
 @pytest.mark.asyncio
@@ -3113,6 +3142,9 @@ async def test_open_code_runtime_session_rolls_back_and_does_not_return_canary_o
     async def fake_open_code_session(*_args, **_kwargs):
         return {"canary": "must-not-return"}
 
+    async def fake_validate_location(*_args, **_kwargs):
+        return None
+
     async def fail_commit():
         raise RuntimeError("commit failed")
 
@@ -3124,6 +3156,11 @@ async def test_open_code_runtime_session_rolls_back_and_does_not_return_canary_o
     db.rollback = fake_rollback
     monkeypatch.setattr(code_runtime_routes, "resolve_code_session", fake_resolve)
     monkeypatch.setattr(code_runtime_routes, "open_code_session", fake_open_code_session)
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "validate_persisted_code_application_location",
+        fake_validate_location,
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         await open_code_runtime_session(
@@ -3234,6 +3271,75 @@ async def test_code_runtime_proxy_recovers_when_bound_runtime_session_is_missing
         ("GET", "/api/agent/sessions/current"),
     ]
     assert budgets[0] is budgets[1]
+
+
+@pytest.mark.asyncio
+async def test_browser_runtime_current_alignment_uses_shared_runtime_lock(monkeypatch):
+    from contextlib import asynccontextmanager
+
+    import app.routes.code_runtime as code_runtime_routes
+
+    wrapper = getattr(
+        code_runtime_routes,
+        "_ensure_browser_runtime_current_session_serialized",
+        None,
+    )
+    assert wrapper is not None
+    binding = CodeRuntimeBinding(
+        id=41,
+        tenant_id=7,
+        user_id=11,
+        session_id=14,
+        runtime_base_url="http://runtime.local/shared",
+        runtime_session_id="runtime-bound",
+    )
+    locked_binding = CodeRuntimeBinding(
+        id=41,
+        tenant_id=7,
+        user_id=11,
+        session_id=14,
+        runtime_base_url="http://runtime.local/shared",
+        runtime_session_id="runtime-bound",
+    )
+    events: list[str] = []
+
+    @asynccontextmanager
+    async def fake_activation_transaction(_db, binding_id):
+        events.append(f"lock:{binding_id}")
+        yield locked_binding
+        events.append("unlock")
+
+    async def fake_align(_session, current_binding, authorization, _path, **_kwargs):
+        assert current_binding is locked_binding
+        events.append("align")
+        return False, authorization
+
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "code_runtime_agent_activation_transaction",
+        fake_activation_transaction,
+    )
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_ensure_browser_runtime_current_session",
+        fake_align,
+    )
+
+    authorization = code_runtime_routes.ProxyAuthorization(browser_session_id="browser-a")
+    changed, returned_authorization, returned_binding = await wrapper(
+        SimpleNamespace(),
+        binding,
+        authorization,
+        "api/agent/sessions/current",
+        request=SimpleNamespace(),
+        session_id="shell-public-id",
+        db=SimpleNamespace(),
+    )
+
+    assert changed is False
+    assert returned_authorization is authorization
+    assert returned_binding is locked_binding
+    assert events == ["lock:41", "align", "unlock"]
 
 
 @pytest.mark.asyncio
@@ -4275,6 +4381,8 @@ async def test_open_code_runtime_session_returns_project_initialization_purpose(
     result = await open_code_runtime_session("s16", _request(), _ctx(), FakeDB())
 
     assert result["session_purpose"] == "project_initialization"
+    assert result["execution_location"] == "local"
+    assert result["logical_application_id"] == "legacy:local-crm"
 
 
 @pytest.mark.asyncio
@@ -4700,7 +4808,15 @@ async def test_open_remote_session_maps_runtime_failure_to_stable_location_error
         await open_code_runtime_session(shell.public_id, _request(), _ctx(), db_session)
 
     assert exc.value.status_code == 503
-    assert str(exc.value.detail).startswith(f"{expected_code}:")
+    assert exc.value.detail["code"] == expected_code
+    assert exc.value.detail["context"] == {
+        "shell_session_id": shell.public_id,
+        "logical_application_id": "logical-crm",
+        "execution_location": "remote",
+        "session_purpose": "standard",
+        "alternative_location": "local" if local_path_state == "missing" else None,
+        "alternative_availability": "missing" if local_path_state == "missing" else None,
+    }
 
 
 @pytest.mark.asyncio
@@ -6276,6 +6392,175 @@ async def test_activate_code_runtime_agent_session_serializes_same_binding_until
             "runtime-2",
         ]
         assert snapshots[-1].title == "snapshot:runtime-2"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_mysql_activation_lock_uses_dedicated_connection_and_preserves_body_error(monkeypatch):
+    import app.code_runtime.agent_activation as activation
+
+    events: list[str] = []
+    binding = CodeRuntimeBinding(
+        id=9,
+        tenant_id=7,
+        user_id=11,
+        session_id=3,
+        runtime_base_url="https://runtime.test/shared",
+    )
+
+    class FakeResult:
+        def scalar_one(self):
+            return 1
+
+    class FakeConnection:
+        async def execute(self, statement, _parameters=None):
+            events.append(statement.text)
+            if "RELEASE_LOCK" in statement.text:
+                raise RuntimeError("release failed")
+            return FakeResult()
+
+        async def invalidate(self):
+            events.append("invalidate")
+
+        async def close(self):
+            events.append("close")
+
+    connection = FakeConnection()
+
+    class FakeBind:
+        dialect = SimpleNamespace(name="mysql")
+
+        async def connect(self):
+            events.append("connect")
+            return connection
+
+    class FakeSession:
+        bind = FakeBind()
+
+        async def commit(self):
+            events.append("commit")
+
+        async def rollback(self):
+            events.append("rollback")
+
+        async def scalar(self, *_args, **_kwargs):
+            raise AssertionError("GET_LOCK/RELEASE_LOCK must not use the pooled session connection")
+
+    async def fake_locked_binding(_db, _binding_id, *, lock_row):
+        events.append(f"binding:{lock_row}")
+        return binding
+
+    monkeypatch.setattr(activation, "_locked_binding", fake_locked_binding)
+
+    with pytest.raises(ValueError, match="body failed"):
+        async with activation.code_runtime_agent_activation_transaction(FakeSession(), binding.id):
+            raise ValueError("body failed")
+
+    assert events == [
+        "binding:False",
+        "connect",
+        "SELECT GET_LOCK(:lock_name, 120)",
+        "binding:True",
+        "rollback",
+        "SELECT RELEASE_LOCK(:lock_name)",
+        "invalidate",
+        "close",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_activate_code_runtime_agent_session_serializes_different_shells_sharing_runtime(
+    tmp_path,
+    monkeypatch,
+):
+    import app.routes.code_runtime as code_runtime_routes
+
+    engine, Session = await _renewal_session_factory(tmp_path)
+    first_started = asyncio.Event()
+    second_started = asyncio.Event()
+    release_first = asyncio.Event()
+    events: list[str] = []
+
+    async def fake_runtime_request(_session, _binding, _method, path, **_kwargs):
+        runtime_id = path.split("/")[-2]
+        events.append(f"start:{runtime_id}")
+        if runtime_id == "runtime-standard":
+            first_started.set()
+            await release_first.wait()
+        else:
+            second_started.set()
+        events.append(f"finish:{runtime_id}")
+        return {"runtimeSessionId": runtime_id}
+
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_runtime_json_request_for_session",
+        fake_runtime_request,
+    )
+
+    try:
+        async with Session() as setup:
+            shells = [
+                AIChatSession(
+                    public_id=public_id,
+                    tenant_id=7,
+                    user_id=11,
+                    title=title,
+                    mode="code",
+                    status="active",
+                    external_application_id="local-crm",
+                    execution_location="local",
+                    session_purpose=purpose,
+                )
+                for public_id, title, purpose in (
+                    ("55555555-5555-5555-5555-555555555555", "CRM Code", "standard"),
+                    ("66666666-6666-6666-6666-666666666666", "项目初始化", "project_initialization"),
+                )
+            ]
+            setup.add_all(shells)
+            await setup.flush()
+            for shell in shells:
+                setup.add(CodeRuntimeBinding(
+                    tenant_id=7,
+                    user_id=11,
+                    session_id=shell.id,
+                    external_application_id="local-crm",
+                    runtime_base_url="http://runtime.local/workspaces/crm",
+                    builder_url="http://runtime.local/workspaces/crm/builder",
+                    runtime_service_session_enc=_runtime_service_session_enc(),
+                    runtime_session_id="runtime-0",
+                    status="ready",
+                ))
+            await setup.commit()
+
+        async def activate(shell_ref: str, runtime_id: str):
+            async with Session() as db:
+                return await code_runtime_routes.activate_code_runtime_agent_session(
+                    shell_ref,
+                    runtime_id,
+                    _request(),
+                    _ctx(),
+                    db,
+                )
+
+        first_task = asyncio.create_task(activate(shells[0].public_id, "runtime-standard"))
+        await first_started.wait()
+        second_task = asyncio.create_task(activate(shells[1].public_id, "runtime-initialization"))
+        try:
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(second_started.wait(), timeout=0.1)
+        finally:
+            release_first.set()
+            results = await asyncio.gather(first_task, second_task, return_exceptions=True)
+
+        assert not [result for result in results if isinstance(result, BaseException)]
+        assert events == [
+            "start:runtime-standard",
+            "finish:runtime-standard",
+            "start:runtime-initialization",
+            "finish:runtime-initialization",
+        ]
     finally:
         await engine.dispose()
 

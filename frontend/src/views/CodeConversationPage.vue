@@ -130,7 +130,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { codeRuntimeApi } from '@/api/codeRuntime'
+import {
+  codeRuntimeApi,
+  codeRuntimeErrorMessage,
+  codeRuntimeOpenErrorContext,
+} from '@/api/codeRuntime'
 import { nextAgentQuery } from '@/composables/railSessions'
 import { findCodeRailHistoryApp, formatCodeRailLocationSummary } from '@/components/v2/codeRailHistory'
 import AppIcon from '@/components/common/AppIcon.vue'
@@ -198,7 +202,6 @@ const workspaceOpeningPhase = ref<CodeWorkspaceOpenPhase>('checking_project')
 const workspaceOpeningStartedAt = ref(Date.now())
 const workspaceRecoveryBusy = ref(false)
 const sessionLocationSummary = ref('')
-const sessionExecutionLocation = ref<'local' | 'remote'>('remote')
 const locationRecovery = ref<{
   state: CodeApplicationRecoveryState
   originalLocation: 'local' | 'remote'
@@ -620,19 +623,26 @@ async function openCurrentSession() {
     refreshOuterCodeRail()
   } catch (error: any) {
     if (requestSeq === openRequestSeq) {
-      const message = error?.response?.data?.detail || error?.message || '打开失败'
+      const message = codeRuntimeErrorMessage(error, '打开失败')
+      const openErrorContext = codeRuntimeOpenErrorContext(error)
+      const detail = error?.response?.data?.detail
       const errorCode = [
         'CODE_APPLICATION_LOCATION_UNAVAILABLE',
         'CODE_APPLICATION_LOCAL_LOCATION_MISSING',
         'CODE_APPLICATION_REMOTE_LOCATION_UNAVAILABLE',
         'CODE_APPLICATION_ALL_LOCATIONS_UNAVAILABLE',
-      ].find(candidate => String(message).includes(candidate)) || ''
-      const recoveryState = codeApplicationRecoveryStateFromError(
-        errorCode,
-        sessionExecutionLocation.value,
-      )
+      ].find(candidate => (
+        (detail && typeof detail === 'object' && detail.code === candidate)
+        || String(message).includes(candidate)
+      )) || ''
+      const recoveryState = openErrorContext
+        ? codeApplicationRecoveryStateFromError(
+          errorCode,
+          openErrorContext.execution_location,
+        )
+        : null
       locationRecovery.value = recoveryState
-        ? { state: recoveryState, originalLocation: sessionExecutionLocation.value }
+        ? { state: recoveryState, originalLocation: openErrorContext!.execution_location }
         : null
       if (isLocalWorkspaceError(message)) {
         localWorkspaceOpening.value = true
@@ -659,7 +669,6 @@ async function loadSessionLocationSummary(sessionRef: string) {
     const history = await codeRuntimeApi.listRailHistory()
     if (requestSeq !== sessionLocationRequestSeq) return
     const app = findCodeRailHistoryApp(history, sessionRef)
-    if (app) sessionExecutionLocation.value = app.execution_location
     sessionLocationSummary.value = app
       ? formatCodeRailLocationSummary(
         app.execution_location,

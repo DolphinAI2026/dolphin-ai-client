@@ -30,6 +30,7 @@ from app.code_runtime.application_locations import (
     LocalApplicationDirectoryMode,
     LocalApplicationPathError,
     local_workspace_path_identity,
+    local_workspace_path_digest,
     prepare_local_application_workspace,
 )
 from app.engineering_sessions.git_state import GitCommandError, git, git_common_dir
@@ -408,17 +409,19 @@ async def ensure_registered_local_workspace(
         raise _local_application_path_error(exc) from exc
     remote_application_id = _optional_remote_identifier(linked_remote_application_id)
     remote_deployment_id = _optional_remote_identifier(linked_remote_deployment_id)
+    path_digest = local_workspace_path_digest(resolved_abs)
 
     candidates = (await db.execute(select(RegisteredWorkspace))).scalars().all()
-    existing = next(
-        (
-            candidate
-            for candidate in candidates
-            if local_workspace_path_identity(candidate.abs_path)
-            == local_workspace_path_identity(resolved_abs)
-        ),
-        None,
-    )
+    matching = [
+        candidate
+        for candidate in candidates
+        if candidate.path_identity_digest == path_digest
+        or local_workspace_path_identity(candidate.abs_path)
+        == local_workspace_path_identity(resolved_abs)
+    ]
+    if len(matching) > 1:
+        raise _error(409, _PATH_ALREADY_BOUND, "本地项目目录存在重复历史绑定")
+    existing = matching[0] if matching else None
     if existing is not None:
         if existing.tenant_id != int(ctx.tenant_id):
             raise _error(409, _PATH_ALREADY_BOUND, "本地项目目录已绑定到其他应用")
@@ -449,14 +452,20 @@ async def ensure_registered_local_workspace(
         if remote_deployment_id and not _text(existing.linked_remote_deployment_id):
             existing.linked_remote_deployment_id = remote_deployment_id
         existing.workspace_type = "code-local-application"
+        existing.path_identity_digest = path_digest
         existing.last_opened_at = datetime.utcnow()
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            raise _error(409, _PATH_ALREADY_BOUND, "本地项目目录已绑定到其他应用")
         await db.refresh(existing)
         return existing
 
     workspace = RegisteredWorkspace(
         ws_id=f"{int(ctx.user.id)}_{uuid.uuid4().hex[:8]}",
         abs_path=local_workspace_path_text(resolved_abs),
+        path_identity_digest=path_digest,
         user_id=int(ctx.user.id),
         tenant_id=int(ctx.tenant_id),
         workspace_type="code-local-application",
@@ -477,17 +486,17 @@ async def ensure_registered_local_workspace(
         concurrent_rows = (
             await db.execute(select(RegisteredWorkspace))
         ).scalars().all()
-        concurrent = next(
-            (
-                candidate
-                for candidate in concurrent_rows
-                if local_workspace_path_identity(candidate.abs_path)
-                == local_workspace_path_identity(resolved_abs)
-            ),
-            None,
-        )
-        if concurrent is None:
+        concurrent = [
+            candidate
+            for candidate in concurrent_rows
+            if candidate.path_identity_digest == path_digest
+            or local_workspace_path_identity(candidate.abs_path)
+            == local_workspace_path_identity(resolved_abs)
+        ]
+        if not concurrent:
             raise
+        if len(concurrent) > 1:
+            raise _error(409, _PATH_ALREADY_BOUND, "本地项目目录存在重复历史绑定")
         return await ensure_registered_local_workspace(
             db,
             ctx,
@@ -523,12 +532,10 @@ async def rebind_registered_local_workspace(
         )
     except LocalApplicationPathError as exc:
         raise _local_application_path_error(exc) from exc
+    path_digest = local_workspace_path_digest(resolved_abs)
     candidates = (
         await db.execute(
-            select(RegisteredWorkspace).where(
-                RegisteredWorkspace.tenant_id == int(ctx.tenant_id),
-                RegisteredWorkspace.id != workspace.id,
-            )
+            select(RegisteredWorkspace).where(RegisteredWorkspace.id != workspace.id)
         )
     ).scalars().all()
     occupied = next(
@@ -544,8 +551,23 @@ async def rebind_registered_local_workspace(
         raise _error(409, _PATH_ALREADY_BOUND, "本地项目目录已绑定给其他应用")
 
     workspace.abs_path = local_workspace_path_text(resolved_abs)
+    workspace.path_identity_digest = path_digest
     workspace.last_opened_at = datetime.utcnow()
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        conflicts = (
+            await db.execute(
+                select(RegisteredWorkspace).where(
+                    RegisteredWorkspace.path_identity_digest == path_digest,
+                    RegisteredWorkspace.id != workspace.id,
+                )
+            )
+        ).scalars().all()
+        if conflicts:
+            raise _error(409, _PATH_ALREADY_BOUND, "本地项目目录已绑定给其他应用")
+        raise
     await db.refresh(workspace)
     return workspace
 

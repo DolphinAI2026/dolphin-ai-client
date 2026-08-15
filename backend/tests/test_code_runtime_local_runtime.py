@@ -531,6 +531,38 @@ async def test_register_existing_rebind_keeps_local_application_identity_without
 
 
 @pytest.mark.asyncio
+async def test_rebind_rejects_path_owned_by_another_tenant(
+    db,
+    ctx,
+    git_repo,
+    tmp_path,
+):
+    workspace = await _create_workspace(db, git_repo)
+    code_session = await _create_code_session(db, workspace_id=workspace.ws_id)
+    occupied_path = tmp_path / "other-tenant-project"
+    occupied_path.mkdir()
+    await _create_workspace(
+        db,
+        occupied_path,
+        ws_id="ws-other-tenant",
+        user_id=22,
+        tenant_id=8,
+        apaas_app_id="local-other-tenant",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await rebind_registered_local_workspace(
+            db,
+            code_session,
+            ctx,
+            workspace_path=occupied_path,
+        )
+
+    assert exc.value.status_code == 409
+    assert "LOCAL_APPLICATION_PATH_ALREADY_BOUND" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "repository_kind",
     [

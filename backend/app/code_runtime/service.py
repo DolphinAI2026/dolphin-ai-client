@@ -60,36 +60,6 @@ _DESKTOP_RUNTIME_ENVIRONMENT_KEYS = (
 )
 
 
-async def _create_desktop_runtime_agent_session(
-    runtime_base_url: str,
-    entry_token: str,
-) -> str:
-    """Create one Runtime agent session without exposing the desktop entry token."""
-    try:
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=5, read=30, write=10, pool=10)
-        ) as client:
-            response = await client.post(
-                f"{runtime_base_url.rstrip('/')}/api/agent/sessions",
-                headers={"Authorization": f"Bearer {entry_token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail="本地 Runtime 无法创建 agent session") from exc
-
-    if response.status_code != 200:
-        raise HTTPException(status_code=502, detail="本地 Runtime 创建 agent session 失败")
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        raise HTTPException(status_code=502, detail="本地 Runtime agent session 响应无效") from exc
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=502, detail="本地 Runtime agent session 响应无效")
-    runtime_session_id = str(payload.get("runtimeSessionId") or "").strip()
-    if not runtime_session_id:
-        raise HTTPException(status_code=502, detail="本地 Runtime 未返回 agent session 标识")
-    return runtime_session_id
-
-
 async def _remember_runtime_agent_session(
     db: AsyncSession,
     *,
@@ -1323,10 +1293,7 @@ async def open_code_session(
         runtime_session_id = (
             current_runtime_session_id
             if current_runtime_session_id
-            else await _create_desktop_runtime_agent_session(
-                runtime_base_url,
-                desktop_entry_token,
-            )
+            else str(runtime_session_id or "").strip() or None
         )
         binding.runtime_session_id = runtime_session_id
     if runtime_session_id:

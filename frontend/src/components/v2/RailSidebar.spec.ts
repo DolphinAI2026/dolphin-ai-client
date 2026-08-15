@@ -138,23 +138,61 @@ describe('RailSidebar unified session source (SP2b)', () => {
     expect(railSidebarSource).toContain('nextAgentQuery')
   })
 
-  it('activates Code runtime history before opening the shell route', () => {
-    expect(railSidebarSource).toContain('codeRuntimeApi.activateAgentSession')
-    expect(railSidebarSource).toContain('session.runtimeSessionId')
-    expect(railSidebarSource).toContain('session.shellSessionId')
+  it('delegates Code runtime activation to the conversation page after routing', () => {
+    const openSessionSource = railSidebarSource.slice(
+      railSidebarSource.indexOf('async function openSession('),
+      railSidebarSource.indexOf('function sessionGroupKey('),
+    )
+
+    expect(openSessionSource).not.toContain('codeRuntimeApi.activateAgentSession')
+    expect(openSessionSource).toContain('router.push(railSessionTarget(')
   })
 
   it('exposes Code new runtime conversation actions on application groups', () => {
     expect(railSidebarSource).toContain('createCodeAgentSession')
     expect(railSidebarSource).toContain('codeRuntimeApi.createAgentSession')
     expect(railSidebarSource).toContain('rail-sess-group-new')
-    expect(railSidebarSource).toContain('g.shellSessionId')
-    expect(railSidebarSource).toContain("createCodeAgentSession(g.shellSessionId)")
+    expect(railSidebarSource).toContain('g.standardShellSessionId')
+    expect(railSidebarSource).toContain("createCodeAgentSession(g.standardShellSessionId, g)")
     expect(railSidebarSource).toContain("effectiveGroupBy === 'app'")
     expect(railSidebarSource).not.toContain('class="rail-sess-new"')
     expect(railSidebarSource).toContain(
       'nextAgentQuery(route.query, result.runtime_session_id)',
     )
+  })
+
+  it('keeps initialization shells visible but never selects them for a normal new conversation', () => {
+    const history: CodeRailHistoryResponse = {
+      apps: [
+        {
+          shell_session_id: 'standard-shell',
+          external_application_id: 'local-crm',
+          logical_application_id: 'crm',
+          execution_location: 'local',
+          session_purpose: 'standard',
+          app_name: 'CRM',
+          sessions: [],
+        },
+        {
+          shell_session_id: 'initialization-shell',
+          external_application_id: 'local-crm',
+          logical_application_id: 'crm',
+          execution_location: 'local',
+          session_purpose: 'project_initialization',
+          app_name: 'CRM',
+          sessions: [],
+        },
+      ],
+    }
+
+    const [group] = groupCodeRailHistoryByApplication(history)
+
+    expect(group.items.map(item => item.sessionPurpose)).toEqual([
+      'standard',
+      'project_initialization',
+    ])
+    expect(group.standardShellSessionId).toBe('standard-shell')
+    expect(group.locationSessions.local?.shellSessionId).toBe('standard-shell')
   })
 
   it('exposes Builder new conversations on application groups', () => {

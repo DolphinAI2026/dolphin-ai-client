@@ -5,6 +5,7 @@ from sqlalchemy import event, inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from app.config import settings
+from app.code_runtime.workspace_path_identity import migrate_registered_workspace_path_identity
 from app.tenant_public_id import TenantPublicIdStrictError, reconcile_tenant_public_ids
 
 
@@ -55,10 +56,6 @@ async def get_db():
 
 
 def _schema_statement_for_dialect(statement: str, dialect_name: str) -> str:
-    if dialect_name == "mysql" and statement == (
-        "CREATE UNIQUE INDEX uq_regws_abs_path ON registered_workspaces(abs_path)"
-    ):
-        return "CREATE UNIQUE INDEX uq_regws_abs_path ON registered_workspaces(abs_path(255))"
     if dialect_name != "postgresql":
         return statement
 
@@ -125,9 +122,6 @@ CODE_APPLICATION_LOCATION_MIGRATIONS = (
     "ALTER TABLE registered_workspaces ADD COLUMN linked_remote_deployment_id VARCHAR(120) NULL",
     "CREATE INDEX IF NOT EXISTS ix_registered_workspaces_logical_application_id "
     "ON registered_workspaces(logical_application_id)",
-    # Existing duplicate rows make this best-effort migration skip safely; new
-    # databases receive the same device-wide constraint from model metadata.
-    "CREATE UNIQUE INDEX uq_regws_abs_path ON registered_workspaces(abs_path)",
     "ALTER TABLE ai_chat_sessions ADD COLUMN logical_application_id VARCHAR(160) NULL",
     "CREATE INDEX IF NOT EXISTS ix_ai_chat_sessions_logical_application_id "
     "ON ai_chat_sessions(logical_application_id)",
@@ -150,6 +144,7 @@ async def migrate_code_application_location_contract(conn) -> None:
 
     for statement in CODE_APPLICATION_LOCATION_MIGRATIONS:
         await _execute_best_effort(conn, statement)
+    await migrate_registered_workspace_path_identity(conn)
 
 
 async def init_db():

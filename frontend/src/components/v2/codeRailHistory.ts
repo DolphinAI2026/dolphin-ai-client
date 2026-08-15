@@ -2,12 +2,15 @@ import type {
   CodeExecutionLocation,
   CodeRailHistoryApp,
   CodeRailHistoryResponse,
+  CodeSessionPurpose,
 } from '@/api/codeRuntime'
 import type { RailSession, RailSessionGroup } from '@/composables/railSessions'
 
 export interface CodeRailSession extends RailSession {
   logicalApplicationId: string
+  externalApplicationId: string
   executionLocation: CodeExecutionLocation
+  sessionPurpose: CodeSessionPurpose
   locationSummary: string
 }
 
@@ -16,7 +19,9 @@ export interface CodeRailSessionGroup extends RailSessionGroup {
   availableLocations: CodeExecutionLocation[]
   localShellSessionId?: string
   remoteShellSessionId?: string
+  standardShellSessionId?: string
   locationSessions: Partial<Record<CodeExecutionLocation, CodeRailSession>>
+  standardLocationSessions: Partial<Record<CodeExecutionLocation, CodeRailSession>>
 }
 
 function text(value: unknown): string {
@@ -25,6 +30,12 @@ function text(value: unknown): string {
 
 function executionLocation(value: unknown): CodeExecutionLocation {
   return value === 'local' ? 'local' : 'remote'
+}
+
+function sessionPurpose(value: unknown): CodeSessionPurpose {
+  return value === 'project_initialization' || value === 'project_recheck'
+    ? value
+    : 'standard'
 }
 
 function logicalApplicationId(app: CodeRailHistoryApp): string {
@@ -53,6 +64,7 @@ function appSessions(app: CodeRailHistoryApp): CodeRailSession[] {
   const shellSessionId = text(app.shell_session_id)
   if (!shellSessionId) return []
   const location = executionLocation(app.execution_location)
+  const purpose = sessionPurpose(app.session_purpose)
   const logicalId = logicalApplicationId(app)
   const name = applicationName(app)
   const locationSummary = formatCodeRailLocationSummary(
@@ -70,7 +82,9 @@ function appSessions(app: CodeRailHistoryApp): CodeRailSession[] {
       current: false,
       source: 'code-shell',
       logicalApplicationId: logicalId,
+      externalApplicationId: text(app.external_application_id),
       executionLocation: location,
+      sessionPurpose: purpose,
       locationSummary,
     }]
   }
@@ -88,7 +102,9 @@ function appSessions(app: CodeRailHistoryApp): CodeRailSession[] {
       current: Boolean(session.current),
       source: 'code-agent' as const,
       logicalApplicationId: logicalId,
+      externalApplicationId: text(app.external_application_id),
       executionLocation: location,
+      sessionPurpose: purpose,
       locationSummary,
     }]
   })
@@ -110,13 +126,25 @@ export function groupCodeRailHistoryByApplication(
   return [...grouped.entries()].map(([logicalApplicationId, items]) => {
     const sorted = [...items].sort((left, right) => Date.parse(right.updatedAt || '') - Date.parse(left.updatedAt || ''))
     const locationSessions: Partial<Record<CodeExecutionLocation, CodeRailSession>> = {}
+    const standardLocationSessions: Partial<Record<CodeExecutionLocation, CodeRailSession>> = {}
     for (const session of sorted) {
-      if (!locationSessions[session.executionLocation]) locationSessions[session.executionLocation] = session
+      if (session.sessionPurpose === 'standard') {
+        if (!standardLocationSessions[session.executionLocation]) {
+          standardLocationSessions[session.executionLocation] = session
+        }
+        locationSessions[session.executionLocation] = standardLocationSessions[session.executionLocation]
+      } else if (!locationSessions[session.executionLocation]) {
+        locationSessions[session.executionLocation] = session
+      }
     }
     const availableLocations = (['local', 'remote'] as const)
       .filter(location => Boolean(locationSessions[location]))
     const localShellSessionId = locationSessions.local?.shellSessionId
     const remoteShellSessionId = locationSessions.remote?.shellSessionId
+    const standardShellSessionId = (
+      standardLocationSessions.local?.shellSessionId
+      || standardLocationSessions.remote?.shellSessionId
+    )
     return {
       label: sorted[0]?.appName || '未关联应用',
       items: sorted,
@@ -125,7 +153,9 @@ export function groupCodeRailHistoryByApplication(
       availableLocations,
       ...(localShellSessionId ? { localShellSessionId } : {}),
       ...(remoteShellSessionId ? { remoteShellSessionId } : {}),
+      ...(standardShellSessionId ? { standardShellSessionId } : {}),
       locationSessions,
+      standardLocationSessions,
     }
   }).sort((left, right) => Date.parse(right.items[0]?.updatedAt || '') - Date.parse(left.items[0]?.updatedAt || ''))
 }
