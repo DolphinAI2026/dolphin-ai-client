@@ -131,6 +131,15 @@ foreach ($RelativePath in $RelativeFiles) {
 }
 Write-Host "[package-gate] PASS required package files"
 
+$RepositoryMetadata = @(
+  Get-ChildItem -LiteralPath $RuntimeRoot -Directory -Force -Recurse -Filter ".git" -ErrorAction SilentlyContinue
+)
+if ($RepositoryMetadata.Count -gt 0) {
+  $Paths = ($RepositoryMetadata | ForEach-Object FullName) -join ", "
+  throw "Desktop package contains repository metadata: $Paths"
+}
+Write-Host "[package-gate] PASS no repository metadata"
+
 $HashFiles = [ordered]@{
   application = $ApplicationExecutable
   sidecar = "ruijing-sidecar.exe"

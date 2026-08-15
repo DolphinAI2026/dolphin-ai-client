@@ -25,7 +25,7 @@ Windows sidecar。
 3. **前端**：生成桌面模式前端资源，不复用缺失或不完整的 `dist-desktop`。
 4. **sidecar**：使用 PyInstaller `--clean` 生成 Windows sidecar，避免缓存旧 Python 代码。
 5. **Tauri 主程序**：清理旧 Runtime resources 后生成当前 Tauri 主程序和资源目录。
-6. **包结构**：校验主程序、sidecar、Runtime、Codex、Python、能力包和 Builder 首页都存在且非空。
+6. **包结构**：校验主程序、sidecar、Runtime、Codex、Python、能力包和 Builder 首页都存在且非空，并且不包含任何 `.git` 仓库元数据。
 7. **二进制身份**：记录并复核主程序、sidecar、Runtime、Codex、Python 和 reconcile 启动器的 SHA-256。
 8. **运行依赖**：实际启动包内 Codex 和 Python，确认核心模块可导入。
 9. **能力包刷新**：实际执行以下五组 `agentic-pack-reconcile`：

@@ -64,6 +64,27 @@ function Copy-Tree($Source, $Destination) {
   }
 }
 
+function Remove-Tree($Path) {
+  $DirectoryPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+  $ExtendedPath = if ($DirectoryPath.StartsWith("\\")) {
+    "\\?\UNC\" + $DirectoryPath.TrimStart("\")
+  } else {
+    "\\?\" + $DirectoryPath
+  }
+  if (-not (Test-Path -LiteralPath $ExtendedPath)) {
+    return
+  }
+  Get-ChildItem -LiteralPath $ExtendedPath -Force -Recurse -File | ForEach-Object {
+    if ($_.IsReadOnly) {
+      $_.IsReadOnly = $false
+    }
+  }
+  Remove-Item -LiteralPath $ExtendedPath -Recurse -Force
+  if (Test-Path -LiteralPath $ExtendedPath) {
+    throw "Failed to remove stale build tree: $DirectoryPath"
+  }
+}
+
 function Write-Utf8NoBom($Path, $Content) {
   $FilePath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
   [IO.File]::WriteAllText($FilePath, $Content, [Text.UTF8Encoding]::new($false))
@@ -260,7 +281,7 @@ try {
         }
         Write-Host "Using prepared Tauri binaries: $ReleaseRoot"
       } else {
-        Remove-Item -LiteralPath $ReleaseAgentRuntime -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Tree $ReleaseAgentRuntime
         if ($Bundle -eq "portable") {
           node .\node_modules\@tauri-apps\cli\tauri.js build --target $Target --no-bundle
         } else {
@@ -298,7 +319,7 @@ try {
         $PortableAppRoot = Join-Path $PortableStagingRoot "Dolphin Code"
         $PortableZip = Join-Path $DownloadDir "ruijing-$PackageVersion-windows-x86_64-portable.zip"
 
-        Remove-Item $PortableStagingRoot -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Tree $PortableStagingRoot
         New-Item -ItemType Directory -Force -Path $PortableAppRoot | Out-Null
         New-Item -ItemType Directory -Force -Path $DownloadDir | Out-Null
         Get-ChildItem $DownloadDir -File -Filter "ruijing-*-windows-x86_64-portable.zip" |
