@@ -111,6 +111,7 @@ function Invoke-ReconcileProbe(
     AGENTIC_ROOT = [IO.Path]::Combine($ProbeRuntimeRoot, "agentic-coding")
     AGENTIC_PACK_PYTHON = $Python
     PYTHONDONTWRITEBYTECODE = "1"
+    PYTHONUTF8 = "0"
   }
   foreach ($Key in $ExtraEnvironment.Keys) {
     $Environment[$Key] = $ExtraEnvironment[$Key]

@@ -392,6 +392,7 @@ func main() {
     os.Environ(),
     "PYTHONPATH="+packPython+string(os.PathListSeparator)+agenticPython,
     "PYTHONDONTWRITEBYTECODE=1",
+    "PYTHONUTF8=1",
   )
   if err := command.Run(); err != nil {
     if exit, ok := err.(*exec.ExitError); ok { os.Exit(exit.ExitCode()) }

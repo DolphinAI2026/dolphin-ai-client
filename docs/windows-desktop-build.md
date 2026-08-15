@@ -29,6 +29,7 @@ Windows sidecar。
 7. **二进制身份**：记录并复核主程序、sidecar、Runtime、Codex、Python 和 reconcile 启动器的 SHA-256。
 8. **运行依赖**：实际启动包内 Codex 和 Python，确认核心模块可导入。
 9. **能力包刷新**：实际执行以下五组 `agentic-pack-reconcile`：
+   - 宿主环境强制关闭 Python UTF-8 模式，验证启动器不依赖 Windows 当前代码页；
    - 全新 Codex home；
    - 同一 home 重复执行，验证幂等；
    - 已有 `config.toml` 的 home；
