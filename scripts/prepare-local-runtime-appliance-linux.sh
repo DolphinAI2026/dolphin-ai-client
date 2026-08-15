@@ -7,6 +7,7 @@ AGENT_RUNTIME_REPO="${AGENT_RUNTIME_REPO:-${ROOT}/../agent-runtime}"
 AGENTIC_CODING_ROOT="${AGENTIC_CODING_ROOT:-${ROOT}/../agentic-coding}"
 APPLIANCE_DIR="${LOCAL_RUNTIME_APPLIANCE_DIR:-${ROOT}/src-tauri/resources/agent-runtime}"
 CODEX_NATIVE_ROOT="${CODEX_NATIVE_ROOT:-}"
+BUILDER_DIST="${AGENT_RUNTIME_REPO}/web/builder/dist"
 
 fail() {
   printf '[local-runtime-appliance] %s\n' "$*" >&2
@@ -37,6 +38,10 @@ resolve_codex_native_root() {
 
 require_directory "${AGENT_RUNTIME_REPO}"
 require_directory "${AGENTIC_CODING_ROOT}"
+require_directory "${BUILDER_DIST}"
+[ -f "${BUILDER_DIST}/index.html" ] || fail "missing Builder entrypoint: ${BUILDER_DIST}/index.html"
+grep -q 'type="module"' "${BUILDER_DIST}/index.html" ||
+  fail "Builder entrypoint does not reference a module bundle: ${BUILDER_DIST}/index.html"
 require_executable "${AGENTIC_CODING_ROOT}/bin/agentic-pack"
 require_executable "${AGENTIC_CODING_ROOT}/.venv/bin/python"
 
@@ -67,6 +72,14 @@ printf '[local-runtime-appliance] build agent-runtime\n'
 printf '[local-runtime-appliance] copy native Codex\n'
 cp -a "${CODEX_VENDOR}" "${APPLIANCE_DIR}/codex"
 
+printf '[local-runtime-appliance] copy Builder workbench\n'
+mkdir -p "${APPLIANCE_DIR}/web/builder"
+cp -a "${BUILDER_DIST}" "${APPLIANCE_DIR}/web/builder/"
+[ -f "${APPLIANCE_DIR}/web/builder/dist/index.html" ] ||
+  fail "Builder entrypoint was not copied into appliance"
+grep -q 'type="module"' "${APPLIANCE_DIR}/web/builder/dist/index.html" ||
+  fail "appliance Builder entrypoint does not reference a module bundle"
+
 printf '[local-runtime-appliance] copy agentic-coding runtime\n'
 mkdir -p "${APPLIANCE_DIR}/agentic-coding"
 cp -a \
@@ -80,6 +93,40 @@ printf '[local-runtime-appliance] build offline agentic pack\n'
   --profile sandbox-container \
   --output "${APPLIANCE_DIR}/agentic-coding-pack" \
   "${AGENTIC_CODING_ROOT}"
+
+# The offline pack is runtime data, not a source checkout.  Nested Git
+# metadata (notably the vendored superpowers skill repository) is unnecessary
+# at runtime and can make Tauri resource traversal fail on mounted filesystems.
+find "${APPLIANCE_DIR}/agentic-coding-pack" \( -type d -o -type f \) -name .git \
+  -prune -exec rm -rf {} +
+
+# Removing source metadata changes the pack tree, so refresh the manifest
+# digest before the offline reconcile check and before Tauri bundles it.
+PYTHONPATH="${AGENTIC_CODING_ROOT}/python" "${PACK_PYTHON}" - "${APPLIANCE_DIR}/agentic-coding-pack" <<'PY'
+from pathlib import Path
+import sys
+
+from agentic_core.pack.checksums import compute_pack_digest
+
+pack_dir = Path(sys.argv[1])
+manifest_path = pack_dir / "manifest.yaml"
+digest = compute_pack_digest(pack_dir)
+lines = manifest_path.read_text(encoding="utf-8").splitlines(keepends=True)
+in_pack = False
+for index, line in enumerate(lines):
+    if line.strip() == "pack:":
+        in_pack = True
+        continue
+    if in_pack and line.startswith("  digest:"):
+        newline = "\n" if line.endswith("\n") else ""
+        lines[index] = f"  digest: {digest}{newline}"
+        break
+    if in_pack and line and not line.startswith(" "):
+        raise SystemExit("pack digest field is missing from manifest")
+else:
+    raise SystemExit("pack digest field is missing from manifest")
+manifest_path.write_text("".join(lines), encoding="utf-8")
+PY
 
 printf '[local-runtime-appliance] validate Codex and pack reconcile\n'
 "${APPLIANCE_DIR}/codex/bin/codex" --version >/dev/null

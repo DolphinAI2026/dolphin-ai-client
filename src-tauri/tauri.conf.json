@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Dolphin Code",
-  "version": "0.2.36",
+  "version": "0.2.66",
   "identifier": "com.ruijing.builder",
   "build": {
     "frontendDist": "../frontend/dist-desktop",
@@ -15,8 +15,9 @@
   },
   "bundle": {
     "active": true,
-    "createUpdaterArtifacts": true,
+    "createUpdaterArtifacts": false,
     "targets": ["app", "dmg"],
+    "resources": ["resources/agent-runtime"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

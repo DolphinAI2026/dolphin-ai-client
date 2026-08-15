@@ -13,11 +13,17 @@ pub struct DesktopDiscoveryError {
 
 impl DesktopDiscoveryError {
     fn invalid(message: impl Into<String>) -> Self {
-        Self { code: "DESKTOP_DISCOVERY_INVALID".into(), message: message.into() }
+        Self {
+            code: "DESKTOP_DISCOVERY_INVALID".into(),
+            message: message.into(),
+        }
     }
 
     fn unavailable(message: impl Into<String>) -> Self {
-        Self { code: "DESKTOP_DISCOVERY_UNAVAILABLE".into(), message: message.into() }
+        Self {
+            code: "DESKTOP_DISCOVERY_UNAVAILABLE".into(),
+            message: message.into(),
+        }
     }
 }
 
@@ -60,11 +66,13 @@ pub fn discover(raw_url: &str) -> Result<DesktopDiscoveryDocument, DesktopDiscov
                 response.status()
             )));
         }
-        let payload = response
-            .into_string()
-            .map_err(|error| DesktopDiscoveryError::invalid(format!("Discovery 响应读取失败: {error}")))?;
-        let document: DesktopDiscoveryDocument = serde_json::from_str(&payload)
-            .map_err(|error| DesktopDiscoveryError::invalid(format!("Discovery 响应不是有效 JSON: {error}")))?;
+        let payload = response.into_string().map_err(|error| {
+            DesktopDiscoveryError::invalid(format!("Discovery 响应读取失败: {error}"))
+        })?;
+        let document: DesktopDiscoveryDocument =
+            serde_json::from_str(&payload).map_err(|error| {
+                DesktopDiscoveryError::invalid(format!("Discovery 响应不是有效 JSON: {error}"))
+            })?;
         validate(&document)?;
         return Ok(document);
     }
@@ -89,11 +97,17 @@ fn discovery_endpoints(base_url: &str) -> Vec<String> {
         .collect()
 }
 
-pub fn login_config(document: &DesktopDiscoveryDocument) -> Result<DesktopLoginConfig, DesktopDiscoveryError> {
+pub fn login_config(
+    document: &DesktopDiscoveryDocument,
+) -> Result<DesktopLoginConfig, DesktopDiscoveryError> {
     let mode = match document.auth.provider.as_str() {
         "control_plane" => DesktopLoginMode::ControlPlane,
         "apaas" => DesktopLoginMode::Apaas,
-        other => return Err(DesktopDiscoveryError::invalid(format!("不支持的认证方式: {other}"))),
+        other => {
+            return Err(DesktopDiscoveryError::invalid(format!(
+                "不支持的认证方式: {other}"
+            )))
+        }
     };
     let base_url = normalize_login_url(&document.auth.login_url)
         .map_err(|error| DesktopDiscoveryError::invalid(error.message))?;
@@ -102,12 +116,19 @@ pub fn login_config(document: &DesktopDiscoveryDocument) -> Result<DesktopLoginC
 
 fn validate(document: &DesktopDiscoveryDocument) -> Result<(), DesktopDiscoveryError> {
     if document.schema_version != 1 {
-        return Err(DesktopDiscoveryError::invalid("Discovery schema 版本不受支持"));
+        return Err(DesktopDiscoveryError::invalid(
+            "Discovery schema 版本不受支持",
+        ));
     }
     if document.deployment_id.trim().is_empty() || document.platform.name.trim().is_empty() {
-        return Err(DesktopDiscoveryError::invalid("Discovery 缺少部署或平台标识"));
+        return Err(DesktopDiscoveryError::invalid(
+            "Discovery 缺少部署或平台标识",
+        ));
     }
-    if !matches!(document.platform.platform_type.as_str(), "control_plane" | "apaas_builder") {
+    if !matches!(
+        document.platform.platform_type.as_str(),
+        "control_plane" | "apaas_builder"
+    ) {
         return Err(DesktopDiscoveryError::invalid("Discovery 平台类型不受支持"));
     }
     if !matches!(document.auth.provider.as_str(), "control_plane" | "apaas") {

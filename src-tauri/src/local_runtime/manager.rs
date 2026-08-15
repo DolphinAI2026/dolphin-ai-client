@@ -9,7 +9,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Read;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 const SANDBOX_TOKEN_FILE: &str = "sandbox-token";
 
@@ -48,36 +48,61 @@ impl<D: RuntimeDriver> LocalRuntimeManager<D> {
         }
     }
 
-    pub fn start(&self, request: StartRequest) -> Result<InstanceStatus, LocalRuntimeError> {
-        validate_request(&self.data_root, &request)?;
-        let _lock = ScopeLock::acquire(&self.data_root, &request.runtime_scope_id)?;
-        let mut active = self.active.lock().map_err(|_| {
+    fn active_instances(
+        &self,
+    ) -> Result<MutexGuard<'_, HashMap<String, InstanceStatus>>, LocalRuntimeError> {
+        self.active.lock().map_err(|_| {
             LocalRuntimeError::new(
                 LocalRuntimeErrorCode::JournalFailed,
                 "local runtime state lock is poisoned",
             )
-        })?;
-        if let Some(existing) = active.get(&request.runtime_scope_id).cloned() {
-            if existing.sandbox_instance_id == request.sandbox_instance_id {
-                let record = self.journal.load(&request.runtime_scope_id)?;
-                let identity = self.driver.identity(existing.pid)?;
-                if record.as_ref().is_some_and(|record| {
-                    record.pid == existing.pid
-                        && record.sandbox_instance_id == existing.sandbox_instance_id
-                        && identity.as_ref().is_some_and(|identity| {
-                            identity.process_started_at == record.process_started_at
-                                && identity.ownership_nonce == record.ownership_nonce
-                        })
-                }) {
-                    return Ok(existing);
+        })
+    }
+
+    fn publish_status(&self, status: InstanceStatus) -> Result<(), LocalRuntimeError> {
+        self.active_instances()?
+            .insert(status.runtime_scope_id.clone(), status);
+        Ok(())
+    }
+
+    fn clear_status(&self, runtime_scope_id: &str, sandbox_instance_id: &str) {
+        if let Ok(mut active) = self.active.lock() {
+            if active
+                .get(runtime_scope_id)
+                .is_some_and(|status| status.sandbox_instance_id == sandbox_instance_id)
+            {
+                active.remove(runtime_scope_id);
+            }
+        }
+    }
+
+    pub fn start(&self, request: StartRequest) -> Result<InstanceStatus, LocalRuntimeError> {
+        validate_request(&self.data_root, &request)?;
+        let _lock = ScopeLock::acquire(&self.data_root, &request.runtime_scope_id)?;
+        {
+            let mut active = self.active_instances()?;
+            if let Some(existing) = active.get(&request.runtime_scope_id).cloned() {
+                if existing.sandbox_instance_id == request.sandbox_instance_id {
+                    let record = self.journal.load(&request.runtime_scope_id)?;
+                    let identity = self.driver.identity(existing.pid)?;
+                    if record.as_ref().is_some_and(|record| {
+                        record.pid == existing.pid
+                            && record.sandbox_instance_id == existing.sandbox_instance_id
+                            && identity.as_ref().is_some_and(|identity| {
+                                identity.process_started_at == record.process_started_at
+                                    && identity.ownership_nonce == record.ownership_nonce
+                            })
+                    }) {
+                        return Ok(existing);
+                    }
+                    active.remove(&request.runtime_scope_id);
+                    self.journal.remove(&request.runtime_scope_id)?;
+                } else {
+                    return Err(LocalRuntimeError::new(
+                        LocalRuntimeErrorCode::InstanceConflict,
+                        "another local runtime instance is already active for this scope",
+                    ));
                 }
-                active.remove(&request.runtime_scope_id);
-                self.journal.remove(&request.runtime_scope_id)?;
-            } else {
-                return Err(LocalRuntimeError::new(
-                    LocalRuntimeErrorCode::InstanceConflict,
-                    "another local runtime instance is already active for this scope",
-                ));
             }
         }
         if let Some(record) = self.journal.load(&request.runtime_scope_id)? {
@@ -88,10 +113,21 @@ impl<D: RuntimeDriver> LocalRuntimeManager<D> {
                         && identity.ownership_nonce == record.ownership_nonce
                         && record.sandbox_instance_id == request.sandbox_instance_id =>
                 {
-                    self.driver.wait_ready(record.pid, &request)?;
-                    let status = status_from_record(&request, &record);
-                    active.insert(status.runtime_scope_id.clone(), status.clone());
-                    return Ok(status);
+                    let starting = status_from_record(&request, &record, InstanceState::Starting);
+                    self.publish_status(starting)?;
+                    if let Err(error) = self.driver.wait_ready(record.pid, &request) {
+                        self.clear_status(&request.runtime_scope_id, &request.sandbox_instance_id);
+                        return Err(error);
+                    }
+                    let ready_record = JournalRecord {
+                        state: InstanceState::Ready,
+                        updated_at: Utc::now(),
+                        ..record
+                    };
+                    self.journal.write(&ready_record)?;
+                    let ready = status_from_record(&request, &ready_record, InstanceState::Ready);
+                    self.publish_status(ready.clone())?;
+                    return Ok(ready);
                 }
                 Some(identity)
                     if identity.process_started_at == record.process_started_at
@@ -127,49 +163,39 @@ impl<D: RuntimeDriver> LocalRuntimeManager<D> {
             let _ = self.driver.stop(identity.pid);
             return Err(error);
         }
-        if let Err(error) = self.driver.wait_ready(identity.pid, &request) {
+        let starting = status_from_record(&request, &record, InstanceState::Starting);
+        if let Err(error) = self.publish_status(starting) {
             let _ = self.driver.stop(identity.pid);
             let _ = self.journal.remove(&request.runtime_scope_id);
             return Err(error);
         }
-        if let Err(error) = self.journal.write(&JournalRecord {
+        if let Err(error) = self.driver.wait_ready(identity.pid, &request) {
+            self.clear_status(&request.runtime_scope_id, &request.sandbox_instance_id);
+            let _ = self.driver.stop(identity.pid);
+            let _ = self.journal.remove(&request.runtime_scope_id);
+            return Err(error);
+        }
+        let ready_record = JournalRecord {
             state: InstanceState::Ready,
             updated_at: Utc::now(),
             ..record
-        }) {
+        };
+        if let Err(error) = self.journal.write(&ready_record) {
+            self.clear_status(&request.runtime_scope_id, &request.sandbox_instance_id);
             let _ = self.driver.stop(identity.pid);
             let _ = self.journal.remove(&request.runtime_scope_id);
             return Err(error);
         }
-        let status = InstanceStatus {
-            runtime_scope_id: request.runtime_scope_id.clone(),
-            application_id: request.application_id.clone(),
-            sandbox_instance_id: request.sandbox_instance_id.clone(),
-            state: InstanceState::Ready,
-            pid: identity.pid,
-            runtime_base_url: format!("http://{}", request.runtime_addr),
-            builder_url: format!("http://{}/builder/", request.runtime_addr),
-            started_at: Utc::now().to_rfc3339(),
-        };
-        active.insert(status.runtime_scope_id.clone(), status.clone());
-        Ok(status)
+        let ready = status_from_record(&request, &ready_record, InstanceState::Ready);
+        self.publish_status(ready.clone())?;
+        Ok(ready)
     }
 
     pub fn status(
         &self,
         runtime_scope_id: &str,
     ) -> Result<Option<InstanceStatus>, LocalRuntimeError> {
-        Ok(self
-            .active
-            .lock()
-            .map_err(|_| {
-                LocalRuntimeError::new(
-                    LocalRuntimeErrorCode::JournalFailed,
-                    "local runtime state lock is poisoned",
-                )
-            })?
-            .get(runtime_scope_id)
-            .cloned())
+        Ok(self.active_instances()?.get(runtime_scope_id).cloned())
     }
 
     pub fn stop(
@@ -297,12 +323,16 @@ fn process_identity_from_record(record: &JournalRecord) -> ProcessIdentity {
     }
 }
 
-fn status_from_record(request: &StartRequest, record: &JournalRecord) -> InstanceStatus {
+fn status_from_record(
+    request: &StartRequest,
+    record: &JournalRecord,
+    state: InstanceState,
+) -> InstanceStatus {
     InstanceStatus {
         runtime_scope_id: record.runtime_scope_id.clone(),
         application_id: record.application_id.clone(),
         sandbox_instance_id: record.sandbox_instance_id.clone(),
-        state: InstanceState::Ready,
+        state,
         pid: record.pid,
         runtime_base_url: format!("http://{}", request.runtime_addr),
         builder_url: format!("http://{}/builder/", request.runtime_addr),
@@ -640,24 +670,18 @@ impl ScopeLock {
                 "cannot open local runtime lock",
             )
         })?;
-        #[cfg(unix)]
-        unsafe {
-            if libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_EX) != 0 {
-                return Err(LocalRuntimeError::new(
-                    LocalRuntimeErrorCode::JournalFailed,
-                    "cannot acquire local runtime lock",
-                ));
-            }
-        }
+        file.lock().map_err(|_| {
+            LocalRuntimeError::new(
+                LocalRuntimeErrorCode::JournalFailed,
+                "cannot acquire local runtime lock",
+            )
+        })?;
         Ok(Self { _file: file })
     }
 }
 impl Drop for ScopeLock {
     fn drop(&mut self) {
-        #[cfg(unix)]
-        unsafe {
-            libc::flock(std::os::fd::AsRawFd::as_raw_fd(&self._file), libc::LOCK_UN);
-        }
+        let _ = self._file.unlock();
     }
 }
 
@@ -727,6 +751,39 @@ mod tests {
 
         fn stop(&self, _: u32) -> Result<(), LocalRuntimeError> {
             self.stops.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn identity(&self, _: u32) -> Result<Option<ProcessIdentity>, LocalRuntimeError> {
+            Ok(None)
+        }
+    }
+
+    struct BlockingReadinessDriver {
+        entered: std::sync::mpsc::SyncSender<()>,
+        release: Mutex<std::sync::mpsc::Receiver<()>>,
+    }
+
+    impl RuntimeDriver for BlockingReadinessDriver {
+        fn spawn(
+            &self,
+            _request: &StartRequest,
+            ownership_nonce: &str,
+        ) -> Result<ProcessIdentity, LocalRuntimeError> {
+            Ok(ProcessIdentity {
+                pid: 41001,
+                process_started_at: "start".into(),
+                ownership_nonce: ownership_nonce.into(),
+            })
+        }
+
+        fn wait_ready(&self, _: u32, _: &StartRequest) -> Result<(), LocalRuntimeError> {
+            self.entered.send(()).unwrap();
+            self.release.lock().unwrap().recv().unwrap();
+            Ok(())
+        }
+
+        fn stop(&self, _: u32) -> Result<(), LocalRuntimeError> {
             Ok(())
         }
 
@@ -920,6 +977,70 @@ mod tests {
         assert_eq!(error.code, LocalRuntimeErrorCode::ReadinessFailed);
         assert_eq!(manager.driver.stops.load(Ordering::SeqCst), 1);
         assert!(manager.journal.load("scope-a").unwrap().is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn status_reports_starting_while_readiness_is_still_pending() {
+        let root = temp_root();
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let manager = std::sync::Arc::new(LocalRuntimeManager::new(
+            &root,
+            BlockingReadinessDriver {
+                entered: entered_tx,
+                release: Mutex::new(release_rx),
+            },
+        ));
+        let start_manager = manager.clone();
+        let request = request(&root, "instance-a");
+        let start = std::thread::spawn(move || start_manager.start(request));
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+
+        let status_manager = manager.clone();
+        let (status_tx, status_rx) = std::sync::mpsc::sync_channel(1);
+        let status = std::thread::spawn(move || {
+            status_tx.send(status_manager.status("scope-a")).unwrap();
+        });
+        let observed = status_rx.recv_timeout(std::time::Duration::from_millis(100));
+
+        release_tx.send(()).unwrap();
+        let started = start.join().unwrap().unwrap();
+        status.join().unwrap();
+
+        let observed = observed
+            .expect("status should not block behind Runtime readiness")
+            .unwrap()
+            .expect("starting Runtime should be visible");
+        assert_eq!(observed.state, InstanceState::Starting);
+        assert_eq!(observed.sandbox_instance_id, started.sandbox_instance_id);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scope_lock_excludes_a_second_manager_on_every_desktop_platform() {
+        let root = temp_root();
+        let first = ScopeLock::acquire(&root, "scope-a").unwrap();
+        let lock_path = root
+            .join("local-runtimes")
+            .join("scope-a")
+            .join("runtime.lock");
+        let second = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lock_path)
+            .unwrap();
+
+        let error = second
+            .try_lock()
+            .expect_err("a second manager must not acquire the same scope lock");
+        assert!(matches!(error, std::fs::TryLockError::WouldBlock));
+
+        drop(first);
+        second.lock().unwrap();
+        second.unlock().unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 

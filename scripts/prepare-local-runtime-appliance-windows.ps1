@@ -470,7 +470,7 @@ manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="ut
 
   & (Join-Path $ApplianceDir "codex\bin\codex.exe") --version | Out-Null
   Assert-NativeSuccess "Packaged Codex validation" $LASTEXITCODE
-  & $PortablePython -c "import pydantic, yaml, agentic_core"
+  & $PortablePython -c "from pydantic import BaseModel; import agentic_core, glob, pathlib, sysconfig, yaml, zoneinfo; assert BaseModel; assert sysconfig.get_config_vars()"
   Assert-NativeSuccess "Portable Python validation" $LASTEXITCODE
 
   $ProbeHome = Join-Path $TemporaryRoot "codex-home"

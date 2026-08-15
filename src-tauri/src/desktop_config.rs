@@ -95,8 +95,12 @@ pub struct DesktopLocalAiConfig {
     pub bridge_protocol_version: u32,
 }
 
-fn default_local_ai_enabled() -> bool { true }
-fn default_bridge_protocol_version() -> u32 { 1 }
+fn default_local_ai_enabled() -> bool {
+    true
+}
+fn default_bridge_protocol_version() -> u32 {
+    1
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DesktopDiscoveryDocument {
@@ -335,9 +339,8 @@ impl DesktopConfigStore {
 
         verify_root_is_writable(&root_dir)?;
 
-        let discovery_url = normalize_login_url(
-            input.discovery_url.as_deref().unwrap_or(&login.base_url),
-        )?;
+        let discovery_url =
+            normalize_login_url(input.discovery_url.as_deref().unwrap_or(&login.base_url))?;
         let config = DesktopConfig {
             schema_version: DESKTOP_CONFIG_SCHEMA_VERSION,
             root_dir: root_dir.clone(),

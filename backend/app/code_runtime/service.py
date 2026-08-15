@@ -48,7 +48,6 @@ WorkspaceOpen = Callable[[str, str | None], Awaitable[dict[str, Any]]]
 _EMBED_TOKEN_TYPE = "code_runtime_embed"
 _PROXY_COOKIE_TOKEN_TYPE = "code_runtime_proxy"
 _EMBED_TOKEN_ISSUER = "ai-builder"
-_DEFAULT_CONTROL_PLANE_URL = "http://127.0.0.1:8080"
 _DEFAULT_SEED_PROJECT_ID = "1781233861147"
 _LOCAL_APPLICATION_PREFIX = "local-"
 _LEGACY_BROWSER_SESSION_ID = "legacy-browser-session"
@@ -420,11 +419,24 @@ def external_application_id_for(app: Application) -> str:
 
 
 def control_plane_base_url() -> str:
-    return (
+    configured = (
         os.getenv("DOLPHIN_CODE_CONTROL_PLANE_URL", "").strip()
         or (settings.dolphin_code_control_plane_url or "").strip()
-        or _DEFAULT_CONTROL_PLANE_URL
+    )
+    if configured:
+        return configured.rstrip("/")
+
+    # The old localhost fallback pointed desktop/web sessions at a developer's
+    # machine whenever startup forgot to propagate the remote URL. Derive the
+    # Code coordinator from the Control Plane login origin instead.
+    workspace = (
+        os.getenv("DOLPHIN_WORKSPACE_BASE_URL", "").strip()
+        or (settings.dolphin_workspace_base_url or "").strip()
     ).rstrip("/")
+    if workspace:
+        return workspace if workspace.endswith("/control-plane") else f"{workspace}/control-plane"
+
+    return ""
 
 
 def _workspace_open_override_url() -> str:

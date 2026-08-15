@@ -3,7 +3,11 @@ param(
   [string]$Target = "x86_64-pc-windows-msvc",
   [ValidateSet("portable", "nsis", "msi", "all")]
   [string]$Bundle = "portable",
-  [switch]$SkipInstall
+  [switch]$SkipInstall,
+  [switch]$UsePreparedRuntimeAppliance,
+  [switch]$SkipFrontendBuild,
+  [switch]$SkipSidecarBuild,
+  [switch]$SkipTauriBuild
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,11 +19,20 @@ if (-not $IsWin) {
   throw "Windows desktop packages must be built on Windows because PyInstaller cannot cross-compile the sidecar exe."
 }
 
+if ($env:CARGO_TARGET_DIR) {
+  $env:CARGO_TARGET_DIR = $env:CARGO_TARGET_DIR.Trim()
+}
+
 $StartTs = Get-Date
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $Frontend = Join-Path $Root "frontend"
 $Backend = Join-Path $Root "backend"
 $Tauri = Join-Path $Root "src-tauri"
+$CargoTargetRoot = if ($env:CARGO_TARGET_DIR) {
+  $env:CARGO_TARGET_DIR
+} else {
+  Join-Path $Tauri "target"
+}
 $Config = Join-Path $Tauri "tauri.conf.json"
 $OriginalConfig = Get-Content $Config -Raw
 $RestoreConfig = $false
@@ -40,8 +53,19 @@ function Assert-NativeSuccess($Name, $ExitCode) {
   }
 }
 
+function Copy-Tree($Source, $Destination) {
+  $SourcePath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Source)
+  $DestinationPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Destination)
+  New-Item -ItemType Directory -Force -Path $DestinationPath | Out-Null
+  & robocopy $SourcePath $DestinationPath /E /NFL /NDL /NJH /NJS /NP /XD __pycache__ /XF *.pyc *.pyo | Out-Null
+  if ($LASTEXITCODE -gt 7) {
+    throw "robocopy failed from $SourcePath to $DestinationPath with exit code $LASTEXITCODE."
+  }
+}
+
 function Write-Utf8NoBom($Path, $Content) {
-  [IO.File]::WriteAllText($Path, $Content, [Text.UTF8Encoding]::new($false))
+  $FilePath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+  [IO.File]::WriteAllText($FilePath, $Content, [Text.UTF8Encoding]::new($false))
 }
 
 function Get-PythonCommand {
@@ -104,7 +128,27 @@ try {
 
   Write-Host "==> [build-desktop-windows.ps1] ROOT=$Root TARGET=$Target BUNDLE=$Bundle"
 
-  Invoke-Step "1/5 Install frontend dependencies" {
+  Invoke-Step "1/6 Prepare Windows local Runtime appliance" {
+    if (-not $UsePreparedRuntimeAppliance) {
+      & (Join-Path $Root "scripts\prepare-local-runtime-appliance-windows.ps1")
+      Assert-NativeSuccess "Windows local Runtime appliance preparation" $LASTEXITCODE
+    }
+    foreach ($RelativePath in @(
+      "bin\agent-runtime.exe",
+      "codex\bin\codex.exe",
+      "codex\codex-resources\codex-command-runner.exe",
+      "codex\codex-resources\codex-windows-sandbox-setup.exe",
+      "agentic-coding\.venv\Scripts\python.exe",
+      "agentic-coding-pack\manifest.yaml",
+      "web\builder\dist\index.html"
+    )) {
+      if (-not (Test-Path -LiteralPath (Join-Path $Tauri "resources\agent-runtime\$RelativePath") -PathType Leaf)) {
+        throw "Prepared local Runtime appliance is missing: $RelativePath"
+      }
+    }
+  }
+
+  Invoke-Step "2/6 Install frontend dependencies" {
     Push-Location $Frontend
     try {
       if (-not $SkipInstall -and -not (Test-Path "node_modules")) {
@@ -116,7 +160,15 @@ try {
     }
   }
 
-  Invoke-Step "2/5 Build frontend desktop bundle" {
+  Invoke-Step "3/6 Build frontend desktop bundle" {
+    if ($SkipFrontendBuild) {
+      $FrontendEntry = Join-Path $Frontend "dist-desktop\index.html"
+      if (-not (Test-Path -LiteralPath $FrontendEntry -PathType Leaf)) {
+        throw "Cannot skip frontend build because desktop bundle is missing: $FrontendEntry"
+      }
+      Write-Host "Using prepared frontend desktop bundle: $FrontendEntry"
+      return
+    }
     Push-Location $Frontend
     $PreviousViteDesktop = [Environment]::GetEnvironmentVariable("VITE_DESKTOP", "Process")
     $PreviousViteBaseUrl = [Environment]::GetEnvironmentVariable("VITE_BASE_URL", "Process")
@@ -132,7 +184,15 @@ try {
     }
   }
 
-  Invoke-Step "3/5 Build PyInstaller Windows sidecar" {
+  Invoke-Step "4/6 Build PyInstaller Windows sidecar" {
+    if ($SkipSidecarBuild) {
+      $PreparedSidecar = Join-Path $Backend "dist\ruijing-sidecar.exe"
+      if (-not (Test-Path -LiteralPath $PreparedSidecar -PathType Leaf)) {
+        throw "Cannot skip sidecar build because prepared executable is missing: $PreparedSidecar"
+      }
+      Write-Host "Using prepared Windows sidecar: $PreparedSidecar"
+      return
+    }
     Push-Location $Backend
     try {
       $VenvPython = Join-Path $Backend ".venv\Scripts\python.exe"
@@ -164,7 +224,7 @@ try {
     }
   }
 
-  Invoke-Step "4/5 Place sidecar binary" {
+  Invoke-Step "5/6 Place sidecar binary" {
     $BinDir = Join-Path $Tauri "binaries"
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
     $Sidecar = Join-Path $Backend "dist\ruijing-sidecar.exe"
@@ -176,7 +236,7 @@ try {
     Get-Item $Dest | Format-List FullName,Length,LastWriteTime
   }
 
-  Invoke-Step "5/5 Build Tauri Windows package" {
+  Invoke-Step "6/6 Build Tauri Windows package" {
     Push-Location $Root
     try {
       Initialize-MsvcEnvironment
@@ -184,16 +244,50 @@ try {
         npm ci
         Assert-NativeSuccess "Root dependency install" $LASTEXITCODE
       }
-      if ($Bundle -eq "portable") {
-        node .\node_modules\@tauri-apps\cli\tauri.js build --target $Target --no-bundle
+      $ReleaseRoot = Join-Path $CargoTargetRoot "$Target\release"
+      $ReleaseAgentRuntime = Join-Path $ReleaseRoot "resources\agent-runtime"
+      if ($SkipTauriBuild) {
+        foreach ($PreparedBinary in @("app.exe", "ruijing-sidecar.exe")) {
+          if (-not (Test-Path -LiteralPath (Join-Path $ReleaseRoot $PreparedBinary) -PathType Leaf)) {
+            throw "Cannot skip Tauri build because prepared binary is missing: $PreparedBinary"
+          }
+        }
+        Write-Host "Using prepared Tauri binaries: $ReleaseRoot"
       } else {
-        node .\node_modules\@tauri-apps\cli\tauri.js build --target $Target --bundles $Bundle
+        Remove-Item -LiteralPath $ReleaseAgentRuntime -Recurse -Force -ErrorAction SilentlyContinue
+        if ($Bundle -eq "portable") {
+          node .\node_modules\@tauri-apps\cli\tauri.js build --target $Target --no-bundle
+        } else {
+          node .\node_modules\@tauri-apps\cli\tauri.js build --target $Target --bundles $Bundle
+        }
+        Assert-NativeSuccess "Tauri Windows build" $LASTEXITCODE
       }
-      Assert-NativeSuccess "Tauri Windows build" $LASTEXITCODE
 
-      $ReleaseRoot = Join-Path $Tauri "target\$Target\release"
+      $ReleaseResources = if ($SkipTauriBuild) {
+        Join-Path $Tauri "resources\agent-runtime"
+      } else {
+        Join-Path $ReleaseRoot "resources\agent-runtime"
+      }
+      foreach ($RelativePath in @(
+        "bin\agent-runtime.exe",
+        "codex\bin\codex.exe",
+        "codex\codex-resources\codex-command-runner.exe",
+        "codex\codex-resources\codex-windows-sandbox-setup.exe",
+        "agentic-coding\.venv\Scripts\python.exe",
+        "agentic-coding-pack\manifest.yaml",
+        "web\builder\dist\index.html"
+      )) {
+        if (-not (Test-Path -LiteralPath (Join-Path $ReleaseResources $RelativePath) -PathType Leaf)) {
+          throw "Tauri package is missing local Runtime resource: $RelativePath"
+        }
+      }
+      $ReleasePython = Join-Path $ReleaseResources "agentic-coding\.venv\Scripts\python.exe"
+      & $ReleasePython -B -c "from pydantic import BaseModel; import glob, pathlib, sysconfig, zoneinfo; assert BaseModel; assert sysconfig.get_config_vars()"
+      Assert-NativeSuccess "Packaged Runtime Python validation" $LASTEXITCODE
       if ($Bundle -eq "portable") {
-        $DownloadDir = Join-Path $Root "dist-desktop\windows"
+        $DownloadDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
+          (Join-Path $Root "dist-desktop\windows")
+        )
         $PortableStagingRoot = Join-Path $env:TEMP "ruijing-$PackageVersion-portable"
         $PortableAppRoot = Join-Path $PortableStagingRoot "Dolphin Code"
         $PortableZip = Join-Path $DownloadDir "ruijing-$PackageVersion-windows-x86_64-portable.zip"
@@ -206,16 +300,29 @@ try {
 
         Copy-Item (Join-Path $ReleaseRoot "app.exe") (Join-Path $PortableAppRoot "Dolphin Code.exe") -Force
         Copy-Item (Join-Path $ReleaseRoot "ruijing-sidecar.exe") $PortableAppRoot -Force
+        if ($SkipTauriBuild) {
+          Copy-Tree (Join-Path $Tauri "resources\agent-runtime") (Join-Path $PortableAppRoot "resources\agent-runtime")
+        } else {
+          Copy-Tree (Join-Path $ReleaseRoot "resources") (Join-Path $PortableAppRoot "resources")
+        }
 
         foreach ($RelativePath in @(
           "Dolphin Code.exe",
-          "ruijing-sidecar.exe"
+          "ruijing-sidecar.exe",
+          "resources\agent-runtime\bin\agent-runtime.exe",
+          "resources\agent-runtime\codex\bin\codex.exe",
+          "resources\agent-runtime\agentic-coding\.venv\Scripts\python.exe",
+          "resources\agent-runtime\agentic-coding-pack\manifest.yaml",
+          "resources\agent-runtime\web\builder\dist\index.html"
         )) {
           $PortablePath = Join-Path $PortableAppRoot $RelativePath
           if (-not (Test-Path -LiteralPath $PortablePath -PathType Leaf)) {
             throw "Portable package is missing $RelativePath"
           }
         }
+        $PortablePython = Join-Path $PortableAppRoot "resources\agent-runtime\agentic-coding\.venv\Scripts\python.exe"
+        & $PortablePython -B -c "from pydantic import BaseModel; import glob, pathlib, sysconfig, zoneinfo; assert BaseModel; assert sysconfig.get_config_vars()"
+        Assert-NativeSuccess "Portable Runtime Python validation" $LASTEXITCODE
 
         Push-Location $PortableStagingRoot
         try {
@@ -239,9 +346,9 @@ try {
   $Elapsed = [int]((Get-Date) - $StartTs).TotalSeconds
   Write-Host ""
   Write-Host "==> Done in ${Elapsed}s. Artifacts:"
-  $BundleRoot = Join-Path $Tauri "target\$Target\release\bundle"
+  $BundleRoot = Join-Path $CargoTargetRoot "$Target\release\bundle"
   if (-not (Test-Path $BundleRoot)) {
-    $BundleRoot = Join-Path $Tauri "target\release\bundle"
+    $BundleRoot = Join-Path $CargoTargetRoot "release\bundle"
   }
   if ($Bundle -ne "portable" -and (Test-Path $BundleRoot)) {
     Get-ChildItem $BundleRoot -Recurse -File |

@@ -57,6 +57,19 @@ def sqlite_database_url(database_path: Path) -> str:
     return f"sqlite+aiosqlite:///{path}"
 
 
+def control_plane_code_url(login_base_url: str) -> str:
+    """Derive the remote Code Control Plane from the desktop login service.
+
+    The desktop sidecar must not fall back to a developer-local coordinator. A
+    separately configured Code URL can still
+    be supplied by the Tauri launcher; this helper covers the web/sidecar path.
+    """
+    base = str(login_base_url or "").strip().rstrip("/")
+    if not base:
+        return ""
+    return base if base.endswith("/control-plane") else f"{base}/control-plane"
+
+
 def build_env(
     data_dir: Path,
     port: int,
@@ -91,6 +104,13 @@ def build_env(
         "AUTH_PROVIDER": login_mode,
         "DOLPHIN_WORKSPACE_BASE_URL": (
             login_base_url if login_mode == "control_plane" else ""
+        ),
+        # Keep Code's remote coordinator aligned with the selected login
+        # service.  Empty in standalone aPaaS mode, which has no Code plane.
+        "DOLPHIN_CODE_CONTROL_PLANE_URL": (
+            control_plane_code_url(login_base_url)
+            if login_mode == "control_plane"
+            else ""
         ),
         "APAAS_BASE_URL": login_base_url if login_mode == "apaas" else "",
         "PUBLIC_ACCOUNT_BASE_URL": "",

@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import logging
 import ntpath
 import os
 import re
@@ -43,22 +44,11 @@ from app.code_runtime.model_provider import (
     provider_identity_from_document,
 )
 
-
-try:
-    import fcntl as _fcntl
-except ImportError:
-    _fcntl = None
-
-try:
-    import msvcrt as _msvcrt
-except ImportError:
-    _msvcrt = None
-
-
 _APPLICATION_COMPONENT = re.compile(r"^(?!\.{1,2}$)[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _INSTANCE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _MAX_INSTANCE_ID_LENGTH = 160
 _MANAGER_UNAVAILABLE = "LOCAL_RUNTIME_MANAGER_UNAVAILABLE"
+_MANAGER_TIMEOUT = "LOCAL_RUNTIME_MANAGER_TIMEOUT"
 _MANAGER_INVALID_RESPONSE = "LOCAL_RUNTIME_MANAGER_INVALID_RESPONSE"
 _INSTANCE_CONFLICT = "LOCAL_RUNTIME_INSTANCE_CONFLICT"
 _INSTANCE_INVALID = "LOCAL_RUNTIME_INSTANCE_ID_INVALID"
@@ -95,6 +85,7 @@ _MANAGER_INLINE_SECRET = re.compile(
     r"(?i)(\b(?:token|password|secret|api[_-]?key)\s*=\s*)[^\s,;]+"
 )
 _MANAGER_URL_CREDENTIALS = re.compile(r"(?i)(https?://)[^/\s@]+@")
+logger = logging.getLogger(__name__)
 
 
 def _error(status_code: int, code: str, message: str) -> HTTPException:
@@ -906,50 +897,6 @@ def _read_secret_at(parent_fd: int | Path, name: str) -> str:
     return value
 
 
-@contextlib.contextmanager
-def _runtime_lock_file(scope: dict[str, Any]):
-    scope_fd = scope["scope_fd"]
-    if isinstance(scope_fd, Path):
-        lock_path = scope["scope_path"] / "runtime.lock"
-        if lock_path.is_symlink():
-            raise ValueError("runtime lock file is unsafe")
-        with lock_path.open("a+b") as lock_file:
-            yield lock_file
-        return
-
-    lock_fd = os.open(
-        "runtime.lock",
-        os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
-        0o600,
-        dir_fd=scope_fd,
-    )
-    with os.fdopen(lock_fd, "a+b") as lock_file:
-        yield lock_file
-
-
-def _lock_runtime_file(lock_file) -> None:
-    if _fcntl is not None:
-        _fcntl.flock(lock_file.fileno(), _fcntl.LOCK_EX)
-        return
-    if _msvcrt is not None:
-        lock_file.seek(0, os.SEEK_END)
-        if lock_file.tell() == 0:
-            lock_file.write(b"\0")
-            lock_file.flush()
-        lock_file.seek(0)
-        _msvcrt.locking(lock_file.fileno(), _msvcrt.LK_LOCK, 1)
-        return
-    raise RuntimeError("no supported file locking implementation")
-
-
-def _unlock_runtime_file(lock_file) -> None:
-    if _fcntl is not None:
-        _fcntl.flock(lock_file.fileno(), _fcntl.LOCK_UN)
-    elif _msvcrt is not None:
-        lock_file.seek(0)
-        _msvcrt.locking(lock_file.fileno(), _msvcrt.LK_UNLCK, 1)
-
-
 def _new_instance_id() -> str:
     sandbox_instance_id = f"local-{uuid.uuid4().hex}"
     if len(sandbox_instance_id) > _MAX_INSTANCE_ID_LENGTH or not _INSTANCE_COMPONENT.fullmatch(
@@ -1155,6 +1102,7 @@ class LocalRuntimeClient:
     ) -> httpx.Response:
         if not self.token:
             raise _error(503, _MANAGER_UNAVAILABLE, "本地 Runtime manager 未配置")
+        started_at = time.monotonic()
         try:
             async with self.http_client_factory() as client:
                 return await client.request(
@@ -1164,6 +1112,34 @@ class LocalRuntimeClient:
                     json=payload,
                 )
         except httpx.RequestError as exc:
+            elapsed_ms = round((time.monotonic() - started_at) * 1000)
+            logger.warning(
+                "local Runtime manager request failed method=%s path=%s elapsed_ms=%s error_type=%s",
+                method,
+                path,
+                elapsed_ms,
+                type(exc).__name__,
+            )
+            if isinstance(exc, httpx.ConnectTimeout):
+                raise _error(503, _MANAGER_UNAVAILABLE, "本地 Runtime manager 连接超时") from exc
+            if isinstance(exc, httpx.ConnectError):
+                raise _error(503, _MANAGER_UNAVAILABLE, "本地 Runtime manager 无法连接") from exc
+            if isinstance(
+                exc,
+                (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout),
+            ):
+                message = (
+                    "本地 Runtime manager 启动请求超时"
+                    if method.upper() == "POST" and path.endswith("/instances/start")
+                    else "本地 Runtime manager 请求超时"
+                )
+                raise _error(503, _MANAGER_TIMEOUT, message) from exc
+            if isinstance(exc, httpx.RemoteProtocolError):
+                raise _error(
+                    502,
+                    _MANAGER_INVALID_RESPONSE,
+                    "本地 Runtime manager 连接异常中断",
+                ) from exc
             raise _error(503, _MANAGER_UNAVAILABLE, "本地 Runtime manager 不可用") from exc
 
     @staticmethod
@@ -1254,7 +1230,7 @@ class LocalRuntimeClient:
             if state != "starting":
                 raise _error(409, _INSTANCE_CONFLICT, "本地应用已有不可复用的 Runtime 实例")
             if time.monotonic() >= deadline:
-                raise _error(503, _MANAGER_UNAVAILABLE, "本地 Runtime 启动超时")
+                raise _error(503, _MANAGER_TIMEOUT, "本地 Runtime 启动状态等待超时")
             await asyncio.sleep(_STARTING_POLL_SECONDS)
 
     async def application_open_status(
@@ -1483,7 +1459,7 @@ class LocalRuntimeClient:
             "APAAS_RUNTIME_WORKSPACE_PATH": str(runtime_dir),
             "APAAS_CODEX_HOME": str(codex_home),
             "APAAS_RUNTIME_ADDR": runtime_address,
-            "APAAS_AUTH_MODE": "token",
+            "APAAS_AUTH_MODE": "disabled_local",
             "APAAS_SANDBOX_TOKEN_PATH": str(token_path),
         }
         start_payload = {
@@ -1560,62 +1536,41 @@ class LocalRuntimeClient:
             async with self._lock(runtime_scope_id):
                 if self.runtime_data_dir is None:
                     raise _error(503, _MANAGER_UNAVAILABLE, "本地 Runtime manager 未配置")
-                try:
-                    with _scope_directory_fds(self.runtime_data_dir, runtime_scope_id) as paths:
-                        with _runtime_lock_file(paths) as lock_file:
-                            await asyncio.to_thread(_lock_runtime_file, lock_file)
-                            try:
-                                manager_status = await self._existing_status(
-                                    status_path,
-                                    runtime_scope_id,
-                                    application_id,
-                                )
-                                if manager_status is not None:
-                                    sandbox_instance_id = _text(
-                                        manager_status.get("sandbox_instance_id")
-                                    )
-                                    await self._assert_reused_provider(
-                                        db,
-                                        session,
-                                        ctx,
-                                        runtime_scope_id,
-                                        sandbox_instance_id,
-                                        provider_options,
-                                    )
-                                else:
-                                    sandbox_instance_id = _new_instance_id()
-                                    provider_document, _identity = await _provider_document(
-                                        db,
-                                        ctx,
-                                        getattr(session, "selected_llm_config_id", None),
-                                        **(provider_options or {}),
-                                    )
-                                    manager_status = await self._start(
-                                        db,
-                                        session,
-                                        ctx,
-                                        workspace,
-                                        repository_path,
-                                        runtime_scope_id,
-                                        application_id,
-                                        sandbox_instance_id,
-                                        conversation_id,
-                                        provider_document,
-                                    )
-                            except BaseException:
-                                with contextlib.suppress(OSError, RuntimeError):
-                                    await asyncio.to_thread(_unlock_runtime_file, lock_file)
-                                raise
-                            else:
-                                await asyncio.to_thread(_unlock_runtime_file, lock_file)
-                except HTTPException:
-                    raise
-                except (OSError, RuntimeError, ValueError) as exc:
-                    raise _error(
-                        503,
-                        _PREPARATION_FAILED,
-                        "无法准备本地 Runtime 配置",
-                    ) from exc
+                manager_status = await self._existing_status(
+                    status_path,
+                    runtime_scope_id,
+                    application_id,
+                )
+                if manager_status is not None:
+                    sandbox_instance_id = _text(manager_status.get("sandbox_instance_id"))
+                    await self._assert_reused_provider(
+                        db,
+                        session,
+                        ctx,
+                        runtime_scope_id,
+                        sandbox_instance_id,
+                        provider_options,
+                    )
+                else:
+                    sandbox_instance_id = _new_instance_id()
+                    provider_document, _identity = await _provider_document(
+                        db,
+                        ctx,
+                        getattr(session, "selected_llm_config_id", None),
+                        **(provider_options or {}),
+                    )
+                    manager_status = await self._start(
+                        db,
+                        session,
+                        ctx,
+                        workspace,
+                        repository_path,
+                        runtime_scope_id,
+                        application_id,
+                        sandbox_instance_id,
+                        conversation_id,
+                        provider_document,
+                    )
 
         opened = self._opened(
             manager_status,
