@@ -141,7 +141,9 @@ async function publishStagedOutput(staging, output, operations = {}) {
   }
 }
 
-export async function prepareRelease({ version, repository, tag, input, output }) {
+export async function prepareRelease({ version, repository, tag, input, output, operations = {} }) {
+  const rmImpl = operations.rm ?? rm;
+  const warn = operations.warn ?? ((message) => console.warn(message));
   if (!semverPattern.test(version ?? '')) {
     throw new Error(`Version must be X.Y.Z SemVer: ${version ?? ''}`);
   }
@@ -210,10 +212,14 @@ export async function prepareRelease({ version, repository, tag, input, output }
       checksumNames.map(async (name) => `${await sha256(path.join(staging, name))}  ${name}`),
     );
     await writeFile(path.join(staging, 'SHA256SUMS.txt'), `${sums.join('\n')}\n`);
-    await publishStagedOutput(staging, output);
+    await publishStagedOutput(staging, output, operations.publish);
     return { names, latest, output };
   } catch (error) {
-    await rm(staging, { recursive: true, force: true });
+    try {
+      await rmImpl(staging, { recursive: true, force: true });
+    } catch (cleanupError) {
+      warn(`Desktop Release failed: ${error.message}; staging cleanup also failed: ${cleanupError.message}`);
+    }
     throw error;
   }
 }
@@ -278,6 +284,39 @@ async function selfTest() {
       throw new Error('Duplicate inputs must not modify the release output boundary');
     }
     await rm(duplicate, { recursive: true, force: true });
+
+    const outerCleanupOutput = path.join(root, 'outer-cleanup-output');
+    const outerCleanupWarnings = [];
+    await expectFailure(
+      () => prepareRelease({
+        version,
+        repository: 'Mars-hub404/apaas-builder-ai',
+        tag: 'v0.2.70',
+        input,
+        output: outerCleanupOutput,
+        operations: {
+          publish: {
+            rename: async (from, to) => {
+              if (to === outerCleanupOutput && path.basename(from).startsWith(`.${path.basename(outerCleanupOutput)}.staging-`)) {
+                throw new Error('injected primary publish failure');
+              }
+              return rename(from, to);
+            },
+          },
+          rm: async (target, options) => {
+            if (path.basename(target).startsWith(`.${path.basename(outerCleanupOutput)}.staging-`)) {
+              throw new Error('injected outer staging cleanup failure');
+            }
+            return rm(target, options);
+          },
+          warn: (message) => outerCleanupWarnings.push(message),
+        },
+      }),
+      'injected primary publish failure',
+    );
+    if (outerCleanupWarnings.length !== 1 || !outerCleanupWarnings[0].includes('injected outer staging cleanup failure')) {
+      throw new Error('Outer cleanup failures must warn without replacing the primary publication failure');
+    }
 
     await rm(path.join(input, names.macosDmg));
     await expectFailure(
