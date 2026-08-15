@@ -5,6 +5,137 @@ set -euo pipefail
 START_TS=$(date +%s)
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TRIPLE="$(rustc --print host-tuple)"
+CONFIG="$ROOT/src-tauri/tauri.conf.json"
+SOURCE_REVISION="$(git -C "$ROOT" rev-parse HEAD)"
+UPDATER_ARTIFACTS_ENABLED=1
+
+is_release_build() {
+    [[ "${DOLPHIN_RELEASE_BUILD:-}" == "1" || "${GITHUB_REF_TYPE:-}" == "tag" || "${GITHUB_REF:-}" == refs/tags/* ]]
+}
+
+restore_tauri_config() {
+    if [[ -n "${TAURI_CONFIG_BACKUP:-}" ]]; then
+        cp "$TAURI_CONFIG_BACKUP" "$CONFIG"
+        rm -f "$TAURI_CONFIG_BACKUP"
+    fi
+}
+
+if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+    if is_release_build; then
+        echo "ERROR: TAURI_SIGNING_PRIVATE_KEY is required for a Release-tag desktop build." >&2
+        exit 1
+    fi
+    mkdir -p /tmp/d-ai-code/build-desktop
+    TAURI_CONFIG_BACKUP="$(mktemp /tmp/d-ai-code/build-desktop/tauri.conf.XXXXXX)"
+    cp "$CONFIG" "$TAURI_CONFIG_BACKUP"
+    node -e 'const fs = require("node:fs"); const file = process.argv[1]; const config = JSON.parse(fs.readFileSync(file, "utf8")); config.bundle.createUpdaterArtifacts = false; fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);' "$CONFIG"
+    trap restore_tauri_config EXIT
+    UPDATER_ARTIFACTS_ENABLED=0
+    echo "==> TAURI_SIGNING_PRIVATE_KEY is not set; updater artifacts are temporarily disabled for this non-Release desktop build."
+fi
+
+read_package_version() {
+    node -e 'const fs = require("node:fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).version);' "$CONFIG"
+}
+
+copy_single_artifact() {
+    local source_dir="$1" pattern="$2" destination="$3"
+    local -a matches
+    mapfile -d '' matches < <(find "$source_dir" -maxdepth 1 -type f -name "$pattern" -print0)
+    [[ ${#matches[@]} -eq 1 ]] || {
+        echo "ERROR: expected one $pattern artifact under $source_dir, found ${#matches[@]}" >&2
+        return 1
+    }
+    cp "${matches[0]}" "$destination"
+}
+
+copy_linux_updater_artifacts() {
+    local source_dir="$1" release_dir="$2" prefix="$3" source base suffix destination
+    local signature_count=0
+    while IFS= read -r -d '' source; do
+        base="$(basename "$source")"
+        suffix=""
+        [[ "$base" == *.sig ]] && suffix=".sig" && base="${base%.sig}"
+        case "$base" in
+            *.AppImage.tar.gz) destination="$release_dir/${prefix}-updater.AppImage.tar.gz${suffix}" ;;
+            *.AppImage) destination="$release_dir/${prefix}.AppImage${suffix}" ;;
+            *.deb) destination="$release_dir/${prefix}.deb${suffix}" ;;
+            *)
+                echo "ERROR: unsupported Linux updater artifact: $source" >&2
+                return 1
+                ;;
+        esac
+        cp "$source" "$destination"
+        [[ "$suffix" == ".sig" ]] && ((signature_count += 1))
+    done < <(find "$source_dir" -maxdepth 1 -type f \( -name '*.sig' -o -name '*.AppImage.tar.gz' \) -print0)
+    if (( UPDATER_ARTIFACTS_ENABLED )) && (( signature_count == 0 )); then
+        echo "ERROR: Tauri updater artifacts were enabled but Linux signatures were not generated." >&2
+        return 1
+    fi
+}
+
+copy_macos_updater_artifacts() {
+    local release_dir="$1" prefix="$2" source_dir source base suffix destination
+    local signature_count=0
+    shift 2
+    for source_dir in "$@"; do
+        while IFS= read -r -d '' source; do
+            base="$(basename "$source")"
+            suffix=""
+            [[ "$base" == *.sig ]] && suffix=".sig" && base="${base%.sig}"
+            case "$base" in
+                *.app.tar.gz) destination="$release_dir/${prefix}-updater.app.tar.gz${suffix}" ;;
+                *.dmg) destination="$release_dir/${prefix}.dmg${suffix}" ;;
+                *)
+                    echo "ERROR: unsupported macOS updater artifact: $source" >&2
+                    return 1
+                    ;;
+            esac
+            cp "$source" "$destination"
+            [[ "$suffix" == ".sig" ]] && ((signature_count += 1))
+        done < <(find "$source_dir" -maxdepth 1 -type f \( -name '*.sig' -o -name '*.app.tar.gz' \) -print0)
+    done
+    if (( UPDATER_ARTIFACTS_ENABLED )) && (( signature_count == 0 )); then
+        echo "ERROR: Tauri updater artifacts were enabled but macOS signatures were not generated." >&2
+        return 1
+    fi
+}
+
+publish_linux_release() {
+    local version release_dir appimage_dir deb_dir prefix
+    version="$(read_package_version)"
+    release_dir="$ROOT/dist-desktop/release"
+    appimage_dir="$ROOT/src-tauri/target/release/bundle/appimage"
+    deb_dir="$ROOT/src-tauri/target/release/bundle/deb"
+    prefix="dolphin-ai-${version}-linux-x86_64"
+    mkdir -p "$release_dir"
+    find "$release_dir" -maxdepth 1 -type f -name '*portable*.zip' -delete
+    find "$release_dir" -maxdepth 1 -type f \( -iname '*ruijing-*' -o -iname '*dolphin code*' -o -iname '*ruijing-sidecar*' \) -delete
+    copy_single_artifact "$appimage_dir" '*.AppImage' "$release_dir/${prefix}.AppImage"
+    copy_single_artifact "$deb_dir" '*.deb' "$release_dir/${prefix}.deb"
+    copy_linux_updater_artifacts "$appimage_dir" "$release_dir" "$prefix"
+    copy_linux_updater_artifacts "$deb_dir" "$release_dir" "$prefix"
+    local -a brand_args=(--root "$release_dir" --version "$version" --platform linux)
+    (( UPDATER_ARTIFACTS_ENABLED )) && brand_args+=(--require-updater)
+    node "$ROOT/scripts/verify-desktop-release-brand.mjs" "${brand_args[@]}"
+}
+
+publish_macos_arm_release() {
+    local version release_dir dmg_dir app_dir prefix
+    version="$(read_package_version)"
+    release_dir="$ROOT/dist-desktop/release"
+    dmg_dir="$ROOT/src-tauri/target/release/bundle/dmg"
+    app_dir="$ROOT/src-tauri/target/release/bundle/macos"
+    prefix="dolphin-ai-${version}-macos-aarch64"
+    mkdir -p "$release_dir"
+    find "$release_dir" -maxdepth 1 -type f -name '*portable*.zip' -delete
+    find "$release_dir" -maxdepth 1 -type f \( -iname '*ruijing-*' -o -iname '*dolphin code*' -o -iname '*ruijing-sidecar*' \) -delete
+    copy_single_artifact "$dmg_dir" '*.dmg' "$release_dir/${prefix}.dmg"
+    copy_macos_updater_artifacts "$release_dir" "$prefix" "$app_dir" "$dmg_dir"
+    local -a brand_args=(--root "$release_dir" --version "$version" --platform macos)
+    (( UPDATER_ARTIFACTS_ENABLED )) && brand_args+=(--require-updater)
+    node "$ROOT/scripts/verify-desktop-release-brand.mjs" "${brand_args[@]}"
+}
 
 repack_linux_appimage_with_pristine_codex() {
     local bundle_dir="$ROOT/src-tauri/target/release/bundle/appimage"
@@ -132,14 +263,22 @@ repack_linux_appimage_with_pristine_codex() {
     echo "==> AppImage Runtime 校验通过: $codex_version，Builder workbench 已包含"
 }
 
-echo "==> [build-desktop.sh] ROOT=$ROOT  TRIPLE=$TRIPLE"
+echo "==> [build-desktop.sh] ROOT=$ROOT  TRIPLE=$TRIPLE REVISION=$SOURCE_REVISION"
 echo ""
 
 echo "==> 1/4 前端桌面构建 (base=/)"
 if [[ ! -d "$ROOT/frontend/node_modules" ]]; then
     (cd "$ROOT/frontend" && npm ci)
 fi
-cd "$ROOT/frontend" && npm run build:desktop
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    DOLPHIN_BUILD_TARGET="macos-aarch64"
+else
+    DOLPHIN_BUILD_TARGET="linux-x86_64"
+fi
+(
+    cd "$ROOT/frontend"
+    DOLPHIN_BUILD_REVISION="$SOURCE_REVISION" DOLPHIN_BUILD_TARGET="$DOLPHIN_BUILD_TARGET" npm run build:desktop
+)
 
 echo ""
 echo "==> 2/4 PyInstaller 打 sidecar (onefile, 内嵌前端)"
@@ -198,6 +337,9 @@ cd "$ROOT" && npx tauri build --bundles "$BUNDLES" || {
 
 if [[ "$(uname -s)" == "Linux" ]]; then
     repack_linux_appimage_with_pristine_codex
+    publish_linux_release
+else
+    publish_macos_arm_release
 fi
 
 END_TS=$(date +%s)

@@ -3,7 +3,7 @@ param(
   [string]$SourceRevision = "",
   [string]$Target = "x86_64-pc-windows-msvc",
   [ValidateSet("portable", "nsis", "msi", "all")]
-  [string]$Bundle = "portable",
+  [string]$Bundle = "nsis",
   [switch]$SkipInstall,
   [switch]$UsePreparedRuntimeAppliance,
   [switch]$SkipFrontendBuild,
@@ -25,7 +25,7 @@ if ($env:CARGO_TARGET_DIR) {
 }
 
 $StartTs = Get-Date
-$Root = Resolve-Path (Join-Path $PSScriptRoot "..")
+$Root = (Get-Item (Join-Path $PSScriptRoot "..")).FullName
 $Frontend = Join-Path $Root "frontend"
 $Backend = Join-Path $Root "backend"
 $Tauri = Join-Path $Root "src-tauri"
@@ -132,10 +132,16 @@ function Initialize-MsvcEnvironment {
   }
 }
 
-if (-not $SourceRevision) {
-  $SourceRevision = (& git -C $Root rev-parse HEAD).Trim()
-  Assert-NativeSuccess "Source revision lookup" $LASTEXITCODE
+$CurrentRevision = (& git -C $Root rev-parse HEAD).Trim()
+Assert-NativeSuccess "Source revision lookup" $LASTEXITCODE
+if ($SourceRevision -and $SourceRevision -ne $CurrentRevision) {
+  throw "SourceRevision must match the current Git revision: $CurrentRevision"
 }
+$SourceRevision = $CurrentRevision
+$IsReleaseBuild = $env:DOLPHIN_RELEASE_BUILD -eq "1" -or
+  $env:GITHUB_REF_TYPE -eq "tag" -or
+  $env:GITHUB_REF -like "refs/tags/*"
+$UpdaterArtifactsEnabled = $true
 
 try {
   if ($Version) {
@@ -146,11 +152,15 @@ try {
   }
 
   if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
+    if ($IsReleaseBuild) {
+      throw "TAURI_SIGNING_PRIVATE_KEY is required for a Release-tag desktop build."
+    }
     $RestoreConfig = $true
     $text = Get-Content $Config -Raw
     $text = $text -replace '"createUpdaterArtifacts"\s*:\s*true', '"createUpdaterArtifacts": false'
     Write-Utf8NoBom $Config $text
-    Write-Host "TAURI_SIGNING_PRIVATE_KEY is not set; updater artifacts are disabled for this desktop build."
+    $UpdaterArtifactsEnabled = $false
+    Write-Host "TAURI_SIGNING_PRIVATE_KEY is not set; updater artifacts are temporarily disabled for this non-Release desktop build."
   }
 
   Write-Host "==> [build-desktop-windows.ps1] ROOT=$Root TARGET=$Target BUNDLE=$Bundle"
@@ -199,14 +209,20 @@ try {
     Push-Location $Frontend
     $PreviousViteDesktop = [Environment]::GetEnvironmentVariable("VITE_DESKTOP", "Process")
     $PreviousViteBaseUrl = [Environment]::GetEnvironmentVariable("VITE_BASE_URL", "Process")
+    $PreviousDolphinBuildRevision = [Environment]::GetEnvironmentVariable("DOLPHIN_BUILD_REVISION", "Process")
+    $PreviousDolphinBuildTarget = [Environment]::GetEnvironmentVariable("DOLPHIN_BUILD_TARGET", "Process")
     try {
       $env:VITE_DESKTOP = "1"
       $env:VITE_BASE_URL = "/"
+      $env:DOLPHIN_BUILD_REVISION = $SourceRevision
+      $env:DOLPHIN_BUILD_TARGET = "windows-x86_64"
       node .\node_modules\vite\bin\vite.js build --outDir dist-desktop --emptyOutDir
       Assert-NativeSuccess "Frontend desktop build" $LASTEXITCODE
     } finally {
       [Environment]::SetEnvironmentVariable("VITE_DESKTOP", $PreviousViteDesktop, "Process")
       [Environment]::SetEnvironmentVariable("VITE_BASE_URL", $PreviousViteBaseUrl, "Process")
+      [Environment]::SetEnvironmentVariable("DOLPHIN_BUILD_REVISION", $PreviousDolphinBuildRevision, "Process")
+      [Environment]::SetEnvironmentVariable("DOLPHIN_BUILD_TARGET", $PreviousDolphinBuildTarget, "Process")
       Pop-Location
     }
   }
@@ -416,6 +432,9 @@ try {
     if ($PackageVersion) {
       $DownloadDir = Join-Path $Root "dist-desktop\windows"
       New-Item -ItemType Directory -Force -Path $DownloadDir | Out-Null
+      Get-ChildItem $DownloadDir -File |
+        Where-Object { $_.Name -match "ruijing-|Dolphin Code|ruijing-sidecar" } |
+        Remove-Item -Force
       $VersionPattern = "(^|[^0-9A-Za-z])$([Regex]::Escape($PackageVersion))([^0-9A-Za-z]|$)"
       $Installer = Get-ChildItem $BundleRoot -Recurse -File -Filter "*.exe" |
         Where-Object { $_.Name -notlike "*.zip" } |
@@ -429,6 +448,36 @@ try {
         Copy-Item $Installer.FullName $NamedInstaller -Force
         Write-Host ""
         Write-Host "Download-ready installer: $NamedInstaller"
+        $InstallerSignatures = Get-ChildItem $BundleRoot -Recurse -File -Filter "*.sig" |
+          Where-Object { $_.Name -match "\.exe\.sig$" -or $_.Name -match "\.nsis\.zip\.sig$" }
+        foreach ($InstallerSignature in $InstallerSignatures) {
+          $SignatureName = if ($InstallerSignature.Name -match "\.nsis\.zip\.sig$") {
+            "dolphin-ai-$PackageVersion-windows-x86_64-updater.nsis.zip.sig"
+          } else {
+            "dolphin-ai-$PackageVersion-windows-x86_64-setup.exe.sig"
+          }
+          Copy-Item $InstallerSignature.FullName (Join-Path $DownloadDir $SignatureName) -Force
+        }
+        $UpdaterPayload = Get-ChildItem $BundleRoot -Recurse -File -Filter "*.nsis.zip" |
+          Sort-Object LastWriteTime -Descending |
+          Select-Object -First 1
+        if ($UpdaterPayload) {
+          Copy-Item $UpdaterPayload.FullName (Join-Path $DownloadDir "dolphin-ai-$PackageVersion-windows-x86_64-updater.nsis.zip") -Force
+        }
+        if ($UpdaterArtifactsEnabled -and -not $InstallerSignatures) {
+          throw "Missing Tauri updater signature for Windows package version $PackageVersion."
+        }
+        $BrandGateArgs = @(
+          (Join-Path $Root "scripts\verify-desktop-release-brand.mjs"),
+          "--root", $DownloadDir,
+          "--version", $PackageVersion,
+          "--platform", "windows"
+        )
+        if ($UpdaterArtifactsEnabled) {
+          $BrandGateArgs += "--require-updater"
+        }
+        & node @BrandGateArgs
+        Assert-NativeSuccess "Windows release brand verification" $LASTEXITCODE
       } elseif ($Bundle -in "nsis", "all") {
         throw "Missing NSIS installer for package version $PackageVersion under $BundleRoot"
       }

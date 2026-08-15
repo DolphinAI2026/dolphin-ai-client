@@ -15,7 +15,7 @@
   },
   "bundle": {
     "active": true,
-    "createUpdaterArtifacts": false,
+    "createUpdaterArtifacts": true,
     "targets": ["app", "dmg"],
     "resources": ["resources/agent-runtime"],
     "icon": [

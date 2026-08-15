@@ -1,4 +1,4 @@
-# Windows 桌面客户端构建与放行检查
+# Windows DolphinAI 正式构建与放行检查
 
 Windows 安装包和绿色包必须在原生 Windows 上构建。PyInstaller 不能从 Linux 或 macOS 交叉生成可用的
 Windows sidecar。
@@ -6,21 +6,27 @@ Windows sidecar。
 ## 构建命令
 
 ```powershell
-# 绿色包
+# 本地绿色验证包（不进入正式发布目录）
 .\scripts\build-desktop-windows.ps1 -Version 0.2.66 -Bundle portable
 
-# 安装包
+# Windows 正式 NSIS 安装包
 .\scripts\build-desktop-windows.ps1 -Version 0.2.66 -Bundle nsis
 ```
 
 `-UsePreparedRuntimeAppliance`、`-SkipFrontendBuild`、`-SkipSidecarBuild` 和 `-SkipTauriBuild` 只用于确认对应
 产物已经由同一源码版本生成的增量构建。正式发布默认不使用这些参数。
 
+脚本在前端构建前写入当前 Git revision 和 `windows-x86_64` 目标到
+`DOLPHIN_BUILD_REVISION`、`DOLPHIN_BUILD_TARGET`。`src-tauri/tauri.conf.json` 默认开启 updater
+artifact。非 Release 本地构建缺少 `TAURI_SIGNING_PRIVATE_KEY` 时，脚本只在本次进程中临时关闭 updater
+artifact，并在输出中标记该降级；标签构建（`DOLPHIN_RELEASE_BUILD=1`、`GITHUB_REF_TYPE=tag` 或
+`GITHUB_REF=refs/tags/...`）缺少密钥会立即失败，绝不生成未签名的正式 Release 包。
+
 ## 自动构建门禁
 
 以下检查由构建脚本按顺序执行。任一步失败都不会生成或复制“可下载包”。
 
-1. **源码版本**：读取当前 Git revision，写入包内 `build-manifest.json`。
+1. **源码版本**：读取当前 Git revision，写入前端构建元数据和包内 `build-manifest.json`。
 2. **Runtime appliance**：重新生成 Windows `agent-runtime.exe`、Codex、Python、能力包和 Builder 静态资源。
 3. **前端**：生成桌面模式前端资源，不复用缺失或不完整的 `dist-desktop`。
 4. **sidecar**：使用 PyInstaller `--clean` 生成 Windows sidecar，避免缓存旧 Python 代码。
@@ -38,6 +44,8 @@ Windows sidecar。
 10. **真实解压目录**：绿色 ZIP 生成后重新解压到新的临时目录，再完整执行第 6 至 9 项。
 11. **版本核对**：解压后的 `build-manifest.json` 必须与本次 version、Git revision 和文件哈希一致。
 12. **产物摘要**：输出最终文件路径、大小、修改时间和 ZIP SHA-256。
+13. **正式品牌**：正式 NSIS 输出必须为 `dolphin-ai-<version>-windows-x86_64-setup.exe`，并拒绝
+    `ruijing-`、`Dolphin Code` 和 `ruijing-sidecar` 的旧产物名。
 
 专项门禁也可以单独执行：
 
@@ -46,6 +54,15 @@ Windows sidecar。
   -PackageRoot "C:\path\to\DolphinAI" `
   -ExpectedVersion "0.2.66" `
   -ExpectedSourceRevision "<git-revision>"
+```
+
+正式产物的品牌门禁可以单独执行：
+
+```powershell
+node .\scripts\verify-desktop-release-brand.mjs `
+  --root .\dist-desktop\windows `
+  --version 0.2.66 `
+  --platform windows
 ```
 
 ## 客户端放行检查
@@ -63,10 +80,14 @@ Windows sidecar。
 ## 产物
 
 ```text
-dist-desktop/windows/dolphin-ai-<version>-windows-x86_64-portable.zip
 dist-desktop/windows/dolphin-ai-<version>-windows-x86_64-setup.exe
-dist-desktop/windows/dolphin-ai-<version>-windows-x86_64.msi
+dist-desktop/windows/dolphin-ai-<version>-windows-x86_64-updater.nsis.zip
+dist-desktop/windows/dolphin-ai-<version>-windows-x86_64-updater.nsis.zip.sig
+dist-desktop/release/dolphin-ai-<version>-macos-aarch64.dmg
+dist-desktop/release/dolphin-ai-<version>-linux-x86_64.AppImage
+dist-desktop/release/dolphin-ai-<version>-linux-x86_64.deb
 ```
 
-绿色包适合快速验证和并行保留多个版本；安装包提供标准卸载和后续更新能力。两种包都必须通过相同的 Runtime
-资源与能力包刷新门禁。
+Windows、macOS 和 Linux 脚本会与主包一同复制 Tauri 生成的 updater 有效载荷和 `.sig`，且名称使用相同
+`dolphin-ai-<version>-<platform>-<arch>` 前缀。`dist-desktop/release/` 不包含 portable ZIP。绿色包只适合
+快速验证；NSIS 安装包提供标准卸载和后续更新能力。两种 Windows 包都必须通过相同的 Runtime 资源与能力包刷新门禁。
