@@ -321,14 +321,19 @@ for bundle_dir in "${BUNDLE_DIRS[@]}"; do
         find "$generated_dir" -mindepth 1 -delete
     fi
 done
-TAURI_VERBOSE_ARGS=()
-if [[ "${DOLPHIN_TAURI_VERBOSE:-}" == "1" ]]; then
-    TAURI_VERBOSE_ARGS=(--verbose)
-fi
-cd "$ROOT" && npx tauri build "${TAURI_VERBOSE_ARGS[@]}" --bundles "$BUNDLES" || {
+
+run_tauri_build() {
+    if [[ "${DOLPHIN_TAURI_VERBOSE:-}" == "1" ]]; then
+        npx tauri build --verbose --bundles "$1"
+    else
+        npx tauri build --bundles "$1"
+    fi
+}
+
+cd "$ROOT" && run_tauri_build "$BUNDLES" || {
     echo ""
     echo "    WARNING: tauri bundle failed; falling back to --bundles $FALLBACK_BUNDLES"
-    cd "$ROOT" && npx tauri build "${TAURI_VERBOSE_ARGS[@]}" --bundles "$FALLBACK_BUNDLES"
+    cd "$ROOT" && run_tauri_build "$FALLBACK_BUNDLES"
 }
 
 if [[ "$HOST_OS" == "Linux" ]]; then
