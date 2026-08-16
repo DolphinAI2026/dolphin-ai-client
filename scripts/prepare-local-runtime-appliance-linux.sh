@@ -113,9 +113,9 @@ mkdir -p "${APPLIANCE_PURELIB}"
 # but python-build-standalone includes them.  Keeping them makes linuxdeploy
 # chase unavailable Tcl dependencies while assembling the AppImage.
 printf '[local-runtime-appliance] remove unused Tcl/Tk runtime components\n'
-find "${APPLIANCE_DIR}/agentic-coding/.venv" \
-  \( -type d \( -name tkinter -o -name tcl -o -name tk \) -o \
-     -type f \( -name '_tkinter*.so' -o -name 'libtcl*.so*' -o -name 'libtk*.so*' \) \) \
+find "${APPLIANCE_DIR}/agentic-coding/.venv" -type d -name tkinter -prune -print -exec rm -rf {} +
+find "${APPLIANCE_DIR}/agentic-coding/.venv" -type f \
+  \( -name '_tkinter*.so' -o -name 'libtcl*.so*' -o -name 'libtk*.so*' \) \
   -print -delete
 
 printf '[local-runtime-appliance] build offline agentic pack\n'
