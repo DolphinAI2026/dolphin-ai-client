@@ -96,8 +96,7 @@ GitHub Release 默认发布以下文件：
 
 ```text
 dolphin-ai-X.Y.Z-windows-x86_64-setup.exe
-dolphin-ai-X.Y.Z-windows-x86_64-updater.nsis.zip
-dolphin-ai-X.Y.Z-windows-x86_64-updater.nsis.zip.sig
+dolphin-ai-X.Y.Z-windows-x86_64-setup.exe.sig
 dolphin-ai-X.Y.Z-macos-aarch64.dmg
 dolphin-ai-X.Y.Z-macos-aarch64-updater.app.tar.gz
 dolphin-ai-X.Y.Z-macos-aarch64-updater.app.tar.gz.sig

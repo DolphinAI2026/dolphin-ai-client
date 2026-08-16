@@ -135,8 +135,7 @@ Windows 代码签名，只用于发布前验证；GitHub 标签构建必须生�
 
 ```text
 dist-desktop/windows/dolphin-ai-<version>-windows-x86_64-setup.exe
-dist-desktop/windows/dolphin-ai-<version>-windows-x86_64-updater.nsis.zip
-dist-desktop/windows/dolphin-ai-<version>-windows-x86_64-updater.nsis.zip.sig
+dist-desktop/windows/dolphin-ai-<version>-windows-x86_64-setup.exe.sig
 dist-desktop/release/dolphin-ai-<version>-macos-aarch64.dmg
 dist-desktop/release/dolphin-ai-<version>-linux-x86_64.AppImage
 dist-desktop/release/dolphin-ai-<version>-linux-x86_64.deb

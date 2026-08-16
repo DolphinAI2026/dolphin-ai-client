@@ -11,7 +11,6 @@ function artifactNames(version) {
   const prefix = `dolphin-ai-${version}`;
   return {
     windowsSetup: `${prefix}-windows-x86_64-setup.exe`,
-    windowsUpdater: `${prefix}-windows-x86_64-updater.nsis.zip`,
     macosDmg: `${prefix}-macos-aarch64.dmg`,
     macosUpdater: `${prefix}-macos-aarch64-updater.app.tar.gz`,
     linuxAppImage: `${prefix}-linux-x86_64.AppImage`,
@@ -157,8 +156,7 @@ export async function prepareRelease({ version, repository, tag, input, output, 
   const names = artifactNames(version);
   const required = [
     names.windowsSetup,
-    names.windowsUpdater,
-    `${names.windowsUpdater}.sig`,
+    `${names.windowsSetup}.sig`,
     names.macosDmg,
     names.macosUpdater,
     `${names.macosUpdater}.sig`,
@@ -174,8 +172,8 @@ export async function prepareRelease({ version, repository, tag, input, output, 
 
   const platforms = {
     'windows-x86_64': {
-      signature: (await readFile(sources.get(`${names.windowsUpdater}.sig`), 'utf8')).trim(),
-      url: releaseUrl(repository, tag, names.windowsUpdater),
+      signature: (await readFile(sources.get(`${names.windowsSetup}.sig`), 'utf8')).trim(),
+      url: releaseUrl(repository, tag, names.windowsSetup),
     },
     'darwin-aarch64': {
       signature: (await readFile(sources.get(`${names.macosUpdater}.sig`), 'utf8')).trim(),
@@ -256,7 +254,7 @@ async function selfTest() {
     const output = path.join(root, 'output');
     await mkdir(input, { recursive: true });
     const fixtures = [
-      names.windowsSetup, names.windowsUpdater, `${names.windowsUpdater}.sig`, names.macosDmg,
+      names.windowsSetup, `${names.windowsSetup}.sig`, names.macosDmg,
       names.macosUpdater, `${names.macosUpdater}.sig`, names.linuxAppImage, names.linuxDeb,
       names.linuxUpdater, `${names.linuxUpdater}.sig`,
     ];
@@ -275,7 +273,7 @@ async function selfTest() {
     }
 
     await writeFile(path.join(output, 'sentinel.txt'), 'existing release boundary');
-    await writeFile(path.join(input, `${names.windowsUpdater}.sig`), ' \n');
+    await writeFile(path.join(input, `${names.windowsSetup}.sig`), ' \n');
     await expectFailure(
       () => prepareRelease({ version, repository: 'DolphinAI2026/dolphin-ai-releases', tag: 'v0.2.70', input, output }),
       'Updater signature is empty for windows-x86_64',
@@ -283,7 +281,7 @@ async function selfTest() {
     if (await readFile(path.join(output, 'sentinel.txt'), 'utf8') !== 'existing release boundary') {
       throw new Error('Empty updater signatures must not modify the release output boundary');
     }
-    await writeFile(path.join(input, `${names.windowsUpdater}.sig`), `signature-${names.windowsUpdater}.sig`);
+    await writeFile(path.join(input, `${names.windowsSetup}.sig`), `signature-${names.windowsSetup}.sig`);
 
     const duplicate = path.join(input, 'duplicate');
     await mkdir(duplicate);

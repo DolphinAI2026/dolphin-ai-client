@@ -445,23 +445,11 @@ try {
         Copy-Item $Installer.FullName $NamedInstaller -Force
         Write-Host ""
         Write-Host "Download-ready installer: $NamedInstaller"
-        $InstallerSignatures = Get-ChildItem $BundleRoot -Recurse -File -Filter "*.sig" |
-          Where-Object { $_.Name -match "\.exe\.sig$" -or $_.Name -match "\.nsis\.zip\.sig$" }
-        foreach ($InstallerSignature in $InstallerSignatures) {
-          $SignatureName = if ($InstallerSignature.Name -match "\.nsis\.zip\.sig$") {
-            "dolphin-ai-$PackageVersion-windows-x86_64-updater.nsis.zip.sig"
-          } else {
-            "dolphin-ai-$PackageVersion-windows-x86_64-setup.exe.sig"
-          }
-          Copy-Item $InstallerSignature.FullName (Join-Path $DownloadDir $SignatureName) -Force
+        $InstallerSignature = Get-Item -LiteralPath "$($Installer.FullName).sig" -ErrorAction SilentlyContinue
+        if ($InstallerSignature) {
+          Copy-Item $InstallerSignature.FullName (Join-Path $DownloadDir "dolphin-ai-$PackageVersion-windows-x86_64-setup.exe.sig") -Force
         }
-        $UpdaterPayload = Get-ChildItem $BundleRoot -Recurse -File -Filter "*.nsis.zip" |
-          Sort-Object LastWriteTime -Descending |
-          Select-Object -First 1
-        if ($UpdaterPayload) {
-          Copy-Item $UpdaterPayload.FullName (Join-Path $DownloadDir "dolphin-ai-$PackageVersion-windows-x86_64-updater.nsis.zip") -Force
-        }
-        if ($UpdaterArtifactsEnabled -and -not $InstallerSignatures) {
+        if ($UpdaterArtifactsEnabled -and -not $InstallerSignature) {
           throw "Missing Tauri updater signature for Windows package version $PackageVersion."
         }
         $BrandGateArgs = @(

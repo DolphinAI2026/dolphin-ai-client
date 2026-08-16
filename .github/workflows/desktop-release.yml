@@ -194,8 +194,7 @@ jobs:
           if-no-files-found: error
           path: |
             dist-desktop/windows/dolphin-ai-${{ needs.release-metadata.outputs.version }}-windows-x86_64-setup.exe
-            dist-desktop/windows/dolphin-ai-${{ needs.release-metadata.outputs.version }}-windows-x86_64-updater.nsis.zip
-            dist-desktop/windows/dolphin-ai-${{ needs.release-metadata.outputs.version }}-windows-x86_64-updater.nsis.zip.sig
+            dist-desktop/windows/dolphin-ai-${{ needs.release-metadata.outputs.version }}-windows-x86_64-setup.exe.sig
 
   build-macos:
     needs: release-metadata
@@ -509,7 +508,7 @@ jobs:
           sudo apt-get install -y minisign
           updater_pubkey="$(node -e 'const fs=require("node:fs"); const c=JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json")); process.stdout.write(Buffer.from(c.plugins.updater.pubkey, "base64").toString("utf8").trim().split(/\r?\n/).at(-1));')"
           for artifact in \
-            dist-desktop/publish/dolphin-ai-${{ needs.release-metadata.outputs.version }}-windows-x86_64-updater.nsis.zip \
+            dist-desktop/publish/dolphin-ai-${{ needs.release-metadata.outputs.version }}-windows-x86_64-setup.exe \
             dist-desktop/publish/dolphin-ai-${{ needs.release-metadata.outputs.version }}-macos-aarch64-updater.app.tar.gz \
             dist-desktop/publish/dolphin-ai-${{ needs.release-metadata.outputs.version }}-linux-x86_64-updater.AppImage.tar.gz; do
             minisign -Vm "${artifact}" -x "${artifact}.sig" -P "${updater_pubkey}"

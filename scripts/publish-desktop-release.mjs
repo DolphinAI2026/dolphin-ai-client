@@ -31,8 +31,7 @@ export function expectedAssetNames(version) {
   const prefix = `dolphin-ai-${version}`;
   return [
     `${prefix}-windows-x86_64-setup.exe`,
-    `${prefix}-windows-x86_64-updater.nsis.zip`,
-    `${prefix}-windows-x86_64-updater.nsis.zip.sig`,
+    `${prefix}-windows-x86_64-setup.exe.sig`,
     `${prefix}-macos-aarch64.dmg`,
     `${prefix}-macos-aarch64-updater.app.tar.gz`,
     `${prefix}-macos-aarch64-updater.app.tar.gz.sig`,

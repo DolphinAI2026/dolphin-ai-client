@@ -22,8 +22,7 @@ function requiredAssets(version) {
   const prefix = `dolphin-ai-${version}`;
   return [
     ...Object.values(primaryOutputAssets(version)),
-    `${prefix}-windows-x86_64-updater.nsis.zip`,
-    `${prefix}-windows-x86_64-updater.nsis.zip.sig`,
+    `${prefix}-windows-x86_64-setup.exe.sig`,
     `${prefix}-macos-aarch64-updater.app.tar.gz`,
     `${prefix}-macos-aarch64-updater.app.tar.gz.sig`,
     `${prefix}-linux-x86_64-updater.AppImage.tar.gz`,
