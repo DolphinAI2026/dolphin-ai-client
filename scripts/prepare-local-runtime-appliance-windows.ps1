@@ -311,12 +311,15 @@ func (l *Lock) Release() error {
   Write-Host "[local-runtime-appliance] build offline agentic pack"
   $PackDir = Join-Path $ApplianceDir "agentic-coding-pack"
   $PreviousPythonPath = [Environment]::GetEnvironmentVariable("PYTHONPATH", "Process")
+  $PreviousPythonUtf8 = [Environment]::GetEnvironmentVariable("PYTHONUTF8", "Process")
   try {
     $env:PYTHONPATH = Join-Path $AgenticCodingRoot "python"
+    $env:PYTHONUTF8 = "1"
     & $SourcePython -m agentic_core.cli pack build --profile sandbox-container --output $PackDir --superpowers-source $SuperpowersSource $AgenticCodingRoot
     Assert-NativeSuccess "Offline agentic pack build" $LASTEXITCODE
   } finally {
     [Environment]::SetEnvironmentVariable("PYTHONPATH", $PreviousPythonPath, "Process")
+    [Environment]::SetEnvironmentVariable("PYTHONUTF8", $PreviousPythonUtf8, "Process")
   }
 
   Write-Host "[local-runtime-appliance] add Windows pack launchers"

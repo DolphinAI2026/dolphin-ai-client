@@ -38,7 +38,7 @@
   "plugins": {
     "updater": {
       "endpoints": ["https://github.com/DolphinAI2026/dolphin-ai-releases/releases/latest/download/latest.json"],
-      "pubkey": "ZFc1MGNuVnpkR1ZrSUdOdmJXMWxiblE2SUcxcGJtbHphV2R1SUhCMVlteHBZeUJyWlhrNklFTkdPRVJHUlVFMU56TXdOelpHUmtRS1VsZFVPV0ozWkhwd1pqWk9laTlLZGtsc2RraHZiRmhRVFhkQ1pXbDNjRmhvYm5OWVVYUkRWVU53VlV3eWRFdE1RV3RTTVdKSmMwVUs="
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENGOERGRUE1NzMwNzZGRkQKUldUOWJ3ZHpwZjZOei9KdklsdkhvbFhQTXdCZWl3cFhobnNYUXRDVUNwVUwydEtMQWtSMWJJc0UK"
     }
   }
 }
