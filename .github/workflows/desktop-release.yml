@@ -317,7 +317,9 @@ jobs:
 
   build-linux:
     needs: release-metadata
-    runs-on: ubuntu-24.04
+    # Tauri's bundled linuxdeploy cannot strip Ubuntu 24.04 DT_RELR libraries.
+    # Build on the supported 22.04 baseline so the AppImage remains portable.
+    runs-on: ubuntu-22.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -340,7 +342,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
       - name: Checkout fixed runtime and capability dependencies
         shell: bash
