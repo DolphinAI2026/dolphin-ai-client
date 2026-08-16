@@ -147,6 +147,22 @@ export default defineConfig({
           if (id.includes('/@antv/x6/')) return 'vendor-x6'
           if (id.includes('/marked/') || id.includes('/highlight.js/')) return 'vendor-markdown'
           if (
+            id.includes('/codemirror/') ||
+            id.includes('/@codemirror/') ||
+            id.includes('/@lezer/')
+          ) {
+            return 'vendor-editor'
+          }
+          if (
+            id.includes('/shiki/') ||
+            id.includes('/@shikijs/') ||
+            id.includes('/oniguruma/') ||
+            id.includes('/vscode-textmate/')
+          ) {
+            return 'vendor-syntax'
+          }
+          if (id.includes('/@xterm/')) return 'vendor-terminal'
+          if (
             id.includes('/vue/') ||
             id.includes('/vue-router/') ||
             id.includes('/pinia/') ||
