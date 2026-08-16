@@ -241,7 +241,7 @@ async function selfTest() {
       await expectFailure(
         () => prepareRelease({
           version: invalidVersion,
-          repository: 'Mars-hub404/apaas-builder-ai',
+          repository: 'DolphinAI2026/dolphin-ai-releases',
           tag: `v${invalidVersion}`,
           input: root,
           output: path.join(root, 'invalid-output'),
@@ -263,13 +263,13 @@ async function selfTest() {
     await Promise.all(fixtures.map((name) => writeFile(path.join(input, name), name.endsWith('.sig') ? `signature-${name}` : name)));
     const result = await prepareRelease({
       version,
-      repository: 'Mars-hub404/apaas-builder-ai',
+      repository: 'DolphinAI2026/dolphin-ai-releases',
       tag: 'v0.2.70',
       input,
       output,
     });
     const latest = JSON.parse(await readFile(path.join(output, 'latest.json'), 'utf8'));
-    const expectedUrl = releaseUrl('Mars-hub404/apaas-builder-ai', 'v0.2.70', names.linuxUpdater);
+    const expectedUrl = releaseUrl('DolphinAI2026/dolphin-ai-releases', 'v0.2.70', names.linuxUpdater);
     if (latest.platforms['linux-x86_64'].url !== expectedUrl || result.latest.version !== version) {
       throw new Error('latest.json does not use the release download URL');
     }
@@ -277,7 +277,7 @@ async function selfTest() {
     await writeFile(path.join(output, 'sentinel.txt'), 'existing release boundary');
     await writeFile(path.join(input, `${names.windowsUpdater}.sig`), ' \n');
     await expectFailure(
-      () => prepareRelease({ version, repository: 'Mars-hub404/apaas-builder-ai', tag: 'v0.2.70', input, output }),
+      () => prepareRelease({ version, repository: 'DolphinAI2026/dolphin-ai-releases', tag: 'v0.2.70', input, output }),
       'Updater signature is empty for windows-x86_64',
     );
     if (await readFile(path.join(output, 'sentinel.txt'), 'utf8') !== 'existing release boundary') {
@@ -289,7 +289,7 @@ async function selfTest() {
     await mkdir(duplicate);
     await writeFile(path.join(duplicate, names.linuxDeb), names.linuxDeb);
     await expectFailure(
-      () => prepareRelease({ version, repository: 'Mars-hub404/apaas-builder-ai', tag: 'v0.2.70', input, output }),
+      () => prepareRelease({ version, repository: 'DolphinAI2026/dolphin-ai-releases', tag: 'v0.2.70', input, output }),
       `Expected exactly one ${names.linuxDeb}`,
     );
     if (await readFile(path.join(output, 'sentinel.txt'), 'utf8') !== 'existing release boundary') {
@@ -302,7 +302,7 @@ async function selfTest() {
     await expectFailure(
       () => prepareRelease({
         version,
-        repository: 'Mars-hub404/apaas-builder-ai',
+        repository: 'DolphinAI2026/dolphin-ai-releases',
         tag: 'v0.2.70',
         input,
         output: outerCleanupOutput,
@@ -332,7 +332,7 @@ async function selfTest() {
 
     await rm(path.join(input, names.macosDmg));
     await expectFailure(
-      () => prepareRelease({ version, repository: 'Mars-hub404/apaas-builder-ai', tag: 'v0.2.70', input, output }),
+      () => prepareRelease({ version, repository: 'DolphinAI2026/dolphin-ai-releases', tag: 'v0.2.70', input, output }),
       names.macosDmg,
     );
 

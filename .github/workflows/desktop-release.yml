@@ -9,6 +9,11 @@ on:
         description: Desktop SemVer without the v prefix
         required: true
         type: string
+      publish:
+        description: Publish a verified public Release for an existing vX.Y.Z source tag
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -21,17 +26,17 @@ env:
   SUPERPOWERS_REPO_URL: https://github.com/obra/superpowers.git
   SUPERPOWERS_REVISION: 44c9b2d6e889982ac18c27d05a19fefe335194e1
   CODEX_VERSION: 0.147.0
+  RELEASES_REPOSITORY: DolphinAI2026/dolphin-ai-releases
 
 jobs:
   release-metadata:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    permissions:
-      contents: write
     outputs:
       version: ${{ steps.release.outputs.version }}
       tag: ${{ steps.release.outputs.tag }}
       build_sha: ${{ steps.release.outputs.build_sha }}
+      publish: ${{ steps.release.outputs.publish }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,7 +47,9 @@ jobs:
         shell: bash
         env:
           REQUESTED_VERSION: ${{ inputs.version }}
+          REQUESTED_PUBLISH: ${{ inputs.publish || 'false' }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           DEFINESYS_GIT_USERNAME: ${{ secrets.DEFINESYS_GIT_USERNAME }}
           DEFINESYS_GIT_TOKEN: ${{ secrets.DEFINESYS_GIT_TOKEN }}
         run: |
@@ -51,30 +58,40 @@ jobs:
             echo "::error::TAURI_SIGNING_PRIVATE_KEY is required before desktop Release builds."
             exit 1
           }
+          [[ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD}" ]] || {
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY_PASSWORD is required before desktop Release builds."
+            exit 1
+          }
           [[ -n "${DEFINESYS_GIT_USERNAME}" && -n "${DEFINESYS_GIT_TOKEN}" ]] || {
             echo "::error::DEFINESYS_GIT_USERNAME and DEFINESYS_GIT_TOKEN require read-only access to the two internal runtime repositories."
             exit 1
           }
 
-          build_sha="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          publish=false
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             tag="${GITHUB_REF_NAME}"
             tag_commit="$(git rev-list -n 1 "refs/tags/${tag}")"
+            build_sha="${tag_commit}"
+            publish=true
           else
             [[ "${REQUESTED_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
               echo "::error::Desktop release version must be X.Y.Z SemVer."
               exit 1
             }
             tag="v${REQUESTED_VERSION}"
-            if git ls-remote --exit-code --refs origin "refs/tags/${tag}" >/dev/null; then
-              git fetch --force origin "refs/tags/${tag}:refs/tags/${tag}"
+            case "${REQUESTED_PUBLISH}" in
+              true) publish=true ;;
+              false) publish=false ;;
+              *) echo "::error::publish must be true or false."; exit 1 ;;
+            esac
+            build_sha="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+            if [[ "${publish}" == true ]]; then
+              git fetch origin "refs/tags/${tag}:refs/tags/${tag}"
+              tag_commit="$(git rev-list -n 1 "refs/tags/${tag}")"
+              build_sha="${tag_commit}"
             else
-              git config user.name "github-actions[bot]"
-              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-              git tag --annotate "${tag}" "${build_sha}" --message "DolphinAI ${tag}"
-              git push origin "refs/tags/${tag}"
+              tag_commit="${build_sha}"
             fi
-            tag_commit="$(git rev-list -n 1 "refs/tags/${tag}")"
           fi
 
           [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
@@ -88,6 +105,7 @@ jobs:
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
           echo "version=${tag#v}" >> "${GITHUB_OUTPUT}"
           echo "build_sha=${build_sha}" >> "${GITHUB_OUTPUT}"
+          echo "publish=${publish}" >> "${GITHUB_OUTPUT}"
 
   build-windows:
     needs: release-metadata
@@ -417,10 +435,14 @@ jobs:
 
   release:
     needs: [release-metadata, build-windows, build-macos, build-linux]
+    if: needs.release-metadata.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      contents: write
+      contents: read
+    concurrency:
+      group: dolphin-ai-public-release
+      cancel-in-progress: false
     outputs:
       release_url: ${{ steps.report.outputs.release_url }}
       windows_setup_url: ${{ steps.report.outputs.windows_setup_url }}
@@ -462,7 +484,7 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
           RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}
-          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_REPOSITORY: ${{ env.RELEASES_REPOSITORY }}
         run: >-
           node scripts/prepare-desktop-release.mjs
           --version "$RELEASE_VERSION"
@@ -471,21 +493,44 @@ jobs:
           --input dist-desktop/release
           --output dist-desktop/publish
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.release-metadata.outputs.tag }}
-          target_commitish: ${{ needs.release-metadata.outputs.build_sha }}
-          generate_release_notes: true
-          make_latest: true
-          prerelease: false
-          files: dist-desktop/publish/*
+      - name: Verify updater signatures against the configured public key
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y minisign
+          updater_pubkey="$(node -e 'const fs=require("node:fs"); const c=JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json")); process.stdout.write(Buffer.from(c.plugins.updater.pubkey, "base64").toString("utf8").trim().split(/\r?\n/).at(-1));')"
+          for artifact in \
+            dist-desktop/publish/dolphin-ai-${{ needs.release-metadata.outputs.version }}-windows-x86_64-updater.nsis.zip \
+            dist-desktop/publish/dolphin-ai-${{ needs.release-metadata.outputs.version }}-macos-aarch64-updater.app.tar.gz \
+            dist-desktop/publish/dolphin-ai-${{ needs.release-metadata.outputs.version }}-linux-x86_64-updater.AppImage.tar.gz; do
+            minisign -Vm "${artifact}" -x "${artifact}.sig" -P "${updater_pubkey}"
+          done
+
+      - name: Publish verified public draft Release
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASES_GITHUB_TOKEN }}
+          RELEASE_REPOSITORY: ${{ env.RELEASES_REPOSITORY }}
+          RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_REVISION: ${{ needs.release-metadata.outputs.build_sha }}
+        run: |
+          set -euo pipefail
+          [[ -n "${GH_TOKEN}" ]] || { echo "::error::RELEASES_GITHUB_TOKEN is required for public Release publication."; exit 1; }
+          node -e 'const fs=require("node:fs"); const c=JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json")); fs.writeFileSync(`${process.env.RUNNER_TEMP}/dolphin-ai-updater.pub`, Buffer.from(c.plugins.updater.pubkey, "base64"));'
+          node scripts/publish-desktop-release.mjs \
+            --repository "${RELEASE_REPOSITORY}" \
+            --tag "${RELEASE_TAG}" \
+            --source-repository "${SOURCE_REPOSITORY}" \
+            --source-revision "${SOURCE_REVISION}" \
+            --input dist-desktop/publish \
+            --pubkey "${RUNNER_TEMP}/dolphin-ai-updater.pub"
 
       - id: report
         name: Read published download addresses
         env:
           GITHUB_REF_NAME: ${{ needs.release-metadata.outputs.tag }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_REPOSITORY: ${{ env.RELEASES_REPOSITORY }}
+          RELEASES_GITHUB_TOKEN: ${{ secrets.RELEASES_GITHUB_TOKEN }}
         run: node scripts/report-desktop-release.mjs

@@ -1,0 +1,53 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import {
+  expectedAssetNames,
+  parseReleaseMetadata,
+  validateCandidateVersion,
+  validateExistingRelease,
+  validateReleaseAssets,
+} from './publish-desktop-release.mjs';
+
+const version = '0.2.70';
+const sourceRevision = 'abc123def456';
+
+function draftRelease(overrides = {}) {
+  return {
+    draft: true,
+    tag_name: `v${version}`,
+    body: `DolphinAI desktop release\n\n<!-- dolphin-ai-release-metadata: {"source_repository":"DolphinAI2026/dolphin-ai-client","source_revision":"${sourceRevision}","updater_public_key_fingerprint":"test","built_at":"2026-08-16T00:00:00.000Z"} -->`,
+    assets: expectedAssetNames(version).map((name) => ({ name, size: 1, digest: 'sha256:test' })),
+    ...overrides,
+  };
+}
+
+test('release validation rejects an incomplete attachment set', () => {
+  const assets = expectedAssetNames(version).slice(1).map((name) => ({ name, size: 1, digest: 'sha256:test' }));
+  assert.throws(() => validateReleaseAssets({ version, assets, expectedDigests: new Map() }), /missing attachment/i);
+});
+
+test('release validation rejects a published tag and mismatched draft source revision', () => {
+  assert.throws(
+    () => validateExistingRelease({ release: draftRelease({ draft: false }), tag: `v${version}`, sourceRevision }),
+    /already published/i,
+  );
+  assert.throws(
+    () => validateExistingRelease({ release: draftRelease(), tag: `v${version}`, sourceRevision: 'different' }),
+    /source revision/i,
+  );
+});
+
+test('candidate version must be strictly newer than current latest', () => {
+  assert.throws(() => validateCandidateVersion({ candidate: version, currentLatest: version }), /strictly newer/i);
+  assert.equal(validateCandidateVersion({ candidate: '0.2.71', currentLatest: version }), true);
+});
+
+test('release metadata round-trips only the published source fields', () => {
+  assert.deepEqual(parseReleaseMetadata(draftRelease().body), {
+    source_repository: 'DolphinAI2026/dolphin-ai-client',
+    source_revision: sourceRevision,
+    updater_public_key_fingerprint: 'test',
+    built_at: '2026-08-16T00:00:00.000Z',
+  });
+});

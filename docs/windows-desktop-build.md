@@ -24,18 +24,21 @@ artifact，并在输出中标记该降级；标签构建（`DOLPHIN_RELEASE_BUIL
 
 ## GitHub 标签发布
 
-发布 `0.2.70` 时执行：
+发布 `0.2.70` 时，由私有源码仓库的 `v0.2.70` 标签触发：
 
 ```bash
 git tag v0.2.70
 git push github v0.2.70
 ```
 
-正式包由 `.github/workflows/desktop-release.yml` 在 `vX.Y.Z` 标签或手动填写 `X.Y.Z` 后发布。它在构建前
+正式包由 `.github/workflows/desktop-release.yml` 在 `vX.Y.Z` 标签后发布到公开二进制仓库
+`DolphinAI2026/dolphin-ai-releases`。手动执行工作流默认 `publish=false`，只构建和校验，绝不创建标签、
+Release 或公开附件；只有显式设置 `publish=true` 且 `vX.Y.Z` 标签已存在时，才允许发布该标签对应的构建。
+它在构建前
 校验 updater 签名私钥，并在 Windows x64、macOS arm64、Linux x64 上分别从固定 revision 准备
 `agent-runtime`、`agentic-coding`、Superpowers、Builder 前端、Python 环境和固定版本 Codex，并在构建前
-物化本地 Runtime appliance。手动发布会先创建或验证 `vX.Y.Z` 标签精确指向当前构建提交，再以该提交构建三端包。
-标签创建完成后任一构建失败时，该标签会保留，便于修复后从同一版本标签重新触发或明确处置；它不会被工作流自动删除。
+物化本地 Runtime appliance。工作流从不创建、推送或移动源码标签；发布时只使用已存在的标签提交构建三端包。
+标签构建失败时标签会保留，便于修复后从同一版本标签重新触发或明确处置；它不会被工作流自动删除。
 macOS 和 Linux appliance 使用已校验 SHA-256 的 `python-build-standalone` 解释器根目录，并在迁移 appliance
 目录后运行包内 Python 与 `agentic-pack-reconcile`，不复制构建 runner 的 `.venv`。
 三端只上传正式主包及
@@ -45,16 +48,18 @@ Tauri updater 有效载荷；Release job 汇总为 `dist-desktop/publish/`，生
 正式工作流只接受纯 `X.Y.Z` / `vX.Y.Z`，会在创建 Release 前拒绝 `rc`、`beta` 和 build metadata；portable
 调试包仍可使用完整 SemVer 标记测试版本。
 
-GitHub Actions 需要以下 Secrets：`TAURI_SIGNING_PRIVATE_KEY`、可选的
-`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`、`DEFINESYS_GIT_USERNAME`、`DEFINESYS_GIT_TOKEN` 和默认
-`GITHUB_TOKEN`。`DEFINESYS_GIT_TOKEN` 必须仅授予 `agent-runtime` 和 `agentic-coding` 的只读拉取权限；
+GitHub Actions 需要以下 Secrets：`TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`、
+`DEFINESYS_GIT_USERNAME`、`DEFINESYS_GIT_TOKEN` 和 `RELEASES_GITHUB_TOKEN`。
+`RELEASES_GITHUB_TOKEN` 只用于公开仓库 `DolphinAI2026/dolphin-ai-releases` 的 Release 创建、附件上传与回读，
+应替换为仅具有该仓库 `Contents: write` 权限的 fine-grained Token。`DEFINESYS_GIT_TOKEN` 必须仅授予
+`agent-runtime` 和 `agentic-coding` 的只读拉取权限；
 工作流仅将其写入一次性 Git 配置，并在内部仓库 clone 完成后立即删除。缺少签名私钥时标签发布会在任一平台构建开始前失败。
 
 客户端 updater 固定读取
-`https://github.com/Mars-hub404/apaas-builder-ai/releases/latest/download/latest.json`。工作流在 Release
-创建后再通过 GitHub API 回读实际附件的 `browser_download_url`，输出 Windows 安装包、macOS DMG、Linux
-AppImage、Linux DEB、manifest 和 checksum 下载地址。旧 `desktop-windows.yml` 仅生成不签名的 portable
-调试包，不能用于正式发布。
+`https://github.com/DolphinAI2026/dolphin-ai-releases/releases/latest/download/latest.json`。正式发布先在公开仓库
+创建草稿 Release，上传完整附件 allowlist、复核 SHA-256、manifest 与 updater 签名后，才将草稿发布为 latest。
+工作流再通过 GitHub API 回读实际附件的 `browser_download_url`，输出 Windows 安装包、macOS DMG、Linux AppImage、
+Linux DEB、manifest 和 checksum 下载地址。旧 `desktop-windows.yml` 仅生成不签名的 portable 调试包，不能用于正式发布。
 
 ## 自动构建门禁
 
