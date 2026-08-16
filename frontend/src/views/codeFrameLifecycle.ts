@@ -72,6 +72,28 @@ function codeFrameRoutesEqual(
   ])
 }
 
+export function shouldReuseCodeFrameOpenRequest(
+  request: CodeFrameOpenRequest | null,
+  sessionRef: string,
+  route: CodeFrameRouteLocation,
+): boolean {
+  return Boolean(request && request.sessionRef === sessionRef && codeFrameRoutesEqual(request.route, route))
+}
+
+export type CurrentCodeFrameOpenRequestResult<T> =
+  | { status: 'current'; value: T }
+  | { status: 'stale' }
+
+export async function awaitCurrentCodeFrameOpenRequest<T>(
+  isCurrent: () => boolean,
+  operation: () => Promise<T>,
+): Promise<CurrentCodeFrameOpenRequestResult<T>> {
+  if (!isCurrent()) return { status: 'stale' }
+  const value = await operation()
+  if (!isCurrent()) return { status: 'stale' }
+  return { status: 'current', value }
+}
+
 export function createCodeFrameLifecycle(): CodeFrameLifecycle {
   return {
     active: null,
@@ -132,6 +154,14 @@ export function beginCodeFrameOpen(
     },
     failed: null,
   }
+}
+
+export function shouldDiscardPendingCodeFrameForNextSession(
+  state: CodeFrameLifecycle,
+  nextSessionRef: string,
+): boolean {
+  const pendingSessionRef = state.pending?.sessionRef || state.request?.sessionRef
+  return Boolean(pendingSessionRef && pendingSessionRef !== nextSessionRef)
 }
 
 export function queuePendingCodeFrame(

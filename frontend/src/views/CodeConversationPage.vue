@@ -84,6 +84,14 @@
         @restart="restartLocalRuntime"
         @rebind="rebindLocalWorkspace"
       />
+      <CodeApplicationRecoveryPanel
+        v-else-if="locationRecovery"
+        :state="locationRecovery.state"
+        :original-location="locationRecovery.originalLocation"
+        :opening="loading"
+        @retry="retryFailedSession"
+        @back="backToCodeApplications"
+      />
       <div v-else-if="showInitialLoading" class="code-status">正在打开 Code 工作台...</div>
       <div v-else-if="errorMessage && !hasAnyFrame" class="code-error">
         <strong>Code 工作台暂时无法打开</strong>
@@ -93,6 +101,13 @@
       <div v-if="errorMessage && hasAnyFrame" class="code-error-toast">
         <span>{{ errorMessage }}</span>
         <button type="button" @click="retryFailedSession">重试</button>
+      </div>
+      <div v-if="projectInitializationRetrySessionRef" class="code-initialization-toast" role="status">
+        <span>{{ projectInitializationRetryMessage }}</span>
+        <button type="button" @click="retryProjectInitialization">重试</button>
+      </div>
+      <div v-if="sessionLocationSummary" class="code-session-location-summary" aria-live="polite">
+        {{ sessionLocationSummary }}
       </div>
       <div v-if="frameSwitching" class="code-frame-interaction-guard">
         <div class="code-switching" aria-live="polite">正在切换 Code 工作台...</div>
@@ -115,14 +130,29 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { codeRuntimeApi } from '@/api/codeRuntime'
+import {
+  codeRuntimeApi,
+  codeRuntimeErrorMessage,
+  codeRuntimeOpenErrorContext,
+} from '@/api/codeRuntime'
 import { nextAgentQuery } from '@/composables/railSessions'
+import { findCodeRailHistoryApp, formatCodeRailLocationSummary } from '@/components/v2/codeRailHistory'
 import AppIcon from '@/components/common/AppIcon.vue'
+import CodeApplicationRecoveryPanel from '@/components/code/CodeApplicationRecoveryPanel.vue'
 import CodeWorkspaceOpening from '@/components/code/CodeWorkspaceOpening.vue'
+import {
+  codeApplicationRecoveryStateFromError,
+  type CodeApplicationRecoveryState,
+} from '@/components/code/codeApplicationLocations'
+import {
+  commitPendingCodeApplicationLocationPreferenceByShellSessionRef,
+  discardPendingCodeApplicationLocationPreferenceByShellSessionRef,
+} from '@/components/code/codeApplicationLocationPreference'
 import { pickDirectory } from '@/utils/desktop'
 import type { CodeWorkspaceOpenPhase } from '@/api/codeRuntime'
 import {
   activateCachedCodeFrame,
+  awaitCurrentCodeFrameOpenRequest,
   beginCodeFrameOpen,
   createCodeFrameLifecycle,
   failCodeFrameOpen,
@@ -134,6 +164,8 @@ import {
   promoteReadyCodeFrame,
   queuePendingCodeFrame,
   setCodeFrameCacheLimit,
+  shouldReuseCodeFrameOpenRequest,
+  shouldDiscardPendingCodeFrameForNextSession,
   type CodeFrame,
   type CodeFrameFailureInput,
   type CodeFrameRouteLocation,
@@ -145,6 +177,8 @@ import {
   resolveTrustedShellMessage,
   type ShellFrameEndpoint,
 } from './codeShellProtocol'
+import { createCodeAgentActivationCoordinator } from './codeAgentActivation'
+import { createProjectInitializationDispatcher } from './codeProjectInitialization'
 
 const route = useRoute()
 const router = useRouter()
@@ -167,13 +201,23 @@ const localWorkspaceOpening = ref(false)
 const workspaceOpeningPhase = ref<CodeWorkspaceOpenPhase>('checking_project')
 const workspaceOpeningStartedAt = ref(Date.now())
 const workspaceRecoveryBusy = ref(false)
+const sessionLocationSummary = ref('')
+const locationRecovery = ref<{
+  state: CodeApplicationRecoveryState
+  originalLocation: 'local' | 'remote'
+} | null>(null)
 let railRefreshTimer: number | undefined
 let openStatusTimer: number | undefined
 let openStatusPollingSeq = 0
 let openRequestSeq = 0
+let sessionLocationRequestSeq = 0
 let runtimeAuthRecoveryPromise: Promise<void> | null = null
+const agentActivationCoordinator = createCodeAgentActivationCoordinator()
 let openInFlightKey = ''
 let runtimeAuthInvalidFrameKey = ''
+const projectInitializationDispatcher = createProjectInitializationDispatcher()
+const projectInitializationRetrySessionRef = projectInitializationDispatcher.retrySessionRef
+const projectInitializationRetryMessage = projectInitializationDispatcher.retryMessage
 let pendingReadyTimer: {
   handle: number
   requestId: number
@@ -243,6 +287,14 @@ function currentCodeApplicationSource(): 'local' | 'remote' | '' {
   return raw === 'local' || raw === 'remote' ? raw : ''
 }
 
+function dispatchProjectInitialization(frame: CodeFrame) {
+  projectInitializationDispatcher.dispatch(frame)
+}
+
+function retryProjectInitialization() {
+  projectInitializationDispatcher.retry(frames.value)
+}
+
 function currentCodeRouteLocation(): CodeFrameRouteLocation {
   const query: CodeFrameRouteLocation['query'] = {}
   for (const [key, value] of Object.entries(route.query)) {
@@ -292,6 +344,19 @@ function clearRouteAgentQueryIfCurrent(runtimeAgentId: string) {
     path: route.path,
     query: nextAgentQuery(route.query),
   })
+}
+
+function activateCurrentCodeAgentSession(
+  shellSessionRef: string,
+  runtimeAgentId: string,
+  isCurrent: () => boolean,
+  activationSessionRef = shellSessionRef,
+) {
+  return agentActivationCoordinator.activate(
+    shellSessionRef,
+    isCurrent,
+    () => codeRuntimeApi.activateAgentSession(activationSessionRef, runtimeAgentId),
+  )
 }
 
 function stopOpenStatusPolling() {
@@ -401,6 +466,9 @@ async function openCurrentSession() {
   clearPendingReadyTimer()
   if (isCreateApplicationRoute.value) {
     openRequestSeq += 1
+    sessionLocationRequestSeq += 1
+    sessionLocationSummary.value = ''
+    locationRecovery.value = null
     resetCodeFrames()
     loading.value = false
     errorMessage.value = ''
@@ -409,25 +477,28 @@ async function openCurrentSession() {
   const sessionRef = currentSessionRef()
   if (!sessionRef) {
     openRequestSeq += 1
+    sessionLocationRequestSeq += 1
+    sessionLocationSummary.value = ''
+    locationRecovery.value = null
     openInFlightKey = ''
     runtimeAuthInvalidFrameKey = ''
     errorMessage.value = '缺少 Code 会话'
     resetCodeFrames()
     return
   }
+  void loadSessionLocationSummary(sessionRef)
   const routeLocation = currentCodeRouteLocation()
   const openKey = `${sessionRef}:${codeRouteLocationKey(routeLocation)}`
   if (loading.value && openInFlightKey === openKey) return
   const currentRequest = frameLifecycle.value.request
-  if (
-    currentRequest?.sessionRef === sessionRef
-    && codeRouteLocationsEqual(currentRequest.route, routeLocation)
-  ) {
+  if (shouldReuseCodeFrameOpenRequest(currentRequest, sessionRef, routeLocation)) {
     return
   }
   openInFlightKey = openKey
   const requestSeq = ++openRequestSeq
+  const isCurrentRequest = () => requestSeq === openRequestSeq
   runtimeAuthInvalidFrameKey = ''
+  discardPendingCodeApplicationLocationPreferenceForChangedShell(sessionRef)
   frameLifecycle.value = beginCodeFrameOpen(frameLifecycle.value, {
     requestId: requestSeq,
     sessionRef,
@@ -435,6 +506,7 @@ async function openCurrentSession() {
   })
   loading.value = true
   errorMessage.value = ''
+  locationRecovery.value = null
 
   // An exact cached route is already authenticated inside its mounted iframe.
   // Promote it synchronously so a normal back-and-forth sandbox switch does
@@ -465,8 +537,14 @@ async function openCurrentSession() {
       // iframe mounted instead of reopening the workspace through Control Plane.
       if (runtimeAgentId) {
         try {
-          await codeRuntimeApi.activateAgentSession(sessionRef, runtimeAgentId)
+          const activated = await activateCurrentCodeAgentSession(
+            sessionRef,
+            runtimeAgentId,
+            isCurrentRequest,
+          )
+          if (activated.status === 'stale' || !isCurrentRequest()) return
         } catch (activationError: any) {
+          if (!isCurrentRequest()) return
           if (!isUnavailableRuntimeSessionError(activationError, runtimeAgentId)) {
             throw activationError
           }
@@ -483,7 +561,18 @@ async function openCurrentSession() {
     if (currentCodeApplicationSource() !== 'remote') {
       startOpenStatusPolling(sessionRef, requestSeq)
     }
-    const opened = await codeRuntimeApi.openSession(sessionRef)
+    const openedResult = await awaitCurrentCodeFrameOpenRequest(
+      isCurrentRequest,
+      () => codeRuntimeApi.openSession(sessionRef),
+    )
+    if (openedResult.status === 'stale' || !isCurrentRequest()) return
+    const opened = openedResult.value
+    projectInitializationDispatcher.rememberSessionPurpose(
+      opened.session_purpose,
+      sessionRef,
+      opened.session_id,
+      opened.route_id,
+    )
     stopOpenStatusPolling()
     if (opened.external_application_id.startsWith('local-')) {
       localWorkspaceOpening.value = true
@@ -492,21 +581,32 @@ async function openCurrentSession() {
       localWorkspaceOpening.value = false
     }
     if (opened.route_id && opened.route_id !== sessionRef) {
-      await router.replace({
-        path: `/code/${opened.route_id}`,
-        query: route.query,
-      })
+      const routeReplaced = await awaitCurrentCodeFrameOpenRequest(
+        isCurrentRequest,
+        () => router.replace({
+          path: `/code/${opened.route_id}`,
+          query: route.query,
+        }),
+      )
+      if (routeReplaced.status === 'stale' || !isCurrentRequest()) return
       return
     }
     if (runtimeAgentId && opened.runtime_session_id !== runtimeAgentId) {
       try {
-        await codeRuntimeApi.activateAgentSession(opened.session_id, runtimeAgentId)
+        const activated = await activateCurrentCodeAgentSession(
+          sessionRef,
+          runtimeAgentId,
+          isCurrentRequest,
+          opened.session_id,
+        )
+        if (activated.status === 'stale' || !isCurrentRequest()) return
       } catch (activationError: any) {
+        if (!isCurrentRequest()) return
         if (!isUnavailableRuntimeSessionError(activationError, runtimeAgentId)) throw activationError
         clearRouteAgentQueryIfCurrent(runtimeAgentId)
       }
     }
-    if (requestSeq !== openRequestSeq) return
+    if (!isCurrentRequest()) return
 
     frameLifecycle.value = setCodeFrameCacheLimit(
       frameLifecycle.value,
@@ -530,7 +630,27 @@ async function openCurrentSession() {
     refreshOuterCodeRail()
   } catch (error: any) {
     if (requestSeq === openRequestSeq) {
-      const message = error?.response?.data?.detail || error?.message || '打开失败'
+      const message = codeRuntimeErrorMessage(error, '打开失败')
+      const openErrorContext = codeRuntimeOpenErrorContext(error)
+      const detail = error?.response?.data?.detail
+      const errorCode = [
+        'CODE_APPLICATION_LOCATION_UNAVAILABLE',
+        'CODE_APPLICATION_LOCAL_LOCATION_MISSING',
+        'CODE_APPLICATION_REMOTE_LOCATION_UNAVAILABLE',
+        'CODE_APPLICATION_ALL_LOCATIONS_UNAVAILABLE',
+      ].find(candidate => (
+        (detail && typeof detail === 'object' && detail.code === candidate)
+        || String(message).includes(candidate)
+      )) || ''
+      const recoveryState = openErrorContext
+        ? codeApplicationRecoveryStateFromError(
+          errorCode,
+          openErrorContext.execution_location,
+        )
+        : null
+      locationRecovery.value = recoveryState
+        ? { state: recoveryState, originalLocation: openErrorContext!.execution_location }
+        : null
       if (isLocalWorkspaceError(message)) {
         localWorkspaceOpening.value = true
         workspaceOpeningPhase.value = workspaceErrorPhase(message)
@@ -546,6 +666,25 @@ async function openCurrentSession() {
       loading.value = false
       if (openInFlightKey === openKey) openInFlightKey = ''
     }
+  }
+}
+
+async function loadSessionLocationSummary(sessionRef: string) {
+  const requestSeq = ++sessionLocationRequestSeq
+  sessionLocationSummary.value = ''
+  try {
+    const history = await codeRuntimeApi.listRailHistory()
+    if (requestSeq !== sessionLocationRequestSeq) return
+    const app = findCodeRailHistoryApp(history, sessionRef)
+    sessionLocationSummary.value = app
+      ? formatCodeRailLocationSummary(
+        app.execution_location,
+        app.workspace_path,
+        app.environment_name,
+      )
+      : ''
+  } catch {
+    if (requestSeq === sessionLocationRequestSeq) sessionLocationSummary.value = ''
   }
 }
 
@@ -632,11 +771,27 @@ function failCurrentFrameOpen(failure: CodeFrameFailureInput): boolean {
   const previousState = frameLifecycle.value
   const nextState = failCodeFrameOpen(previousState, failure)
   if (nextState === previousState) return false
+  discardPendingCodeApplicationLocationPreferenceByShellSessionRef(previousState.request?.sessionRef || '')
   clearPendingReadyTimer()
   frameLifecycle.value = nextState
   errorMessage.value = failure.message
   restoreActiveRouteAfterFailure()
   return true
+}
+
+function discardPendingCodeApplicationLocationPreferenceForLeavingShell() {
+  const pending = frameLifecycle.value.pending
+  if (pending) {
+    discardPendingCodeApplicationLocationPreferenceByShellSessionRef(pending.sessionRef)
+    return
+  }
+  const request = frameLifecycle.value.request
+  if (request) discardPendingCodeApplicationLocationPreferenceByShellSessionRef(request.sessionRef)
+}
+
+function discardPendingCodeApplicationLocationPreferenceForChangedShell(nextSessionRef: string) {
+  if (!shouldDiscardPendingCodeFrameForNextSession(frameLifecycle.value, nextSessionRef)) return
+  discardPendingCodeApplicationLocationPreferenceForLeavingShell()
 }
 
 function retryFailedSession() {
@@ -778,6 +933,7 @@ function closeHostedActivityDrawer() {
 }
 
 function resetCodeFrames() {
+  discardPendingCodeApplicationLocationPreferenceForLeavingShell()
   resetWorkspaceOpening()
   clearPendingReadyTimer()
   clearHostedActivityModal()
@@ -821,6 +977,8 @@ function onShellMessage(event: MessageEvent) {
       const previousState = frameLifecycle.value
       frameLifecycle.value = promoteReadyCodeFrame(previousState, frame.key)
       if (frameLifecycle.value === previousState) return
+      commitPendingCodeApplicationLocationPreferenceByShellSessionRef(frame.sessionRef)
+      dispatchProjectInitialization(frame)
       clearPendingReadyTimer()
       errorMessage.value = ''
       resetWorkspaceOpening()
@@ -830,7 +988,10 @@ function onShellMessage(event: MessageEvent) {
 
     // 沙箱仍保留时，活动 iframe 也可能重载 Builder 文档；新文档初始为
     // 未激活状态，需要重放宿主状态才能恢复输入。
-    if (frame.phase === 'active') void nextTick(publishCodeFrameShellState)
+    if (frame.phase === 'active') {
+      dispatchProjectInitialization(frame)
+      void nextTick(publishCodeFrameShellState)
+    }
     return
   }
 
@@ -906,6 +1067,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  discardPendingCodeApplicationLocationPreferenceForLeavingShell()
   stopOpenStatusPolling()
   clearPendingReadyTimer()
   publishCodeFrameDeactivation()
@@ -1209,6 +1371,7 @@ onBeforeUnmount(() => {
 }
 
 .code-error-toast,
+.code-initialization-toast,
 .code-switching {
   position: absolute;
   z-index: 4;
@@ -1227,10 +1390,69 @@ onBeforeUnmount(() => {
   line-height: 18px;
 }
 
+.code-session-location-summary {
+  position: absolute;
+  z-index: 3;
+  right: 16px;
+  bottom: 12px;
+  max-width: calc(100% - 32px);
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 16px;
+  overflow: hidden;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .code-error-toast {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.code-initialization-toast {
+  position: absolute;
+  z-index: 4;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(520px, calc(100% - 48px));
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid var(--warning, #d99b13);
+  border-radius: var(--r-2, 6px);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm, 0 4px 14px rgba(15, 23, 42, 0.08));
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.code-initialization-toast span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-initialization-toast button {
+  height: 22px;
+  flex: 0 0 auto;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
 }
 
 .code-error-toast span {
