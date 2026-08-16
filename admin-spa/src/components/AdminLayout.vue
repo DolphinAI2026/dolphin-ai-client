@@ -135,7 +135,6 @@ const menus: MenuItem[] = [
   { path: '/tenants',     label: 'aPaaS 租户', icon: 'building' },
   { path: '/users',       label: 'aPaaS 用户', icon: 'user' },
   { path: '/llm-configs', label: 'LLM 配置',  icon: 'cpu' },
-  { path: '/assistant-settings', label: '得小帆助手', icon: 'sparkles' },
 ]
 
 // 2026-05-22 多 tab 体系: rail 点击 → openTab + router.push, 让用户能同时开多个管理界面

@@ -1,4 +1,4 @@
-import { createHighlighter, type Highlighter } from 'shiki'
+import type { Highlighter } from 'shiki'
 
 const LANGS = [
   'vue', 'typescript', 'javascript', 'json', 'jsonc', 'html', 'css', 'less', 'scss',
@@ -9,7 +9,11 @@ const THEMES = ['github-light', 'github-dark']
 
 let hlPromise: Promise<Highlighter> | null = null
 function getHighlighter(): Promise<Highlighter> {
-  if (!hlPromise) hlPromise = createHighlighter({ themes: THEMES, langs: LANGS })
+  if (!hlPromise) {
+    hlPromise = import('shiki').then(({ createHighlighter }) =>
+      createHighlighter({ themes: THEMES, langs: LANGS })
+    )
+  }
   return hlPromise
 }
 
