@@ -649,12 +649,15 @@ def test_derive_runtime_base_url_strips_builder_suffix():
     assert derive_runtime_base_url("https://sandbox.example.com/builder") == "https://sandbox.example.com"
 
 
-def test_control_plane_base_url_defaults_to_local_dev_port(monkeypatch):
+def test_control_plane_base_url_derives_from_workspace_login_url(monkeypatch):
+    from app.config import settings
     from app.code_runtime.service import control_plane_base_url
 
     monkeypatch.delenv("DOLPHIN_CODE_CONTROL_PLANE_URL", raising=False)
+    monkeypatch.setattr(settings, "dolphin_code_control_plane_url", "")
+    monkeypatch.setattr(settings, "dolphin_workspace_base_url", "https://om-demo.example")
 
-    assert control_plane_base_url() == "http://127.0.0.1:8080"
+    assert control_plane_base_url() == "https://om-demo.example/control-plane"
 
 
 def test_local_model_proxy_token_is_stable_and_scope_bound(monkeypatch):
@@ -966,6 +969,7 @@ async def test_default_workspace_open_reports_control_plane_connection_target(mo
 
     monkeypatch.delenv("DOLPHIN_CODE_CONTROL_PLANE_URL", raising=False)
     monkeypatch.setattr(settings, "dolphin_code_control_plane_url", "")
+    monkeypatch.setattr(settings, "dolphin_workspace_base_url", "https://om-demo.example")
     monkeypatch.setattr(settings, "dolphin_code_builder_url", "")
     monkeypatch.setattr(service.httpx, "AsyncClient", FailingClient)
 
@@ -973,7 +977,7 @@ async def test_default_workspace_open_reports_control_plane_connection_target(mo
         await service.default_workspace_open("app-1")
 
     assert exc.value.status_code == 503
-    assert "http://127.0.0.1:8080" in str(exc.value.detail)
+    assert "https://om-demo.example/control-plane" in str(exc.value.detail)
 
 
 @pytest.mark.asyncio

@@ -4,7 +4,7 @@
       <header class="desktop-setup-header">
         <div class="desktop-brand-mark">D</div>
         <div>
-          <h1>{{ showFailure ? 'Dolphin Code 启动失败' : '连接 Dolphin Code' }}</h1>
+          <h1>{{ showFailure ? 'DolphinAI 启动失败' : '连接 DolphinAI' }}</h1>
           <p>{{ showFailure ? '桌面服务没有完成启动，请重试或修改远程地址。' : '输入一次远程服务地址，桌面端会自动发现认证和 Builder / Code 能力。' }}</p>
         </div>
       </header>
@@ -85,6 +85,7 @@ const operationError = ref('')
 const connectionMessage = ref('')
 const connectionFailed = ref(false)
 const disposed = ref(false)
+let polling = false
 let timer: number | undefined
 
 const isStarting = computed(() => ['saving_config', 'starting_runtime', 'starting_sidecar'].includes(state.value?.phase || ''))
@@ -97,7 +98,10 @@ const progressLabel = computed(() => {
   if (phase === 'starting_sidecar') return '打开远程登录'
   return '准备桌面服务'
 })
-const stateErrorMessage = computed(() => state.value?.error?.message || '桌面服务未能启动')
+const stateErrorMessage = computed(() => desktopErrorMessage(
+  state.value?.error,
+  '桌面服务未能启动',
+))
 const urlError = computed(() => validateServiceUrl(serviceUrl.value))
 
 function validateServiceUrl(value: string): string {
@@ -114,12 +118,29 @@ function applySnapshot(snapshot: DesktopStateSnapshot) {
     serviceUrl.value = snapshot.config.discovery_url || snapshot.config.login.base_url
     discovery.value = snapshot.config.discovery || discovery.value
   }
-  if (isStarting.value && !disposed.value) timer = window.setTimeout(refreshState, 500)
+}
+
+function scheduleRefresh(delay: number) {
+  if (disposed.value) return
+  if (timer) window.clearTimeout(timer)
+  timer = window.setTimeout(() => {
+    timer = undefined
+    void refreshState()
+  }, delay)
 }
 
 async function refreshState() {
-  if (disposed.value) return
-  try { applySnapshot(await getDesktopState()) } catch { timer = window.setTimeout(refreshState, 800) }
+  if (polling || disposed.value) return
+  polling = true
+  try {
+    applySnapshot(await getDesktopState())
+    if (isStarting.value) scheduleRefresh(500)
+  } catch (error) {
+    operationError.value = desktopErrorMessage(error, '无法读取桌面配置')
+    if (!disposed.value) scheduleRefresh(800)
+  } finally {
+    polling = false
+  }
 }
 
 async function discoverService() {
@@ -148,6 +169,7 @@ async function submitSetup() {
       state.value?.default_root_dir || '', mode, discovery.value.auth.login_url, 'both', serviceUrl.value.trim(), discovery.value,
     ))
     applySnapshot(snapshot)
+    if (isStarting.value) scheduleRefresh(500)
     // Web preview completes setup synchronously; the native backend navigates
     // after its sidecar becomes ready, so only navigate here for an immediate
     // ready result.
@@ -158,7 +180,10 @@ async function submitSetup() {
 
 async function retryStart() {
   submitting.value = true
-  try { applySnapshot(await retryDesktopStart()) } catch (error) { operationError.value = desktopErrorMessage(error, '无法重试启动') }
+  try {
+    applySnapshot(await retryDesktopStart())
+    if (isStarting.value) scheduleRefresh(500)
+  } catch (error) { operationError.value = desktopErrorMessage(error, '无法重试启动') }
   finally { submitting.value = false }
 }
 
@@ -166,8 +191,14 @@ async function openLogs() {
   try { await openDesktopPath('logs') } catch { operationError.value = '无法打开日志目录' }
 }
 
+function disposePolling() {
+  disposed.value = true
+  if (timer) window.clearTimeout(timer)
+  timer = undefined
+}
+
 onMounted(() => { void refreshState() })
-onBeforeUnmount(() => { disposed.value = true; if (timer) window.clearTimeout(timer) })
+onBeforeUnmount(disposePolling)
 </script>
 
 <style scoped>

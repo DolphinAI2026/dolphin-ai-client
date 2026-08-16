@@ -148,21 +148,10 @@ try {
 
   Write-Host "[local-runtime-appliance] build Windows agent-runtime"
   $ReconcilerSource = Join-Path $AgentRuntimeRepo "internal\adapters\agenticpack\reconciler.go"
-  $ReconcilerText = Get-Content -LiteralPath $ReconcilerSource -Raw
-  $ImportMarker = "`t`"path/filepath`""
-  $CommandMarker = 'commandPath := filepath.Join(r.packDir, "bin", "agentic-pack-reconcile")'
-  if (-not $ReconcilerText.Contains($ImportMarker) -or -not $ReconcilerText.Contains($CommandMarker)) {
-    throw "agent-runtime reconcile source no longer matches the Windows build overlay contract."
+  $PatchedReconcilerPath = Join-Path $Root "scripts\windows-agent-runtime-reconciler.go"
+  if (-not (Test-Path -LiteralPath $PatchedReconcilerPath -PathType Leaf)) {
+    throw "Missing Windows agent-runtime reconciler overlay: $PatchedReconcilerPath"
   }
-  $PatchedReconciler = $ReconcilerText.Replace(
-    $ImportMarker,
-    "$ImportMarker`r`n`t`"runtime`""
-  ).Replace(
-    $CommandMarker,
-    "$CommandMarker`r`n`tif runtime.GOOS == `"windows`" {`r`n`t`tcommandPath += `".exe`"`r`n`t}"
-  )
-  $PatchedReconcilerPath = Join-Path $TemporaryRoot "reconciler.go"
-  Write-Utf8NoBom $PatchedReconcilerPath $PatchedReconciler
 
   $FileLockSource = Join-Path $AgentRuntimeRepo "internal\adapters\filetxn\lock.go"
   $WindowsFileLockPath = Join-Path $TemporaryRoot "filetxn-lock-windows.go"
@@ -403,6 +392,7 @@ func main() {
     os.Environ(),
     "PYTHONPATH="+packPython+string(os.PathListSeparator)+agenticPython,
     "PYTHONDONTWRITEBYTECODE=1",
+    "PYTHONUTF8=1",
   )
   if err := command.Run(); err != nil {
     if exit, ok := err.(*exec.ExitError); ok { os.Exit(exit.ExitCode()) }
@@ -470,7 +460,7 @@ manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="ut
 
   & (Join-Path $ApplianceDir "codex\bin\codex.exe") --version | Out-Null
   Assert-NativeSuccess "Packaged Codex validation" $LASTEXITCODE
-  & $PortablePython -c "import pydantic, yaml, agentic_core"
+  & $PortablePython -c "from pydantic import BaseModel; import agentic_core, glob, pathlib, sysconfig, yaml, zoneinfo; assert BaseModel; assert sysconfig.get_config_vars()"
   Assert-NativeSuccess "Portable Python validation" $LASTEXITCODE
 
   $ProbeHome = Join-Path $TemporaryRoot "codex-home"
@@ -492,3 +482,5 @@ manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="ut
   [Environment]::SetEnvironmentVariable("PYTHONDONTWRITEBYTECODE", $OriginalDontWriteBytecode, "Process")
   Remove-Item -LiteralPath $TemporaryRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
+
+exit 0

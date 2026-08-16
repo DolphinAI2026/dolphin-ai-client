@@ -95,8 +95,12 @@ pub struct DesktopLocalAiConfig {
     pub bridge_protocol_version: u32,
 }
 
-fn default_local_ai_enabled() -> bool { true }
-fn default_bridge_protocol_version() -> u32 { 1 }
+fn default_local_ai_enabled() -> bool {
+    true
+}
+fn default_bridge_protocol_version() -> u32 {
+    1
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DesktopDiscoveryDocument {
@@ -335,9 +339,8 @@ impl DesktopConfigStore {
 
         verify_root_is_writable(&root_dir)?;
 
-        let discovery_url = normalize_login_url(
-            input.discovery_url.as_deref().unwrap_or(&login.base_url),
-        )?;
+        let discovery_url =
+            normalize_login_url(input.discovery_url.as_deref().unwrap_or(&login.base_url))?;
         let config = DesktopConfig {
             schema_version: DESKTOP_CONFIG_SCHEMA_VERSION,
             root_dir: root_dir.clone(),
@@ -420,7 +423,7 @@ fn transaction_lock_key(system_data_dir: &Path) -> String {
 }
 
 pub fn default_root_dir(home_dir: &Path) -> PathBuf {
-    home_dir.join("DolphinCode")
+    home_dir.join("DolphinAI")
 }
 
 pub fn normalize_login_url(raw: &str) -> Result<String, DesktopConfigError> {
@@ -808,19 +811,27 @@ mod tests {
 
     #[test]
     fn paths_are_derived_from_one_user_root() {
-        let paths = DesktopPaths::from_root(PathBuf::from("/tmp/DolphinCode"));
+        let paths = DesktopPaths::from_root(PathBuf::from("/tmp/DolphinAI"));
         assert_eq!(
             paths.applications_dir,
-            PathBuf::from("/tmp/DolphinCode/applications")
+            PathBuf::from("/tmp/DolphinAI/applications")
         );
-        assert_eq!(paths.data_dir, PathBuf::from("/tmp/DolphinCode/.appdata"));
+        assert_eq!(paths.data_dir, PathBuf::from("/tmp/DolphinAI/.appdata"));
         assert_eq!(
             paths.runtime_dir,
-            PathBuf::from("/tmp/DolphinCode/.appdata/runtime")
+            PathBuf::from("/tmp/DolphinAI/.appdata/runtime")
         );
         assert_eq!(
             paths.logs_dir,
-            PathBuf::from("/tmp/DolphinCode/.appdata/logs")
+            PathBuf::from("/tmp/DolphinAI/.appdata/logs")
+        );
+    }
+
+    #[test]
+    fn default_root_dir_uses_dolphin_ai_home_directory() {
+        assert_eq!(
+            default_root_dir(Path::new("/home/tester")),
+            PathBuf::from("/home/tester/DolphinAI")
         );
     }
 
@@ -844,7 +855,7 @@ mod tests {
     fn legacy_config_without_workspace_scope_defaults_to_both() {
         let raw = r#"{
             "schema_version": 1,
-            "root_dir": "/tmp/DolphinCode",
+            "root_dir": "/tmp/DolphinAI",
             "login": {"mode": "control_plane", "base_url": "https://example.com"}
         }"#;
         let config: DesktopConfig = serde_json::from_str(raw).unwrap();
@@ -857,7 +868,7 @@ mod tests {
         let store = DesktopConfigStore::new(temp.join("system"));
         store
             .save(DesktopSetupInput {
-                root_dir: temp.join("DolphinCode").to_string_lossy().into_owned(),
+                root_dir: temp.join("DolphinAI").to_string_lossy().into_owned(),
                 login: DesktopLoginConfig {
                     mode: DesktopLoginMode::ControlPlane,
                     base_url: CONTROL_PLANE_DEFAULT_URL.to_string(),
@@ -880,7 +891,7 @@ mod tests {
     fn root_config_is_written_before_bootstrap_pointer() {
         let temp = unique_test_dir("save-order");
         let system_data = temp.join("system");
-        let root = temp.join("DolphinCode");
+        let root = temp.join("DolphinAI");
         let store = DesktopConfigStore::new(system_data.clone());
         let saved = store
             .save(DesktopSetupInput {
@@ -909,7 +920,7 @@ mod tests {
         let store = DesktopConfigStore::new(system_data);
         let saved = store
             .save(DesktopSetupInput {
-                root_dir: temp.join("DolphinCode").to_string_lossy().into_owned(),
+                root_dir: temp.join("DolphinAI").to_string_lossy().into_owned(),
                 login: DesktopLoginConfig {
                     mode: DesktopLoginMode::Apaas,
                     base_url: format!("{APAAS_DEFAULT_URL}/"),
@@ -942,7 +953,7 @@ mod tests {
         let system_data = temp.join("system");
         write_json_fixture(
             &system_data.join("bootstrap.json"),
-            json!({ "schema_version": 2, "root_dir": temp.join("DolphinCode") }),
+            json!({ "schema_version": 2, "root_dir": temp.join("DolphinAI") }),
         );
 
         let error = DesktopConfigStore::new(system_data).load().unwrap_err();
@@ -956,7 +967,7 @@ mod tests {
         let system_data = temp.join("system");
         write_json_fixture(
             &system_data.join("bootstrap.json"),
-            json!({ "schema_version": 1, "root_dir": "relative/DolphinCode" }),
+            json!({ "schema_version": 1, "root_dir": "relative/DolphinAI" }),
         );
 
         let error = DesktopConfigStore::new(system_data).load().unwrap_err();
@@ -968,7 +979,7 @@ mod tests {
     fn load_rejects_missing_root_config() {
         let temp = unique_test_dir("missing-root-config");
         let system_data = temp.join("system");
-        let root = temp.join("DolphinCode");
+        let root = temp.join("DolphinAI");
         write_json_fixture(
             &system_data.join("bootstrap.json"),
             json!({ "schema_version": 1, "root_dir": root }),
@@ -983,7 +994,7 @@ mod tests {
     fn load_rejects_root_mismatch_without_deleting_files() {
         let temp = unique_test_dir("root-mismatch");
         let system_data = temp.join("system");
-        let pointer_root = temp.join("DolphinCode");
+        let pointer_root = temp.join("DolphinAI");
         let other_root = temp.join("OtherRoot");
         let root_config = pointer_root.join(".appdata/desktop-config.json");
         let bootstrap = system_data.join("bootstrap.json");
@@ -1040,11 +1051,11 @@ mod tests {
     fn save_rejects_root_and_system_data_overlap_before_creating_derived_directories() {
         for (label, root_from_temp, system_from_temp) in [
             ("same", "system", "system"),
-            ("root-inside-system", "system/DolphinCode", "system"),
+            ("root-inside-system", "system/DolphinAI", "system"),
             (
                 "system-inside-root",
-                "DolphinCode",
-                "DolphinCode/.appdata/system",
+                "DolphinAI",
+                "DolphinAI/.appdata/system",
             ),
         ] {
             let temp = unique_test_dir(label);
@@ -1078,7 +1089,7 @@ mod tests {
     #[test]
     fn save_rejects_existing_appdata_symlink_before_following_it() {
         let temp = unique_test_dir("appdata-symlink");
-        let root = temp.join("DolphinCode");
+        let root = temp.join("DolphinAI");
         let external = temp.join("external-data");
         let system_data = temp.join("system");
         fs::create_dir_all(&root).unwrap();
@@ -1110,7 +1121,7 @@ mod tests {
     fn concurrent_saves_finish_with_the_last_successful_configuration_loadable() {
         let temp = unique_test_dir("concurrent-save");
         let system_data = temp.join("system");
-        let root = temp.join("DolphinCode");
+        let root = temp.join("DolphinAI");
         let store = DesktopConfigStore::new(system_data.clone());
         let independent_store = DesktopConfigStore::new(system_data);
         let mut mismatch = None;

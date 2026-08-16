@@ -3,15 +3,36 @@
 // 动态 import tauri 插件 → 在线 build 里这分支被 tree-shake 掉, 不进在线包。
 import { ElMessageBox, ElMessage } from 'element-plus'
 
+export type DesktopUpdateCheckResult =
+  | { status: 'not-available' | 'no-update' | 'dismissed' | 'installed' }
+  | { status: 'failed'; error: string }
+
+let updateCheckPromise: Promise<DesktopUpdateCheckResult> | null = null
+
 function errText(e: any): string {
   if (!e) return '未知错误'
   if (typeof e === 'string') return e
   return e.message || e.toString?.() || JSON.stringify(e)
 }
 
-export async function checkAndPromptUpdate(opts: { silentIfNone: boolean }): Promise<void> {
-  if (!__DESKTOP__ || __DESKTOP_WEB_PREVIEW__) return
+function failedUpdateResult(stage: string, error: unknown): DesktopUpdateCheckResult {
+  console.warn(`[update] ${stage} failed`, errText(error))
+  return { status: 'failed', error: '检查更新失败，请稍后重试' }
+}
 
+export async function checkAndPromptUpdate(opts: { silentIfNone: boolean }): Promise<DesktopUpdateCheckResult> {
+  if (!__DESKTOP__ || __DESKTOP_WEB_PREVIEW__) return { status: 'not-available' }
+
+  // App.vue and the desktop rail both mount during startup. Share one check so
+  // a single launch cannot produce duplicate network requests or dialogs.
+  if (updateCheckPromise) return updateCheckPromise
+  updateCheckPromise = checkAndPromptUpdateOnce()
+    .catch(error => failedUpdateResult('unexpected update check', error))
+    .finally(() => { updateCheckPromise = null })
+  return updateCheckPromise
+}
+
+async function checkAndPromptUpdateOnce(): Promise<DesktopUpdateCheckResult> {
   // check() 失败自动重试一次(扛瞬时网络抖动);仍失败则报真实错误。
   let update: any = null
   let lastErr: any = null
@@ -27,14 +48,12 @@ export async function checkAndPromptUpdate(opts: { silentIfNone: boolean }): Pro
     }
   }
   if (lastErr) {
-    // 真实错误透出(之前写死"无法连接"会误导诊断)。
-    if (!opts.silentIfNone) ElMessage.error(`检查更新失败:${errText(lastErr)}`)
-    return
+    // 自动检查调用方可以安全忽略失败；手动检查调用方负责展示结果。
+    return failedUpdateResult('check', lastErr)
   }
 
   if (!update) {
-    if (!opts.silentIfNone) ElMessage.success('已是最新版本')
-    return
+    return { status: 'no-update' }
   }
   try {
     await ElMessageBox.confirm(
@@ -42,18 +61,20 @@ export async function checkAndPromptUpdate(opts: { silentIfNone: boolean }): Pro
       '有可用更新',
       { confirmButtonText: '立即更新', cancelButtonText: '稍后', type: 'info' },
     )
-  } catch {
-    return // 用户点了「稍后」
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return { status: 'dismissed' }
+    return failedUpdateResult('update prompt', error)
   }
-  const loading = ElMessage({ message: '正在下载更新…', duration: 0 })
+  let loading: ReturnType<typeof ElMessage> | null = null
   try {
+    loading = ElMessage({ message: '正在下载更新…', duration: 0 })
     await update.downloadAndInstall()
     loading.close()
     const proc = await import('@tauri-apps/plugin-process')
     await proc.relaunch()
+    return { status: 'installed' }
   } catch (e) {
-    loading.close()
-    ElMessage.error(`更新失败:${errText(e)}`)
-    console.error('[update] downloadAndInstall 失败', e)
+    loading?.close()
+    return failedUpdateResult('download and install', e)
   }
 }

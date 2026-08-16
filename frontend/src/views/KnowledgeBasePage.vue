@@ -1,3 +1,5 @@
+<!-- @deprecated Desktop remote knowledge maintenance is owned by Control Plane.
+     This route remains for Web mode and legacy bookmarks. -->
 <template>
   <BuilderFrame :breadcrumbs="[{ label: '平台' }, { label: '平台知识库' }]">
     <template #actions>

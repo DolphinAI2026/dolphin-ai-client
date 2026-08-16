@@ -80,6 +80,9 @@ def test_build_env_maps_control_plane_login_and_user_root(tmp_path, monkeypatch)
     )
     assert env["AUTH_PROVIDER"] == "control_plane"
     assert env["DOLPHIN_WORKSPACE_BASE_URL"] == "https://om-demo.dfy.definesys.cn"
+    assert env["DOLPHIN_CODE_CONTROL_PLANE_URL"] == (
+        "https://om-demo.dfy.definesys.cn/control-plane"
+    )
     assert env["APAAS_BASE_URL"] == ""
     assert env["APAAS_WORKSPACE_ROOT"] == str(tmp_path / "applications")
     assert env["DOLPHIN_LOCAL_RUNTIME_DATA_DIR"] == str(data_dir / "runtime")
@@ -98,3 +101,10 @@ def test_build_env_maps_apaas_login(tmp_path, monkeypatch):
     assert env["AUTH_PROVIDER"] == "apaas"
     assert env["APAAS_BASE_URL"] == "https://apaas-trial.definesys.cn/backend"
     assert env["DOLPHIN_WORKSPACE_BASE_URL"] == ""
+    assert env["DOLPHIN_CODE_CONTROL_PLANE_URL"] == ""
+
+
+def test_control_plane_code_url_does_not_duplicate_suffix():
+    assert ds.control_plane_code_url("https://control.example/control-plane/") == (
+        "https://control.example/control-plane"
+    )

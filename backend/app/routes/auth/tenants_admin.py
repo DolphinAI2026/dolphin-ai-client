@@ -17,6 +17,7 @@ from app.deps import (
     AuthContext,
     get_auth_context,
     get_platform_auth_context,
+    is_control_plane_context,
     platform_admin_has_unscoped_tenant_access,
     require_tenant_admin,
     resolve_default_tenant_id_for_user,
@@ -43,6 +44,17 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _reject_control_plane_local_admin(ctx: AuthContext) -> None:
+    if is_control_plane_context(ctx):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "CONTROL_PLANE_REMOTE_MANAGEMENT_REQUIRED",
+                "message": "组织、成员、角色和 aPaaS 绑定由 Control Plane 管理，请打开远程控制台",
+            },
+        )
 
 
 # ─── Shared helpers ────────────────────────────────────────────────────────────
@@ -324,6 +336,7 @@ async def list_all_tenants(
     - q：模糊匹配 tenant_name / tenant_code（不区分大小写）
     - status：1=只看启用 / 0=只看禁用 / 不传=全部
     """
+    _reject_control_plane_local_admin(ctx)
     _require_platform_admin(ctx)
 
     from sqlalchemy import func as sql_func, or_
@@ -364,6 +377,7 @@ async def create_new_tenant(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """新建租户（仅平台管理员）。"""
+    _reject_control_plane_local_admin(ctx)
     _require_platform_admin(ctx)
 
     name = (data.tenant_name or "").strip()
@@ -410,6 +424,7 @@ async def tenant_dashboard(
     ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    _reject_control_plane_local_admin(ctx)
     """平台总览（仅平台管理员）：所有租户的资源使用量聚合。"""
     _require_platform_admin(ctx)
     from app.tenant_quota import get_tenant_usage as _usage
@@ -454,6 +469,7 @@ async def update_tenant(
     ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    _reject_control_plane_local_admin(ctx)
     """编辑租户基本信息（仅平台管理员）。tenant_code 一旦创建不可改。"""
     _require_platform_admin(ctx)
 
@@ -590,6 +606,7 @@ async def delete_tenant(
     - force=true：级联删除应用 + 组件 + 成员关系（DB 层 ON DELETE CASCADE）；
       Vibe Coding workspace 的文件系统目录不会自动删，需平台管理员后续手动清理。
     """
+    _reject_control_plane_local_admin(ctx)
     _require_platform_admin(ctx)
 
     t = (
@@ -688,6 +705,7 @@ async def get_tenant_usage_endpoint(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """返回某租户的资源使用情况（仅平台管理员）。"""
+    _reject_control_plane_local_admin(ctx)
     _require_platform_admin(ctx)
     from app.tenant_quota import get_tenant_usage as _get_usage
     return await _get_usage(db, tenant_id)
@@ -701,6 +719,7 @@ async def update_tenant_status(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """启用 / 禁用租户（仅平台管理员）。被禁用的租户成员仍可见但无法切入。"""
+    _reject_control_plane_local_admin(ctx)
     _require_platform_admin(ctx)
 
     if data.status not in (0, 1):
@@ -735,6 +754,7 @@ async def set_my_default_tenant(
     平台管理员若没有 membership 也允许（fallback：什么都不做，因为 platform_admin
     登录走的是 resolve_default_tenant_id_for_user，没 membership 时本身就走 fallback）。
     """
+    _reject_control_plane_local_admin(ctx)
     membership = (
         await db.execute(
             select(UserTenant).where(
@@ -773,6 +793,7 @@ async def bind_user_apaas_account(
 
     绑定后账号仍按原 account_source 登录；aPaaS 凭据只用于租户、应用和长任务续 token。
     """
+    _reject_control_plane_local_admin(ctx)
     _require_platform_admin(ctx)
 
     username = (data.username or "").strip()
@@ -911,6 +932,7 @@ async def admin_reset_user_password(
 
     新密码限制：6-128 位。重置后旧密码立即失效，但已签发的 JWT 会在过期前继续可用。
     """
+    _reject_control_plane_local_admin(ctx)
     new_pw = (data.new_password or "").strip()
     if len(new_pw) < 6 or len(new_pw) > 128:
         raise HTTPException(status_code=400, detail="密码长度需在 6-128 位之间")
@@ -961,6 +983,7 @@ async def list_platform_users(
 
     返回精简：id / username / display_name / is_platform_admin。不返密码 hash。
     """
+    _reject_control_plane_local_admin(ctx)
     _require_platform_admin(ctx)
     rows = (
         await db.execute(
@@ -1067,6 +1090,8 @@ async def list_my_tenants(
 @router.get("/users")
 async def list_users(ctx: Annotated[AuthContext, Depends(get_auth_context)], db: Annotated[AsyncSession, Depends(get_db)]):
     """获取同租户下的所有用户（用于团队成员选择）"""
+    if is_control_plane_context(ctx):
+        return []
     if ctx.tenant_id:
         result = await db.execute(
             select(User.id, User.username, User.display_name)
@@ -1087,6 +1112,7 @@ async def list_tenant_roles(
     ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    _reject_control_plane_local_admin(ctx)
     if ctx.tenant_role == "platform_admin":
         return [
             {
@@ -1126,6 +1152,7 @@ async def list_tenant_users(
     ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    _reject_control_plane_local_admin(ctx)
     if ctx.tenant_role == "platform_admin":
         result = await db.execute(select(User).order_by(User.created_at.asc(), User.id.asc()))
         users = result.scalars().all()
@@ -1150,6 +1177,7 @@ async def invite_tenant_user(
     ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    _reject_control_plane_local_admin(ctx)
     from sqlalchemy.exc import IntegrityError
     username = (req.username or "").strip()
     if not username:
@@ -1313,6 +1341,7 @@ async def update_tenant_user_status(
     ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    _reject_control_plane_local_admin(ctx)
     if req.status not in (0, 1):
         raise HTTPException(status_code=400, detail="status 只能是 0 或 1")
     if user_id == ctx.user.id:
@@ -1356,6 +1385,7 @@ async def update_tenant_user_role(
     ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    _reject_control_plane_local_admin(ctx)
     if ctx.tenant_role == "platform_admin":
         if req.role_code not in ("platform_admin", "normal_user"):
             raise HTTPException(status_code=400, detail="平台管理员只能切换平台超级管理员或普通账号")

@@ -1,3 +1,5 @@
+<!-- @deprecated Desktop remote MCP management is owned by Control Plane.
+     This route remains for Web mode and legacy bookmarks. -->
 <template>
   <BuilderFrame :breadcrumbs="[{ label: '设置' }, { label: 'MCP 工具' }]">
     <template #actions>

@@ -16,20 +16,32 @@ custom_implementation:
   reason: 现有 apaas-builder-ai 已形成稳定的 Vue、FastAPI、Tauri 和 PyInstaller 宿主基线；桌面改造与 Code
     系统助手都是现有客户端的原位增量，不创建新应用，也不选择或物化固定技术栈模板。
   stack_summary: 宿主应用使用 Vue 3 + TypeScript + Pinia + Element Plus、FastAPI + SQLAlchemy、Tauri
-    2 + Rust 和 PyInstaller。系统助手诊断或修改的目标工程技术栈必须从真实仓库、工作区或模板清单识别，宿主技术栈不是目标工程前提。
+    2 + Rust 和 PyInstaller。桌面 Code 使用统一逻辑应用与本机/远程位置投影；系统助手诊断或修改的目标工程技术栈必须从真实仓库、工作区或模板清单识别，宿主技术栈不是目标工程前提。
   technical_design_refs:
   - path: docs/solutions/l1/arch/ARCH-20260809-001-desktop-local-ai-cross-platform.md
-    reason: 冻结单 URL、远程事实源、本地 AI 四类资源和三平台目标。
+    reason: 冻结单 URL、远程事实源、设备侧本机 Code 位置、本地 AI 四类资源和三平台目标。
     section: 架构目标与边界
-    sha256: sha256:fe4c5523286aa165e4a51c035cc32bddbb4a3ccba49cf8dcd2f60a26329ff3a9
+    sha256: sha256:2d3331e13fa2648ab0731f455781d3c4258c4818417216dc7a3905fff6d9a5ff
+  - path: docs/solutions/l1/arch/ARCH-20260809-001-desktop-local-ai-cross-platform.md
+    reason: 冻结逻辑应用、本机/远程位置、会话运行位置和 Runtime 执行目标的边界。
+    section: 远程事实源、本机 Code 位置与本地 AI 资源
+    sha256: sha256:2d3331e13fa2648ab0731f455781d3c4258c4818417216dc7a3905fff6d9a5ff
   - path: docs/solutions/l1/arch/ARCH-20260809-001-desktop-local-ai-cross-platform.md
     reason: 冻结 sidecar 独立启动和 Local Runtime 按需策略。
     section: Runtime 生命周期
-    sha256: sha256:fe4c5523286aa165e4a51c035cc32bddbb4a3ccba49cf8dcd2f60a26329ff3a9
+    sha256: sha256:2d3331e13fa2648ab0731f455781d3c4258c4818417216dc7a3905fff6d9a5ff
   - path: docs/solutions/l1/arch/ARCH-20260809-001-desktop-local-ai-cross-platform.md
     reason: 冻结首阶段修改范围、兼容和验证边界。
     section: 实施阶段与文件 Ownership
-    sha256: sha256:fe4c5523286aa165e4a51c035cc32bddbb4a3ccba49cf8dcd2f60a26329ff3a9
+    sha256: sha256:2d3331e13fa2648ab0731f455781d3c4258c4818417216dc7a3905fff6d9a5ff
+  - path: docs/superpowers/specs/2026-07-28-desktop-code-local-remote-application-experience-design.md
+    reason: 冻结统一应用、位置选择、已有目录接入和恢复交互。
+    section: 统一应用与位置模型
+    sha256: sha256:dc698f57f4f63f92ffb67c1504a0b369f12ff6e4df5c50842499c814cd07df80
+  - path: docs/superpowers/specs/2026-07-28-desktop-code-local-remote-application-experience-design.md
+    reason: 冻结本机位置注册、初始化会话和兼容接口调整。
+    section: 数据流与接口调整
+    sha256: sha256:dc698f57f4f63f92ffb67c1504a0b369f12ff6e4df5c50842499c814cd07df80
   - path: docs/solutions/l1/architecture/code-system-assistant.md
     reason: 冻结系统助手作为现有 Code 宿主增量、且不绑定目标工程技术栈的边界。
     section: P0 增量边界与事实源
@@ -51,7 +63,7 @@ custom_implementation:
     section: Code Web 与桌面入口复用
     sha256: sha256:b8083a30de70d0b445c8a1e32b9952812731f88de99b51d139b42368420126be
 kind: application_architecture_mapping
-mapping_digest: sha256:16ff4182bd5e244901225b50272ec0b44e2e2978faeaebeef6f375da3fc67ca9
+mapping_digest: sha256:bd255e91c3fcad3bc4e10735e9391a9b69ba514fc7e1db841418450108093dd2
 schema_version: 2
 selection_mode: custom_implementation
 templates: []

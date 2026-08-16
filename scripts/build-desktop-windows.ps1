@@ -1,25 +1,36 @@
 param(
   [string]$Version = "",
+  [string]$SourceRevision = "",
   [string]$Target = "x86_64-pc-windows-msvc",
   [ValidateSet("portable", "nsis", "msi", "all")]
-  [string]$Bundle = "portable",
-  [switch]$SkipInstall
+  [string]$Bundle = "nsis",
+  [switch]$SkipInstall,
+  [switch]$UsePreparedRuntimeAppliance,
+  [switch]$SkipFrontendBuild,
+  [switch]$SkipSidecarBuild,
+  [switch]$SkipTauriBuild
 )
-
 $ErrorActionPreference = "Stop"
-
 $IsWin = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
   [System.Runtime.InteropServices.OSPlatform]::Windows
 )
 if (-not $IsWin) {
   throw "Windows desktop packages must be built on Windows because PyInstaller cannot cross-compile the sidecar exe."
 }
+if ($env:CARGO_TARGET_DIR) {
+  $env:CARGO_TARGET_DIR = $env:CARGO_TARGET_DIR.Trim()
+}
 
 $StartTs = Get-Date
-$Root = Resolve-Path (Join-Path $PSScriptRoot "..")
+$Root = (Get-Item (Join-Path $PSScriptRoot "..")).FullName
 $Frontend = Join-Path $Root "frontend"
 $Backend = Join-Path $Root "backend"
 $Tauri = Join-Path $Root "src-tauri"
+$CargoTargetRoot = if ($env:CARGO_TARGET_DIR) {
+  $env:CARGO_TARGET_DIR
+} else {
+  Join-Path $Tauri "target"
+}
 $Config = Join-Path $Tauri "tauri.conf.json"
 $OriginalConfig = Get-Content $Config -Raw
 $RestoreConfig = $false
@@ -40,8 +51,40 @@ function Assert-NativeSuccess($Name, $ExitCode) {
   }
 }
 
+function Copy-Tree($Source, $Destination) {
+  $SourcePath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Source)
+  $DestinationPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Destination)
+  New-Item -ItemType Directory -Force -Path $DestinationPath | Out-Null
+  & robocopy $SourcePath $DestinationPath /E /NFL /NDL /NJH /NJS /NP /XD __pycache__ /XF *.pyc *.pyo | Out-Null
+  if ($LASTEXITCODE -gt 7) {
+    throw "robocopy failed from $SourcePath to $DestinationPath with exit code $LASTEXITCODE."
+  }
+}
+
+function Remove-Tree($Path) {
+  $DirectoryPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+  $ExtendedPath = if ($DirectoryPath.StartsWith("\\")) {
+    "\\?\UNC\" + $DirectoryPath.TrimStart("\")
+  } else {
+    "\\?\" + $DirectoryPath
+  }
+  if (-not (Test-Path -LiteralPath $ExtendedPath)) {
+    return
+  }
+  Get-ChildItem -LiteralPath $ExtendedPath -Force -Recurse -File | ForEach-Object {
+    if ($_.IsReadOnly) {
+      $_.IsReadOnly = $false
+    }
+  }
+  Remove-Item -LiteralPath $ExtendedPath -Recurse -Force
+  if (Test-Path -LiteralPath $ExtendedPath) {
+    throw "Failed to remove stale build tree: $DirectoryPath"
+  }
+}
+
 function Write-Utf8NoBom($Path, $Content) {
-  [IO.File]::WriteAllText($Path, $Content, [Text.UTF8Encoding]::new($false))
+  $FilePath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+  [IO.File]::WriteAllText($FilePath, $Content, [Text.UTF8Encoding]::new($false))
 }
 
 function Get-PythonCommand {
@@ -86,6 +129,17 @@ function Initialize-MsvcEnvironment {
   }
 }
 
+$CurrentRevision = (& git -C $Root rev-parse HEAD).Trim()
+Assert-NativeSuccess "Source revision lookup" $LASTEXITCODE
+if ($SourceRevision -and $SourceRevision -ne $CurrentRevision) {
+  throw "SourceRevision must match the current Git revision: $CurrentRevision"
+}
+$SourceRevision = $CurrentRevision
+$IsReleaseBuild = $env:DOLPHIN_RELEASE_BUILD -eq "1" -or
+  $env:GITHUB_REF_TYPE -eq "tag" -or
+  $env:GITHUB_REF -like "refs/tags/*"
+$UpdaterArtifactsEnabled = $true
+
 try {
   if ($Version) {
     $RestoreConfig = $true
@@ -95,16 +149,40 @@ try {
   }
 
   if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
+    if ($IsReleaseBuild) {
+      throw "TAURI_SIGNING_PRIVATE_KEY is required for a Release-tag desktop build."
+    }
     $RestoreConfig = $true
     $text = Get-Content $Config -Raw
     $text = $text -replace '"createUpdaterArtifacts"\s*:\s*true', '"createUpdaterArtifacts": false'
     Write-Utf8NoBom $Config $text
-    Write-Host "TAURI_SIGNING_PRIVATE_KEY is not set; updater artifacts are disabled for this desktop build."
+    $UpdaterArtifactsEnabled = $false
+    Write-Host "TAURI_SIGNING_PRIVATE_KEY is not set; updater artifacts are temporarily disabled for this non-Release desktop build."
   }
 
   Write-Host "==> [build-desktop-windows.ps1] ROOT=$Root TARGET=$Target BUNDLE=$Bundle"
 
-  Invoke-Step "1/5 Install frontend dependencies" {
+  Invoke-Step "1/6 Prepare Windows local Runtime appliance" {
+    if (-not $UsePreparedRuntimeAppliance) {
+      & (Join-Path $Root "scripts\prepare-local-runtime-appliance-windows.ps1")
+      Assert-NativeSuccess "Windows local Runtime appliance preparation" $LASTEXITCODE
+    }
+    foreach ($RelativePath in @(
+      "bin\agent-runtime.exe",
+      "codex\bin\codex.exe",
+      "codex\codex-resources\codex-command-runner.exe",
+      "codex\codex-resources\codex-windows-sandbox-setup.exe",
+      "agentic-coding\.venv\Scripts\python.exe",
+      "agentic-coding-pack\manifest.yaml",
+      "web\builder\dist\index.html"
+    )) {
+      if (-not (Test-Path -LiteralPath (Join-Path $Tauri "resources\agent-runtime\$RelativePath") -PathType Leaf)) {
+        throw "Prepared local Runtime appliance is missing: $RelativePath"
+      }
+    }
+  }
+
+  Invoke-Step "2/6 Install frontend dependencies" {
     Push-Location $Frontend
     try {
       if (-not $SkipInstall -and -not (Test-Path "node_modules")) {
@@ -116,23 +194,45 @@ try {
     }
   }
 
-  Invoke-Step "2/5 Build frontend desktop bundle" {
+  Invoke-Step "3/6 Build frontend desktop bundle" {
+    if ($SkipFrontendBuild) {
+      $FrontendEntry = Join-Path $Frontend "dist-desktop\index.html"
+      if (-not (Test-Path -LiteralPath $FrontendEntry -PathType Leaf)) {
+        throw "Cannot skip frontend build because desktop bundle is missing: $FrontendEntry"
+      }
+      Write-Host "Using prepared frontend desktop bundle: $FrontendEntry"
+      return
+    }
     Push-Location $Frontend
     $PreviousViteDesktop = [Environment]::GetEnvironmentVariable("VITE_DESKTOP", "Process")
     $PreviousViteBaseUrl = [Environment]::GetEnvironmentVariable("VITE_BASE_URL", "Process")
+    $PreviousDolphinBuildRevision = [Environment]::GetEnvironmentVariable("DOLPHIN_BUILD_REVISION", "Process")
+    $PreviousDolphinBuildTarget = [Environment]::GetEnvironmentVariable("DOLPHIN_BUILD_TARGET", "Process")
     try {
       $env:VITE_DESKTOP = "1"
       $env:VITE_BASE_URL = "/"
+      $env:DOLPHIN_BUILD_REVISION = $SourceRevision
+      $env:DOLPHIN_BUILD_TARGET = "windows-x86_64"
       node .\node_modules\vite\bin\vite.js build --outDir dist-desktop --emptyOutDir
       Assert-NativeSuccess "Frontend desktop build" $LASTEXITCODE
     } finally {
       [Environment]::SetEnvironmentVariable("VITE_DESKTOP", $PreviousViteDesktop, "Process")
       [Environment]::SetEnvironmentVariable("VITE_BASE_URL", $PreviousViteBaseUrl, "Process")
+      [Environment]::SetEnvironmentVariable("DOLPHIN_BUILD_REVISION", $PreviousDolphinBuildRevision, "Process")
+      [Environment]::SetEnvironmentVariable("DOLPHIN_BUILD_TARGET", $PreviousDolphinBuildTarget, "Process")
       Pop-Location
     }
   }
 
-  Invoke-Step "3/5 Build PyInstaller Windows sidecar" {
+  Invoke-Step "4/6 Build PyInstaller Windows sidecar" {
+    if ($SkipSidecarBuild) {
+      $PreparedSidecar = Join-Path $Backend "dist\dolphin-ai-sidecar.exe"
+      if (-not (Test-Path -LiteralPath $PreparedSidecar -PathType Leaf)) {
+        throw "Cannot skip sidecar build because prepared executable is missing: $PreparedSidecar"
+      }
+      Write-Host "Using prepared Windows sidecar: $PreparedSidecar"
+      return
+    }
     Push-Location $Backend
     try {
       $VenvPython = Join-Path $Backend ".venv\Scripts\python.exe"
@@ -157,26 +257,26 @@ try {
         & $VenvPython -m PyInstaller --version | Out-Null
         Assert-NativeSuccess "PyInstaller availability check" $LASTEXITCODE
       }
-      & $VenvPython -m PyInstaller ruijing-sidecar.spec --clean --noconfirm
+      & $VenvPython -m PyInstaller dolphin-ai-sidecar.spec --clean --noconfirm
       Assert-NativeSuccess "PyInstaller sidecar build" $LASTEXITCODE
     } finally {
       Pop-Location
     }
   }
 
-  Invoke-Step "4/5 Place sidecar binary" {
+  Invoke-Step "5/6 Place sidecar binary" {
     $BinDir = Join-Path $Tauri "binaries"
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
-    $Sidecar = Join-Path $Backend "dist\ruijing-sidecar.exe"
+    $Sidecar = Join-Path $Backend "dist\dolphin-ai-sidecar.exe"
     if (-not (Test-Path $Sidecar)) {
       throw "Missing PyInstaller output: $Sidecar"
     }
-    $Dest = Join-Path $BinDir "ruijing-sidecar-$Target.exe"
+    $Dest = Join-Path $BinDir "dolphin-ai-sidecar-$Target.exe"
     Copy-Item $Sidecar $Dest -Force
     Get-Item $Dest | Format-List FullName,Length,LastWriteTime
   }
 
-  Invoke-Step "5/5 Build Tauri Windows package" {
+  Invoke-Step "6/6 Build Tauri Windows package" {
     Push-Location $Root
     try {
       Initialize-MsvcEnvironment
@@ -184,52 +284,129 @@ try {
         npm ci
         Assert-NativeSuccess "Root dependency install" $LASTEXITCODE
       }
-      if ($Bundle -eq "portable") {
-        node .\node_modules\@tauri-apps\cli\tauri.js build --target $Target --no-bundle
+      $ReleaseRoot = Join-Path $CargoTargetRoot "$Target\release"
+      $ReleaseAgentRuntime = Join-Path $ReleaseRoot "resources\agent-runtime"
+      if ($SkipTauriBuild) {
+        foreach ($PreparedBinary in @("DolphinAI.exe", "dolphin-ai-sidecar.exe")) {
+          if (-not (Test-Path -LiteralPath (Join-Path $ReleaseRoot $PreparedBinary) -PathType Leaf)) {
+            throw "Cannot skip Tauri build because prepared binary is missing: $PreparedBinary"
+          }
+        }
+        Write-Host "Using prepared Tauri binaries: $ReleaseRoot"
       } else {
-        node .\node_modules\@tauri-apps\cli\tauri.js build --target $Target --bundles $Bundle
+        Remove-Tree $ReleaseAgentRuntime
+        if ($Bundle -eq "portable") {
+          node .\node_modules\@tauri-apps\cli\tauri.js build --target $Target --no-bundle
+        } else {
+          node .\node_modules\@tauri-apps\cli\tauri.js build --target $Target --bundles $Bundle
+        }
+        Assert-NativeSuccess "Tauri Windows build" $LASTEXITCODE
       }
-      Assert-NativeSuccess "Tauri Windows build" $LASTEXITCODE
 
-      $ReleaseRoot = Join-Path $Tauri "target\$Target\release"
+      $ReleaseResources = if ($SkipTauriBuild) {
+        Join-Path $Tauri "resources\agent-runtime"
+      } else {
+        Join-Path $ReleaseRoot "resources\agent-runtime"
+      }
+      foreach ($RelativePath in @(
+        "bin\agent-runtime.exe",
+        "codex\bin\codex.exe",
+        "codex\codex-resources\codex-command-runner.exe",
+        "codex\codex-resources\codex-windows-sandbox-setup.exe",
+        "agentic-coding\.venv\Scripts\python.exe",
+        "agentic-coding-pack\manifest.yaml",
+        "web\builder\dist\index.html"
+      )) {
+        if (-not (Test-Path -LiteralPath (Join-Path $ReleaseResources $RelativePath) -PathType Leaf)) {
+          throw "Tauri package is missing local Runtime resource: $RelativePath"
+        }
+      }
+      $ReleasePython = Join-Path $ReleaseResources "agentic-coding\.venv\Scripts\python.exe"
+      & $ReleasePython -B -c "from pydantic import BaseModel; import glob, pathlib, sysconfig, zoneinfo; assert BaseModel; assert sysconfig.get_config_vars()"
+      Assert-NativeSuccess "Packaged Runtime Python validation" $LASTEXITCODE
       if ($Bundle -eq "portable") {
-        $DownloadDir = Join-Path $Root "dist-desktop\windows"
-        $PortableStagingRoot = Join-Path $env:TEMP "ruijing-$PackageVersion-portable"
-        $PortableAppRoot = Join-Path $PortableStagingRoot "Dolphin Code"
-        $PortableZip = Join-Path $DownloadDir "ruijing-$PackageVersion-windows-x86_64-portable.zip"
+        $DownloadDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
+          (Join-Path $Root "dist-desktop\windows")
+        )
+        $PortableStagingRoot = Join-Path $env:TEMP "dolphin-ai-$PackageVersion-portable"
+        $PortableAppRoot = Join-Path $PortableStagingRoot "DolphinAI"
+        $PortableZip = Join-Path $DownloadDir "dolphin-ai-$PackageVersion-windows-x86_64-portable.zip"
 
-        Remove-Item $PortableStagingRoot -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Tree $PortableStagingRoot
         New-Item -ItemType Directory -Force -Path $PortableAppRoot | Out-Null
         New-Item -ItemType Directory -Force -Path $DownloadDir | Out-Null
-        Get-ChildItem $DownloadDir -File -Filter "ruijing-*-windows-x86_64-portable.zip" |
+        Get-ChildItem $DownloadDir -File -Filter "dolphin-ai-*-windows-x86_64-portable.zip" |
           Remove-Item -Force
 
-        Copy-Item (Join-Path $ReleaseRoot "app.exe") (Join-Path $PortableAppRoot "Dolphin Code.exe") -Force
-        Copy-Item (Join-Path $ReleaseRoot "ruijing-sidecar.exe") $PortableAppRoot -Force
+        Copy-Item (Join-Path $ReleaseRoot "DolphinAI.exe") (Join-Path $PortableAppRoot "DolphinAI.exe") -Force
+        Copy-Item (Join-Path $ReleaseRoot "dolphin-ai-sidecar.exe") $PortableAppRoot -Force
+        if ($SkipTauriBuild) {
+          Copy-Tree (Join-Path $Tauri "resources\agent-runtime") (Join-Path $PortableAppRoot "resources\agent-runtime")
+        } else {
+          Copy-Tree (Join-Path $ReleaseRoot "resources") (Join-Path $PortableAppRoot "resources")
+        }
 
         foreach ($RelativePath in @(
-          "Dolphin Code.exe",
-          "ruijing-sidecar.exe"
+          "DolphinAI.exe",
+          "dolphin-ai-sidecar.exe",
+          "resources\agent-runtime\bin\agent-runtime.exe",
+          "resources\agent-runtime\codex\bin\codex.exe",
+          "resources\agent-runtime\agentic-coding\.venv\Scripts\python.exe",
+          "resources\agent-runtime\agentic-coding-pack\manifest.yaml",
+          "resources\agent-runtime\web\builder\dist\index.html"
         )) {
           $PortablePath = Join-Path $PortableAppRoot $RelativePath
           if (-not (Test-Path -LiteralPath $PortablePath -PathType Leaf)) {
             throw "Portable package is missing $RelativePath"
           }
         }
+        $PortablePython = Join-Path $PortableAppRoot "resources\agent-runtime\agentic-coding\.venv\Scripts\python.exe"
+        & $PortablePython -B -c "from pydantic import BaseModel; import glob, pathlib, sysconfig, zoneinfo; assert BaseModel; assert sysconfig.get_config_vars()"
+        Assert-NativeSuccess "Portable Runtime Python validation" $LASTEXITCODE
+
+        & (Join-Path $Root "scripts\verify-desktop-windows-package.ps1") `
+          -PackageRoot $PortableAppRoot `
+          -ExpectedVersion $PackageVersion `
+          -ExpectedSourceRevision $SourceRevision `
+          -WriteManifest
+        Assert-NativeSuccess "Portable staging package verification" $LASTEXITCODE
 
         Push-Location $PortableStagingRoot
         try {
-          & tar.exe -a -c -f $PortableZip "Dolphin Code"
+          & tar.exe -a -c -f $PortableZip "DolphinAI"
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $PortableZip -PathType Leaf)) {
             throw "Failed to create portable package with tar.exe"
           }
         } finally {
           Pop-Location
         }
+
+        $VerificationRoot = Join-Path $env:TEMP ("dolphin-ai-$PackageVersion-verify-" + [Guid]::NewGuid().ToString("N"))
+        try {
+          New-Item -ItemType Directory -Force -Path $VerificationRoot | Out-Null
+          & tar.exe -xf $PortableZip -C $VerificationRoot
+          Assert-NativeSuccess "Portable package extraction" $LASTEXITCODE
+          & (Join-Path $Root "scripts\verify-desktop-windows-package.ps1") `
+            -PackageRoot (Join-Path $VerificationRoot "DolphinAI") `
+            -ExpectedVersion $PackageVersion `
+            -ExpectedSourceRevision $SourceRevision
+          Assert-NativeSuccess "Extracted portable package verification" $LASTEXITCODE
+        } finally {
+          $ExtendedVerificationRoot = "\\?\" + $VerificationRoot
+          Remove-Item -LiteralPath $ExtendedVerificationRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
         Write-Host ""
         Write-Host "Download-ready portable package: $PortableZip"
         Get-Item $PortableZip | Format-List FullName,Length,LastWriteTime
         Get-FileHash $PortableZip -Algorithm SHA256 | Format-List
+      } else {
+        & (Join-Path $Root "scripts\verify-desktop-windows-package.ps1") `
+          -PackageRoot $ReleaseRoot `
+          -ApplicationExecutable "app.exe" `
+          -ExpectedVersion $PackageVersion `
+          -ExpectedSourceRevision $SourceRevision `
+          -WriteManifest
+        Assert-NativeSuccess "Windows installer staging verification" $LASTEXITCODE
       }
     } finally {
       Pop-Location
@@ -239,9 +416,9 @@ try {
   $Elapsed = [int]((Get-Date) - $StartTs).TotalSeconds
   Write-Host ""
   Write-Host "==> Done in ${Elapsed}s. Artifacts:"
-  $BundleRoot = Join-Path $Tauri "target\$Target\release\bundle"
+  $BundleRoot = Join-Path $CargoTargetRoot "$Target\release\bundle"
   if (-not (Test-Path $BundleRoot)) {
-    $BundleRoot = Join-Path $Tauri "target\release\bundle"
+    $BundleRoot = Join-Path $CargoTargetRoot "release\bundle"
   }
   if ($Bundle -ne "portable" -and (Test-Path $BundleRoot)) {
     Get-ChildItem $BundleRoot -Recurse -File |
@@ -252,6 +429,9 @@ try {
     if ($PackageVersion) {
       $DownloadDir = Join-Path $Root "dist-desktop\windows"
       New-Item -ItemType Directory -Force -Path $DownloadDir | Out-Null
+      Get-ChildItem $DownloadDir -File |
+        Where-Object { $_.Name -match "ruijing-|Dolphin Code|ruijing-sidecar" } |
+        Remove-Item -Force
       $VersionPattern = "(^|[^0-9A-Za-z])$([Regex]::Escape($PackageVersion))([^0-9A-Za-z]|$)"
       $Installer = Get-ChildItem $BundleRoot -Recurse -File -Filter "*.exe" |
         Where-Object { $_.Name -notlike "*.zip" } |
@@ -259,12 +439,42 @@ try {
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
       if ($Installer) {
-        Get-ChildItem $DownloadDir -File -Filter "ruijing-*-windows-x86_64-setup.exe" |
+        Get-ChildItem $DownloadDir -File -Filter "dolphin-ai-*-windows-x86_64-setup.exe" |
           Remove-Item -Force
-        $NamedInstaller = Join-Path $DownloadDir "ruijing-$PackageVersion-windows-x86_64-setup.exe"
+        $NamedInstaller = Join-Path $DownloadDir "dolphin-ai-$PackageVersion-windows-x86_64-setup.exe"
         Copy-Item $Installer.FullName $NamedInstaller -Force
         Write-Host ""
         Write-Host "Download-ready installer: $NamedInstaller"
+        $InstallerSignatures = Get-ChildItem $BundleRoot -Recurse -File -Filter "*.sig" |
+          Where-Object { $_.Name -match "\.exe\.sig$" -or $_.Name -match "\.nsis\.zip\.sig$" }
+        foreach ($InstallerSignature in $InstallerSignatures) {
+          $SignatureName = if ($InstallerSignature.Name -match "\.nsis\.zip\.sig$") {
+            "dolphin-ai-$PackageVersion-windows-x86_64-updater.nsis.zip.sig"
+          } else {
+            "dolphin-ai-$PackageVersion-windows-x86_64-setup.exe.sig"
+          }
+          Copy-Item $InstallerSignature.FullName (Join-Path $DownloadDir $SignatureName) -Force
+        }
+        $UpdaterPayload = Get-ChildItem $BundleRoot -Recurse -File -Filter "*.nsis.zip" |
+          Sort-Object LastWriteTime -Descending |
+          Select-Object -First 1
+        if ($UpdaterPayload) {
+          Copy-Item $UpdaterPayload.FullName (Join-Path $DownloadDir "dolphin-ai-$PackageVersion-windows-x86_64-updater.nsis.zip") -Force
+        }
+        if ($UpdaterArtifactsEnabled -and -not $InstallerSignatures) {
+          throw "Missing Tauri updater signature for Windows package version $PackageVersion."
+        }
+        $BrandGateArgs = @(
+          (Join-Path $Root "scripts\verify-desktop-release-brand.mjs"),
+          "--root", $DownloadDir,
+          "--version", $PackageVersion,
+          "--platform", "windows"
+        )
+        if ($UpdaterArtifactsEnabled) {
+          $BrandGateArgs += "--require-updater"
+        }
+        & node @BrandGateArgs
+        Assert-NativeSuccess "Windows release brand verification" $LASTEXITCODE
       } elseif ($Bundle -in "nsis", "all") {
         throw "Missing NSIS installer for package version $PackageVersion under $BundleRoot"
       }
@@ -273,9 +483,9 @@ try {
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
       if ($Msi) {
-        Get-ChildItem $DownloadDir -File -Filter "ruijing-*-windows-x86_64.msi" |
+        Get-ChildItem $DownloadDir -File -Filter "dolphin-ai-*-windows-x86_64.msi" |
           Remove-Item -Force
-        $NamedMsi = Join-Path $DownloadDir "ruijing-$PackageVersion-windows-x86_64.msi"
+        $NamedMsi = Join-Path $DownloadDir "dolphin-ai-$PackageVersion-windows-x86_64.msi"
         Copy-Item $Msi.FullName $NamedMsi -Force
         Write-Host "Download-ready MSI: $NamedMsi"
       } elseif ($Bundle -in "msi", "all") {

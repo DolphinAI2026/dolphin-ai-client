@@ -1,3 +1,5 @@
+<!-- @deprecated Default settings no longer open this mixed maintenance page.
+     It remains only for old bookmarks and explicit /platform-envs access. -->
 <template>
   <BuilderFrame :breadcrumbs="[{ label: '设置' }, { label: activeTabLabel }]">
     <template #actions>
@@ -22,6 +24,13 @@
           </button>
           <span>{{ tabSummary }}</span>
         </div>
+      </div>
+      <div v-else class="scope-banner">
+        <div>
+          <strong>{{ activeTab === 'llm' ? '模型配置' : 'aPaaS 平台环境' }}</strong>
+          <span>{{ activeTab === 'llm' ? '维护当前远程 Builder 租户可用的模型连接。' : '维护当前组织使用的 aPaaS 平台地址、租户和认证。' }}</span>
+        </div>
+        <button type="button" @click="router.push('/settings')">返回设置</button>
       </div>
 
       <!-- ==================== Tab 1: 平台环境 ==================== -->
@@ -774,13 +783,14 @@ const tabSummary = computed(() => {
 // ==================== Lifecycle ====================
 
 onMounted(() => {
-  loadEnvs()
+  if (activeTab.value === 'envs') loadEnvs()
   if (activeTab.value === 'llm') loadLlmConfigs()
 })
 
 watch(
   () => route.query.tab,
   value => {
+    if (props.only) return
     const next = normalizeTab(value)
     activeTab.value = next
     if (next === 'llm') loadLlmConfigs()
@@ -825,6 +835,35 @@ watch(
   gap: 16px;
   background: transparent;
 }
+
+.scope-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: min(1180px, 100%);
+  margin: 0 auto;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--brand);
+  border-radius: var(--r-2, 6px);
+  background: var(--surface-2);
+  box-sizing: border-box;
+}
+.scope-banner strong,
+.scope-banner span { display: block; }
+.scope-banner strong { color: var(--text); font-size: 13px; line-height: 18px; }
+.scope-banner span { margin-top: 2px; color: var(--text-3); font-size: 12px; line-height: 17px; }
+.scope-banner button {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.scope-banner button:hover { border-color: var(--brand-ring); color: var(--brand); }
 
 /* ── Topbar primary button (forwarded via BuilderFrame #actions slot) ── */
 .new-btn {

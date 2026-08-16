@@ -57,6 +57,19 @@ def sqlite_database_url(database_path: Path) -> str:
     return f"sqlite+aiosqlite:///{path}"
 
 
+def control_plane_code_url(login_base_url: str) -> str:
+    """Derive the remote Code Control Plane from the desktop login service.
+
+    The desktop sidecar must not fall back to a developer-local coordinator. A
+    separately configured Code URL can still
+    be supplied by the Tauri launcher; this helper covers the web/sidecar path.
+    """
+    base = str(login_base_url or "").strip().rstrip("/")
+    if not base:
+        return ""
+    return base if base.endswith("/control-plane") else f"{base}/control-plane"
+
+
 def build_env(
     data_dir: Path,
     port: int,
@@ -79,7 +92,7 @@ def build_env(
         "HOST": "127.0.0.1",
         "PORT": str(port),
         # data_dir 的真相源：Tauri 经 --data-dir 传入(app_data_dir, 各平台不同)。
-        # 显式导出, 让 skills_root() 等下游不必各自猜路径(避免误用 ~/.ruijing-builder 兜底)。
+        # 显式导出, 让 skills_root() 等下游不必各自猜路径。
         "SIDECAR_DATA_DIR": str(data_dir),
         # Windows canonicalize 会产生 \\?\ 设备路径；SQLite URL 必须先转回普通路径，
         # 否则问号会被 URL 解析器当成查询分隔符并截断数据库文件名。
@@ -91,6 +104,13 @@ def build_env(
         "AUTH_PROVIDER": login_mode,
         "DOLPHIN_WORKSPACE_BASE_URL": (
             login_base_url if login_mode == "control_plane" else ""
+        ),
+        # Keep Code's remote coordinator aligned with the selected login
+        # service.  Empty in standalone aPaaS mode, which has no Code plane.
+        "DOLPHIN_CODE_CONTROL_PLANE_URL": (
+            control_plane_code_url(login_base_url)
+            if login_mode == "control_plane"
+            else ""
         ),
         "APAAS_BASE_URL": login_base_url if login_mode == "apaas" else "",
         "PUBLIC_ACCOUNT_BASE_URL": "",
@@ -124,7 +144,7 @@ def _sync_preset_skills(data_dir: Path) -> None:
 def run_script(path: str) -> int:
     """用本进程(冻结二进制即自带解释器+已打包依赖)执行一个 .py 文件。
 
-    供 run_python 在桌面态调用: ruijing-sidecar --run-script <file>。
+    供 run_python 在桌面态调用: dolphin-ai-sidecar --run-script <file>。
     不起 uvicorn、不建 DB。stdout/stderr 继承父进程(由调用方 subprocess 捕获)。
     """
     try:
@@ -159,7 +179,7 @@ def main() -> None:
     if args.run_script:
         sys.exit(run_script(args.run_script))
 
-    data_dir = Path(args.data_dir) if args.data_dir else (Path.home() / ".ruijing-builder")
+    data_dir = Path(args.data_dir) if args.data_dir else (Path.home() / "DolphinAI" / ".appdata")
 
     # 注入本地基础设施 env (必须早于任何 app.* import)。
     # 注意: aPaaS/LLM 等"用户配置"不走这里 — 它们由用户在应用内 UI 配置,

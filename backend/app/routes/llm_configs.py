@@ -1,6 +1,7 @@
 """LLM 模型配置管理 — 管理员可通过前台配置接入的大模型"""
 from __future__ import annotations
 import logging
+from types import SimpleNamespace
 from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -9,9 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import httpx
 
 from app.database import get_db
+from app.code_runtime.control_plane_models import list_control_plane_model_options
 from app.deps import (
     AuthContext,
     get_auth_context,
+    is_control_plane_context,
     require_tenant_admin,
     resolve_effective_tenant_id,
 )
@@ -22,6 +25,17 @@ from app.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/llm-configs", tags=["llm-configs"])
+
+
+def _reject_control_plane_model_management(ctx: AuthContext) -> None:
+    if is_control_plane_context(ctx):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "CONTROL_PLANE_REMOTE_MANAGEMENT_REQUIRED",
+                "message": "Control Plane 模型由远程管理控制台维护，本地 Builder 不提供编辑",
+            },
+        )
 
 # ── Provider presets ──
 PROVIDER_PRESETS = {
@@ -200,6 +214,7 @@ async def list_llm_configs(
 
     租户管理员强制只列自己租户;平台管理员可用 ?tenant_id= 指定,缺省取 effective_tenant。
     """
+    _reject_control_plane_model_management(ctx)
     # 直接调用(测试)时 Query 默认值会是 Query 对象而非 None,只认真正的 int。
     explicit_tenant_id = tenant_id if isinstance(tenant_id, int) else None
     if _is_platform_admin(ctx) and explicit_tenant_id is not None:
@@ -225,17 +240,22 @@ async def list_llm_config_options(
 
     本租户有配就列本租户;本租户没配则回落全平台共享(picker 才不至于空)。
     """
-    account_source = str(getattr(ctx.user, "account_source", "") or "").strip().lower()
-    control_plane_tenant_id = str(
-        getattr(ctx, "control_plane_tenant_id", "") or ""
-    ).strip()
-    local_tenant_id = getattr(ctx, "tenant_id", 0)
-    if (
-        account_source == "control_plane"
-        and control_plane_tenant_id
-        and not (isinstance(local_tenant_id, int) and local_tenant_id > 0)
-    ):
-        return []
+    if is_control_plane_context(ctx):
+        from app.routes.code_runtime import _control_plane_request_auth
+
+        authorization, _auth_provider = await _control_plane_request_auth(
+            SimpleNamespace(headers={}),
+            ctx,
+            db,
+        )
+        if not authorization:
+            raise HTTPException(status_code=401, detail="Control Plane 登录已失效，请重新登录")
+        options = await list_control_plane_model_options(
+            purpose=purpose,
+            authorization_header=authorization,
+            delegated_context=ctx,
+        )
+        return [LLMConfigOptionResponse(**option) for option in options]
 
     tenant_id = await resolve_effective_tenant_id(db, ctx)
     rows = await list_llm_configs_for_purpose(db, tenant_id, purpose)
@@ -250,6 +270,7 @@ async def fetch_llm_models(
     ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
 ):
     """使用管理员填写的 API Key 从模型服务拉取可用模型(租户管理员)。"""
+    _reject_control_plane_model_management(ctx)
     if not req.api_key.strip():
         raise HTTPException(status_code=400, detail="请先填写 API Key，再拉取模型")
     if not req.base_url.strip():
@@ -308,6 +329,7 @@ async def create_llm_config(
     存储 tenant_id = 调用者的 effective_tenant;平台管理员可在 body 带 tenant_id 覆写,
     租户管理员强制落到自己租户(忽略 body.tenant_id)。
     """
+    _reject_control_plane_model_management(ctx)
     if _is_platform_admin(ctx) and req.tenant_id is not None:
         storage_tenant_id = await _assert_target_tenant(db, req.tenant_id)
     else:
@@ -341,6 +363,7 @@ async def update_llm_config(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """编辑 LLM 配置(租户管理员;只能改本租户)"""
+    _reject_control_plane_model_management(ctx)
     result = await db.execute(
         select(LLMConfig).where(LLMConfig.id == config_id)
     )
@@ -393,6 +416,7 @@ async def delete_llm_config(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """删除 LLM 配置(租户管理员;只能删本租户)"""
+    _reject_control_plane_model_management(ctx)
     result = await db.execute(
         select(LLMConfig).where(LLMConfig.id == config_id)
     )
@@ -413,6 +437,7 @@ async def test_llm_config(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """测试 LLM 配置连接(租户管理员;只能测本租户)"""
+    _reject_control_plane_model_management(ctx)
     result = await db.execute(
         select(LLMConfig).where(LLMConfig.id == config_id)
     )
@@ -508,6 +533,7 @@ async def set_default_llm_config(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """设为本租户默认 LLM 配置(租户管理员;只能设本租户)"""
+    _reject_control_plane_model_management(ctx)
     result = await db.execute(
         select(LLMConfig).where(LLMConfig.id == config_id)
     )
@@ -533,6 +559,7 @@ async def update_llm_config_status(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """启用/禁用模型配置(租户管理员;只能改本租户)。"""
+    _reject_control_plane_model_management(ctx)
     if req.status not in {"active", "inactive"}:
         raise HTTPException(status_code=400, detail="状态只支持 active 或 inactive")
 

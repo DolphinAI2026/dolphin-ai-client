@@ -13,7 +13,7 @@
     "core:default",
     {
       "identifier": "shell:allow-spawn",
-      "allow": [{ "name": "binaries/ruijing-sidecar", "sidecar": true, "args": true }]
+      "allow": [{ "name": "binaries/dolphin-ai-sidecar", "sidecar": true, "args": true }]
     },
     "shell:allow-open",
     "dialog:allow-open",

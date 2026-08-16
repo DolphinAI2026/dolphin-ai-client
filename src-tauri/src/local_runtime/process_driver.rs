@@ -1,5 +1,6 @@
 use super::contract::{LocalRuntimeError, LocalRuntimeErrorCode, ProcessIdentity, StartRequest};
 use super::manager::{read_sandbox_token, RuntimeDriver};
+use super::process_logs::{configure_runtime_logs, inspect_runtime_exit};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -220,6 +221,7 @@ impl RuntimeDriver for LocalProcessRuntimeDriver {
             cfg!(target_os = "windows"),
             apply_windows_creation_flags,
         );
+        configure_runtime_logs(&mut command, &request.runtime_dir)?;
         let mut child = command.spawn().map_err(|error| {
             LocalRuntimeError::new(
                 LocalRuntimeErrorCode::SpawnFailed,
@@ -320,7 +322,26 @@ impl RuntimeDriver for LocalProcessRuntimeDriver {
             ));
         }
         let token = read_sandbox_token(request)?;
-        wait_ready_with_token(&request.runtime_addr, &token, READINESS_TIMEOUT)
+        wait_ready_with_token_and_inspection(
+            &request.runtime_addr,
+            &token,
+            READINESS_TIMEOUT,
+            || {
+                let mut processes = self.processes.lock().map_err(|_| {
+                    LocalRuntimeError::new(
+                        LocalRuntimeErrorCode::ProbeFailed,
+                        "local runtime registry lock is poisoned",
+                    )
+                })?;
+                let process = processes.get_mut(&pid).ok_or_else(|| {
+                    LocalRuntimeError::new(
+                        LocalRuntimeErrorCode::ProbeFailed,
+                        "local runtime process is not retained",
+                    )
+                })?;
+                inspect_runtime_exit(&mut process.child, &request.runtime_dir)
+            },
+        )
     }
 
     fn stop(&self, pid: u32) -> Result<(), LocalRuntimeError> {
@@ -1094,11 +1115,24 @@ fn wait_for_spawned_process_identity(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn wait_ready_with_token(
     runtime_addr: &str,
     token: &str,
     timeout: Duration,
 ) -> Result<(), LocalRuntimeError> {
+    wait_ready_with_token_and_inspection(runtime_addr, token, timeout, || Ok(()))
+}
+
+fn wait_ready_with_token_and_inspection<Inspect>(
+    runtime_addr: &str,
+    token: &str,
+    timeout: Duration,
+    mut inspect: Inspect,
+) -> Result<(), LocalRuntimeError>
+where
+    Inspect: FnMut() -> Result<(), LocalRuntimeError>,
+{
     let url = format!("http://{runtime_addr}/api/status");
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(1))
@@ -1107,6 +1141,7 @@ pub(crate) fn wait_ready_with_token(
     let authorization = format!("Bearer {token}");
     let deadline = Instant::now() + timeout;
     loop {
+        inspect()?;
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             break;
@@ -1273,9 +1308,15 @@ where
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = host_environment;
+        let host_path = host_environment.into_iter().find_map(|(key, value)| {
+            (key == "PATH" && !value.trim().is_empty() && !value.contains('\0')).then_some(value)
+        });
         let mut environment = environment;
         environment.extend([
+            (
+                "PATH".to_string(),
+                host_path.unwrap_or_else(unix_runtime_path),
+            ),
             ("HOME".to_string(), request.codex_home.display().to_string()),
             (
                 "USERPROFILE".to_string(),
@@ -1288,6 +1329,15 @@ where
             ("TMP".to_string(), request.runtime_dir.display().to_string()),
         ]);
         Ok(environment)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn unix_runtime_path() -> String {
+    if cfg!(target_os = "macos") {
+        "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin".to_string()
+    } else {
+        "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string()
     }
 }
 
@@ -1801,6 +1851,26 @@ mod tests {
             Some("nonce-a".into())
         );
         assert_eq!(value(&environment, "HTTPS_PROXY"), None);
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(value(&environment, "PATH"), Some(unix_runtime_path()));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn process_environment_preserves_host_path_for_git_and_tooling() {
+        let mut request = request();
+        request.environment.clear();
+        let environment = runtime_environment(
+            &request,
+            "nonce-a",
+            vec![("PATH".into(), "/custom/bin:/usr/bin".into())],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value(&environment, "PATH"),
+            Some("/custom/bin:/usr/bin".into())
+        );
     }
 
     #[test]

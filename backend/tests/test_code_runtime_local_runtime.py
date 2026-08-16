@@ -34,6 +34,16 @@ from app.code_runtime.local_runtime import (
     resolve_registered_workspace,
 )
 
+try:
+    import fcntl as test_fcntl
+except ImportError:
+    test_fcntl = None
+
+try:
+    import msvcrt as test_msvcrt
+except ImportError:
+    test_msvcrt = None
+
 
 @pytest_asyncio.fixture
 async def db():
@@ -242,6 +252,108 @@ async def test_default_manager_client_allows_long_runtime_start_reads():
         assert http_client.timeout.pool == 10
     finally:
         await http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_manager_read_timeout_is_not_reported_as_manager_unavailable():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("manager start timed out", request=request)
+
+    client = LocalRuntimeClient(
+        "http://127.0.0.1:9988",
+        "manager-secret",
+        http_client_factory=lambda: httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await client._manager_request(
+            "POST",
+            "/v1/local-runtime/instances/start",
+            payload={},
+        )
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == (
+        "LOCAL_RUNTIME_MANAGER_TIMEOUT: 本地 Runtime manager 启动请求超时"
+    )
+
+
+@pytest.mark.asyncio
+async def test_sidecar_does_not_hold_the_manager_runtime_lock_during_start(
+    db,
+    ctx,
+    git_repo,
+    engineering_session,
+    tmp_path,
+    monkeypatch,
+):
+    workspace = await _create_workspace(db, git_repo)
+    code_session = await _create_code_session(db, workspace_id=workspace.ws_id)
+    manager_lock_results: list[bool] = []
+
+    def manager_can_acquire_lock(lock_path: Path) -> bool:
+        with lock_path.open("a+b") as lock_file:
+            if test_fcntl is not None:
+                try:
+                    test_fcntl.flock(
+                        lock_file.fileno(),
+                        test_fcntl.LOCK_EX | test_fcntl.LOCK_NB,
+                    )
+                except BlockingIOError:
+                    return False
+                test_fcntl.flock(
+                    lock_file.fileno(),
+                    test_fcntl.LOCK_UN,
+                )
+                return True
+            if test_msvcrt is not None:
+                lock_file.seek(0, os.SEEK_END)
+                if lock_file.tell() == 0:
+                    lock_file.write(b"\0")
+                    lock_file.flush()
+                lock_file.seek(0)
+                try:
+                    test_msvcrt.locking(
+                        lock_file.fileno(),
+                        test_msvcrt.LK_NBLCK,
+                        1,
+                    )
+                except OSError:
+                    return False
+                lock_file.seek(0)
+                test_msvcrt.locking(
+                    lock_file.fileno(),
+                    test_msvcrt.LK_UNLCK,
+                    1,
+                )
+                return True
+        raise AssertionError("platform has no supported file locking implementation")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(404)
+        payload = json.loads(request.content)
+        runtime_dir = Path(str(payload["runtime_dir"]))
+        manager_lock_results.append(
+            manager_can_acquire_lock(runtime_dir.parents[1] / "runtime.lock")
+        )
+        return httpx.Response(200, json=_manager_status_for_start(request))
+
+    client, _service = _client(
+        tmp_path,
+        engineering_session,
+        httpx.MockTransport(handler),
+    )
+    monkeypatch.setattr(
+        "app.code_runtime.local_runtime._allocate_loopback_address",
+        lambda: "127.0.0.1:19090",
+    )
+
+    await client.open_application(db, code_session, ctx)
+
+    assert manager_lock_results == [True]
 
 
 async def _runtime_case(
@@ -964,22 +1076,13 @@ async def test_open_reuses_active_application_instance_across_conversations(
     runtime_dir.mkdir(parents=True)
     context_path = runtime_dir / "runtime-context.json"
     context_path.write_bytes(b'{"conversationId":"original"}\n')
+    provider_document, _provider_identity = await local_runtime_module._provider_document(
+        db,
+        ctx,
+        None,
+    )
     (runtime_dir / "model-provider.json").write_text(
-        json.dumps(
-            {
-                "defaultProviderId": "local.test",
-                "providers": [
-                    {
-                        "providerId": "local.test",
-                        "providerType": "openai-compatible",
-                        "apiBaseUrl": "https://models.example.invalid/v1",
-                        "token": "unit-test-model-token",
-                        "defaultModel": "gpt-local-test",
-                        "models": [{"id": "gpt-local-test", "displayName": "gpt-local-test"}],
-                    }
-                ],
-            }
-        ),
+        json.dumps(provider_document),
         encoding="utf-8",
     )
     token_path = runtime_dir / "sandbox-token"
@@ -1237,7 +1340,7 @@ async def test_open_starts_missing_instance_with_runtime_context_path_and_enviro
         "APAAS_RUNTIME_WORKSPACE_PATH": start_payload["runtime_dir"],
         "APAAS_CODEX_HOME": start_payload["codex_home"],
         "APAAS_RUNTIME_ADDR": "127.0.0.1:19090",
-        "APAAS_AUTH_MODE": "token",
+        "APAAS_AUTH_MODE": "disabled_local",
         "APAAS_SANDBOX_TOKEN_PATH": str(
             Path(str(start_payload["runtime_dir"])) / "sandbox-token"
         ),
@@ -1442,23 +1545,13 @@ async def test_reused_runtime_without_entry_token_returns_503(
         / "local-instance-1"
     )
     runtime_dir.mkdir(parents=True)
+    provider_document, _provider_identity = await local_runtime_module._provider_document(
+        db,
+        ctx,
+        None,
+    )
     (runtime_dir / "model-provider.json").write_text(
-        json.dumps(
-            {
-                "defaultProviderId": "local.test",
-                "providers": [
-                    {
-                        "providerId": "local.test",
-                        "providerType": "openai-compatible",
-                        "runtimeProviderKind": "openai",
-                        "apiBaseUrl": "https://models.example.invalid/v1",
-                        "token": "unit-test-model-token",
-                        "defaultModel": "gpt-local-test",
-                        "models": [{"id": "gpt-local-test", "displayName": "gpt-local-test"}],
-                    }
-                ],
-            }
-        ),
+        json.dumps(provider_document),
         encoding="utf-8",
     )
     client, _service = _client(

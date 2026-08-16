@@ -1,3 +1,5 @@
+<!-- @deprecated Desktop remote skill maintenance is owned by Control Plane.
+     This route remains for Web mode and legacy bookmarks. -->
 <template>
   <BuilderFrame :breadcrumbs="[{ label: '技能库' }]">
     <template #actions>
