@@ -155,10 +155,10 @@ Run Node helper self-tests, JSON/YAML parse, and shell/PowerShell syntax checks.
 
 Confirm dry-run defaults to no publication, source workflow has read-only permissions, public repository references are consistent, and all required assets are in the allowlist.
 
-- [ ] **Step 3: Commit and push the owned configuration changes**
+- [x] **Step 3: Commit and push the owned configuration changes**
 
 Commit only release-channel files from this worktree. Synchronize safely with the source repository default branch through the approved Git workflow; do not force push, publish a tag, or create a release.
 
-- [ ] **Step 4: Report usable release entry points**
+- [x] **Step 4: Report usable release entry points**
 
 Return the private source repository and public release repository URLs, the desktop private-key backup directory, the exact dry-run dispatch inputs, and the fact that no production package was published.
