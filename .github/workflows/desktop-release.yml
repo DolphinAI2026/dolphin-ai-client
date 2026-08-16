@@ -424,6 +424,7 @@ jobs:
         shell: bash
         env:
           DOLPHIN_RELEASE_BUILD: '1'
+          DOLPHIN_TAURI_VERBOSE: '1'
           APPIMAGE_EXTRACT_AND_RUN: '1'
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
