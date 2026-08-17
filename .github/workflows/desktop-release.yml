@@ -403,6 +403,47 @@ jobs:
           RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
         run: node -e 'const fs=require("node:fs"); const version=process.env.RELEASE_VERSION; if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error("RELEASE_VERSION must be X.Y.Z"); const file="src-tauri/tauri.conf.json"; const config=JSON.parse(fs.readFileSync(file)); config.version=version; fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);'
 
+      - name: Warm Tauri linuxdeploy tool cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools_dir="${HOME}/.cache/tauri"
+          mkdir -p "${tools_dir}"
+
+          # tauri-bundler checks for these filenames under its local tools
+          # directory and skips the raw.githubusercontent.com download when
+          # they already exist. jsDelivr is used here to avoid GitHub 429
+          # rate limiting while keeping the scripts identical to upstream.
+          fetch_required() {
+            local url="$1" file="$2"
+            curl --fail --silent --show-error --location \
+              --retry 8 --retry-delay 3 --retry-all-errors \
+              "${url}" -o "${tools_dir}/${file}"
+            chmod +x "${tools_dir}/${file}"
+            test -s "${tools_dir}/${file}"
+          }
+
+          fetch_required \
+            'https://cdn.jsdelivr.net/gh/tauri-apps/linuxdeploy-plugin-gtk@master/linuxdeploy-plugin-gtk.sh' \
+            'linuxdeploy-plugin-gtk.sh'
+          fetch_required \
+            'https://cdn.jsdelivr.net/gh/tauri-apps/linuxdeploy-plugin-gstreamer@master/linuxdeploy-plugin-gstreamer.sh' \
+            'linuxdeploy-plugin-gstreamer.sh'
+
+          # The remaining release assets are also hard dependencies for the
+          # bundler or the post-bundle AppDir repack below, so warm them too.
+          fetch_required \
+            'https://github.com/tauri-apps/binary-releases/releases/download/apprun-old/AppRun-x86_64' \
+            'AppRun-x86_64'
+          fetch_required \
+            'https://github.com/tauri-apps/binary-releases/releases/download/linuxdeploy/linuxdeploy-x86_64.AppImage' \
+            'linuxdeploy-x86_64.AppImage'
+          fetch_required \
+            'https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage' \
+            'linuxdeploy-plugin-appimage.AppImage'
+
+          ls -l "${tools_dir}"
+
       - name: Build signed Linux Release artifacts
         shell: bash
         env:
