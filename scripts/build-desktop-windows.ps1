@@ -88,10 +88,11 @@ function Write-Utf8NoBom($Path, $Content) {
 }
 
 function Get-PythonCommand {
-  $py = Get-Command py -ErrorAction SilentlyContinue
-  if ($py) { return @("py", "-3") }
+  # Prefer python from PATH (set by actions/setup-python) over py -3 which may pick system Python 3.14
   $python = Get-Command python -ErrorAction SilentlyContinue
   if ($python) { return @("python") }
+  $py = Get-Command py -ErrorAction SilentlyContinue
+  if ($py) { return @("py", "-3") }
   throw "Python 3 is required."
 }
 
