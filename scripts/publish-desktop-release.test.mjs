@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   expectedAssetNames,
   parseReleaseMetadata,
+  retryTransientUpload,
   validateCandidateVersion,
   validateExistingRelease,
   validateReleaseAssets,
@@ -62,4 +63,20 @@ test('release metadata round-trips only the published source fields', () => {
     updater_public_key_fingerprint: 'test',
     built_at: '2026-08-16T00:00:00.000Z',
   });
+});
+
+test('transient GitHub upload connection failures are retried', async () => {
+  let attempts = 0;
+  const result = await retryTransientUpload(async () => {
+    attempts += 1;
+    if (attempts < 3) {
+      const error = new Error('error connecting to api.uploads.github.com');
+      error.stderr = 'error connecting to api.uploads.github.com';
+      throw error;
+    }
+    return 'uploaded';
+  }, { delays: [0, 0] });
+
+  assert.equal(result, 'uploaded');
+  assert.equal(attempts, 3);
 });

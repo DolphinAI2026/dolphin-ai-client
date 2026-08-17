@@ -10,6 +10,8 @@ const execFile = promisify(execFileCallback);
 const releaseVersionPattern = /^\d+\.\d+\.\d+$/;
 const metadataMarker = 'dolphin-ai-release-metadata:';
 const publicRepositoryFiles = new Set(['README.md', '.gitignore']);
+const uploadRetryDelays = [2_000, 5_000, 10_000];
+const transientUploadFailurePattern = /error connecting to api\.uploads\.github\.com|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up|network is unreachable|status 5\d\d|HTTP 5\d\d|status 429|rate limit/i;
 
 function requireVersion(version, label = 'Version') {
   if (!releaseVersionPattern.test(version ?? '')) throw new Error(`${label} must be X.Y.Z SemVer: ${version ?? ''}`);
@@ -185,12 +187,33 @@ async function removeExpectedDraftAssets({ repository, release }) {
   }
 }
 
+function isTransientUploadFailure(error) {
+  return transientUploadFailurePattern.test([
+    error?.message,
+    error?.stderr,
+    error?.stdout,
+  ].filter(Boolean).join('\n'));
+}
+
+export async function retryTransientUpload(operation, { delays = uploadRetryDelays } = {}) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      const delay = delays[attempt];
+      if (!isTransientUploadFailure(error) || delay === undefined) throw error;
+      console.warn(`GitHub Release upload connection failed; retrying in ${delay / 1_000}s (${attempt + 1}/${delays.length}).`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
 async function uploadReleaseAsset({ repository, releaseId, name, file }) {
-  await runGh([
+  await retryTransientUpload(() => runGh([
     'api', '--method', 'POST', '--hostname', 'uploads.github.com',
     `repos/${repository}/releases/${releaseId}/assets?name=${encodeURIComponent(name)}`,
     '-H', 'Content-Type: application/octet-stream', '--input', file,
-  ], { parseJson: false });
+  ], { parseJson: false }));
 }
 
 async function getLatestRelease(repository) {
