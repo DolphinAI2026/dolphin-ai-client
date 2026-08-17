@@ -103,6 +103,7 @@ a = Analysis(
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
+    hookspath=[BACKEND],
     excludes=excludes,
     noarchive=False,
 )
