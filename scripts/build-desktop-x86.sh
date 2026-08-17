@@ -111,7 +111,7 @@ echo "==> 1/4 前端桌面构建 (base=/)"
 echo ""
 echo "==> 2/4 PyInstaller x86_64 sidecar (Rosetta)"
 cd "$ROOT/backend"
-arch -x86_64 "$PYX86VENV" -m PyInstaller dolphin-ai-sidecar.spec --clean --noconfirm --hidden-import form_component_editor_impl \
+arch -x86_64 "$PYX86VENV" -m PyInstaller dolphin-ai-sidecar.spec --clean --noconfirm \
     --distpath dist-x86 --workpath build-x86
 arch -x86_64 "$PYX86VENV" "$ROOT/scripts/verify-desktop-sidecar.py" \
     --sidecar "$ROOT/backend/dist-x86/dolphin-ai-sidecar"

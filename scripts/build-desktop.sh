@@ -291,7 +291,7 @@ fi
 .venv/bin/python -m PyInstaller --version >/dev/null 2>&1 || .venv/bin/pip install "pyinstaller>=6.6"
 # 预置 skill (backend/desktop/preset-skills) 经 dolphin-ai-sidecar.spec 的 datas 收进包,
 # 首启由 build_env._sync_preset_skills 覆盖式同步进 data_dir/skills/platform/。
-.venv/bin/python -m PyInstaller dolphin-ai-sidecar.spec --clean --noconfirm --hidden-import form_component_editor_impl
+.venv/bin/python -m PyInstaller dolphin-ai-sidecar.spec --clean --noconfirm
 "$ROOT/backend/.venv/bin/python" "$ROOT/scripts/verify-desktop-sidecar.py" \
     --sidecar "$ROOT/backend/dist/dolphin-ai-sidecar"
 

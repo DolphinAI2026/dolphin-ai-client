@@ -257,7 +257,7 @@ try {
         & $VenvPython -m PyInstaller --version | Out-Null
         Assert-NativeSuccess "PyInstaller availability check" $LASTEXITCODE
       }
-      & $VenvPython -m PyInstaller dolphin-ai-sidecar.spec --clean --noconfirm --hidden-import form_component_editor_impl
+      & $VenvPython -m PyInstaller dolphin-ai-sidecar.spec --clean --noconfirm
       Assert-NativeSuccess "PyInstaller sidecar build" $LASTEXITCODE
     } finally {
       Pop-Location
