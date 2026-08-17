@@ -113,6 +113,8 @@ echo "==> 2/4 PyInstaller x86_64 sidecar (Rosetta)"
 cd "$ROOT/backend"
 arch -x86_64 "$PYX86VENV" -m PyInstaller dolphin-ai-sidecar.spec --clean --noconfirm \
     --distpath dist-x86 --workpath build-x86
+arch -x86_64 "$PYX86VENV" "$ROOT/scripts/verify-desktop-sidecar.py" \
+    --sidecar "$ROOT/backend/dist-x86/dolphin-ai-sidecar"
 
 echo ""
 echo "==> 3/4 放置 x86 sidecar 二进制 (triple=$TARGET)"

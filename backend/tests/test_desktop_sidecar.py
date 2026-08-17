@@ -1,14 +1,45 @@
 import os
+import importlib.util
 from pathlib import Path, PureWindowsPath
 
 import desktop_sidecar as ds
 import desktop_sidecar
 
 
+def _load_sidecar_smoke_checker():
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "verify-desktop-sidecar.py"
+    spec = importlib.util.spec_from_file_location("verify_desktop_sidecar", script_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_sidecar_smoke_checker_preserves_executable_symlinks(tmp_path):
+    target = tmp_path / "sidecar-target"
+    target.write_text("sidecar", encoding="utf-8")
+    executable = tmp_path / "sidecar"
+    executable.symlink_to(target)
+
+    assert _load_sidecar_smoke_checker().sidecar_path(executable) == executable
+
+
 def test_sidecar_freeze_includes_workspace_form_component_editor():
     spec_path = Path(__file__).resolve().parents[1] / "dolphin-ai-sidecar.spec"
 
     assert '"app.coding.form_component_editor"' in spec_path.read_text(encoding="utf-8")
+
+
+def test_desktop_builds_run_the_sidecar_startup_smoke_check():
+    root = Path(__file__).resolve().parents[2]
+
+    for script_name in (
+        "build-desktop.sh",
+        "build-desktop-x86.sh",
+        "build-desktop-windows.ps1",
+    ):
+        script = (root / "scripts" / script_name).read_text(encoding="utf-8")
+        assert "verify-desktop-sidecar.py" in script
 
 
 def test_sqlite_database_url_removes_windows_verbatim_prefix():

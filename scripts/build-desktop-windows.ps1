@@ -276,6 +276,13 @@ try {
     Get-Item $Dest | Format-List FullName,Length,LastWriteTime
   }
 
+  Invoke-Step "Verify packaged sidecar startup" {
+    $VenvPython = Join-Path $Backend ".venv\Scripts\python.exe"
+    $Sidecar = Join-Path $Backend "dist\dolphin-ai-sidecar.exe"
+    & $VenvPython (Join-Path $Root "scripts\verify-desktop-sidecar.py") --sidecar $Sidecar
+    Assert-NativeSuccess "Desktop sidecar startup smoke check" $LASTEXITCODE
+  }
+
   Invoke-Step "6/6 Build Tauri Windows package" {
     Push-Location $Root
     try {
