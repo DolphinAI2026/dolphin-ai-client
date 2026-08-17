@@ -257,6 +257,11 @@ try {
         & $VenvPython -m PyInstaller --version | Out-Null
         Assert-NativeSuccess "PyInstaller availability check" $LASTEXITCODE
       }
+      # 注入构建期 env 防 collect_submodules("app") 触发 Settings() 校验失败
+      [Environment]::SetEnvironmentVariable("JWT_SECRET_KEY", "pyinstaller-build-placeholder", "Process")
+      [Environment]::SetEnvironmentVariable("ENCRYPTION_KEY", "pyinstaller-placeholder-key", "Process")
+      [Environment]::SetEnvironmentVariable("DATABASE_URL", "sqlite+aiosqlite:///:memory:", "Process")
+      [Environment]::SetEnvironmentVariable("ALLOW_DEFAULT_ENCRYPTION_KEY", "1", "Process")
       & $VenvPython -m PyInstaller dolphin-ai-sidecar.spec --clean --noconfirm
       Assert-NativeSuccess "PyInstaller sidecar build" $LASTEXITCODE
     } finally {

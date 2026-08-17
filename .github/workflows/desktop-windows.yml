@@ -20,6 +20,7 @@ env:
   SUPERPOWERS_REPO_URL: https://github.com/obra/superpowers.git
   SUPERPOWERS_REVISION: 44c9b2d6e889982ac18c27d05a19fefe335194e1
   CODEX_VERSION: 0.147.0
+  DOLPHIN_PYTHON_MIRROR_BASE_URL: https://mirror.ghproxy.com/https://github.com
 
 jobs:
   portable-debug:

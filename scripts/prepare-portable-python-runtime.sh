@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Download and validate a fixed python-build-standalone runtime for an appliance.
+# Set DOLPHIN_PYTHON_MIRROR_BASE_URL to prepend a mirror, e.g.:
+#   https://ghproxy.com/https://github.com
+#   https://mirror.ghproxy.com/https://github.com
 set -euo pipefail
 
 archive=''
@@ -10,7 +13,16 @@ fail() {
 }
 
 usage() {
-  printf 'Usage: %s --platform macos-aarch64|linux-x86_64 --destination DIRECTORY\n' "${0##*/}" >&2
+  printf 'Usage: %s --platform macos-aarch64|linux-x86_64 --destination DIRECTORY [--mirror-base-url URL]\n' "${0##*/}" >&2
+}
+
+apply_mirror() {
+  local url="$1"
+  if [ -n "${MIRROR_BASE_URL:-}" ]; then
+    printf '%s' "${url/#https:\/\/github.com/${MIRROR_BASE_URL}}"
+  else
+    printf '%s' "${url}"
+  fi
 }
 
 select_platform() {
@@ -25,6 +37,7 @@ select_platform() {
       ;;
     *) fail "unsupported platform: $1" ;;
   esac
+  RUNTIME_URL="$(apply_mirror "${RUNTIME_URL}")"
 }
 
 verify_checksum() {
@@ -71,6 +84,7 @@ main() {
     case "$1" in
       --platform) PLATFORM="${2:-}"; shift 2 ;;
       --destination) destination="${2:-}"; shift 2 ;;
+      --mirror-base-url) MIRROR_BASE_URL="${2:-}"; shift 2 ;;
       --self-test) self_test; return ;;
       --help|-h) usage; return ;;
       *) usage; fail "unknown argument: $1" ;;
@@ -78,6 +92,8 @@ main() {
   done
   [ -n "${PLATFORM:-}" ] || fail 'missing --platform'
   [ -n "${destination}" ] || fail 'missing --destination'
+  # Also pick up from env var if not passed as argument
+  [ -n "${MIRROR_BASE_URL:-}" ] || MIRROR_BASE_URL="${DOLPHIN_PYTHON_MIRROR_BASE_URL:-}"
   select_platform "${PLATFORM}"
   command -v curl >/dev/null 2>&1 || fail 'curl is required'
   command -v tar >/dev/null 2>&1 || fail 'tar is required'
@@ -87,6 +103,9 @@ main() {
   archive="$(mktemp "${TMPDIR:-/tmp}/dolphin-portable-python.XXXXXX")"
   trap 'rm -f "${archive}"' EXIT
   printf '[portable-python-runtime] download %s\n' "${PLATFORM}" >&2
+  if [ -n "${MIRROR_BASE_URL:-}" ]; then
+    printf '[portable-python-runtime] mirror: %s\n' "${MIRROR_BASE_URL}" >&2
+  fi
   curl --fail --location --retry 3 --retry-delay 1 --output "${archive}" "${RUNTIME_URL}"
   verify_checksum "${archive}"
   tar -xzf "${archive}" -C "${destination}"

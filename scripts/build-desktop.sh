@@ -283,6 +283,11 @@ fi
 .venv/bin/python -m PyInstaller --version >/dev/null 2>&1 || .venv/bin/pip install "pyinstaller>=6.6"
 # 预置 skill (backend/desktop/preset-skills) 经 dolphin-ai-sidecar.spec 的 datas 收进包,
 # 首启由 build_env._sync_preset_skills 覆盖式同步进 data_dir/skills/platform/。
+# 注入构建期 env 防 collect_submodules("app") 触发 Settings() 校验失败
+export JWT_SECRET_KEY="pyinstaller-build-placeholder"
+export ENCRYPTION_KEY="$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")"
+export DATABASE_URL="sqlite+aiosqlite:///:memory:"
+export ALLOW_DEFAULT_ENCRYPTION_KEY="1"
 .venv/bin/python -m PyInstaller dolphin-ai-sidecar.spec --clean --noconfirm
 
 echo ""
