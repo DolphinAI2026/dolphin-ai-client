@@ -1,5 +1,6 @@
 import os
 import importlib.util
+import ast
 from pathlib import Path, PureWindowsPath
 
 import desktop_sidecar as ds
@@ -24,10 +25,15 @@ def test_sidecar_smoke_checker_preserves_executable_symlinks(tmp_path):
     assert _load_sidecar_smoke_checker().sidecar_path(executable) == executable
 
 
-def test_sidecar_freeze_includes_workspace_form_component_editor():
-    spec_path = Path(__file__).resolve().parents[1] / "dolphin-ai-sidecar.spec"
+def test_sidecar_entry_declares_workspace_form_editor_for_freezing():
+    entry_path = Path(__file__).resolve().parents[1] / "desktop_sidecar.py"
+    tree = ast.parse(entry_path.read_text(encoding="utf-8"))
 
-    assert '"app.coding.form_component_editor"' in spec_path.read_text(encoding="utf-8")
+    assert any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "app.coding.form_component_editor"
+        for node in tree.body
+    )
 
 
 def test_desktop_builds_run_the_sidecar_startup_smoke_check():
