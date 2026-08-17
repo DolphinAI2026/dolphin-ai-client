@@ -111,6 +111,10 @@ echo "==> 1/4 前端桌面构建 (base=/)"
 echo ""
 echo "==> 2/4 PyInstaller x86_64 sidecar (Rosetta)"
 cd "$ROOT/backend"
+export JWT_SECRET_KEY="pyinstaller-build-placeholder"
+export ENCRYPTION_KEY="$(python3 -c "import secrets; print(secrets.token_urlsafe(48))" 2>/dev/null || echo "pyinstaller-placeholder-key")"
+export DATABASE_URL="sqlite+aiosqlite:///:memory:"
+export ALLOW_DEFAULT_ENCRYPTION_KEY="1"
 arch -x86_64 "$PYX86VENV" -m PyInstaller dolphin-ai-sidecar.spec --clean --noconfirm \
     --distpath dist-x86 --workpath build-x86
 arch -x86_64 "$PYX86VENV" "$ROOT/scripts/verify-desktop-sidecar.py" \
