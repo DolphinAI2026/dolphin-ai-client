@@ -101,9 +101,8 @@ dolphin-ai-X.Y.Z-macos-aarch64.dmg
 dolphin-ai-X.Y.Z-macos-aarch64-updater.app.tar.gz
 dolphin-ai-X.Y.Z-macos-aarch64-updater.app.tar.gz.sig
 dolphin-ai-X.Y.Z-linux-x86_64.AppImage
+dolphin-ai-X.Y.Z-linux-x86_64.AppImage.sig
 dolphin-ai-X.Y.Z-linux-x86_64.deb
-dolphin-ai-X.Y.Z-linux-x86_64-updater.AppImage.tar.gz
-dolphin-ai-X.Y.Z-linux-x86_64-updater.AppImage.tar.gz.sig
 latest.json
 SHA256SUMS.txt
 ```

@@ -25,8 +25,7 @@ function requiredAssets(version) {
     `${prefix}-windows-x86_64-setup.exe.sig`,
     `${prefix}-macos-aarch64-updater.app.tar.gz`,
     `${prefix}-macos-aarch64-updater.app.tar.gz.sig`,
-    `${prefix}-linux-x86_64-updater.AppImage.tar.gz`,
-    `${prefix}-linux-x86_64-updater.AppImage.tar.gz.sig`,
+    `${prefix}-linux-x86_64.AppImage.sig`,
   ];
 }
 
@@ -245,7 +244,7 @@ async function selfTest() {
     if (notFoundAttempts !== 2) throw new Error('Release API 404 responses must retry within the bounded loop');
 
     let incompleteAttempts = 0;
-    const missingLinuxSignature = `dolphin-ai-${version}-linux-x86_64-updater.AppImage.tar.gz.sig`;
+    const missingLinuxSignature = `dolphin-ai-${version}-linux-x86_64.AppImage.sig`;
     await reportRelease({
       repository: 'DolphinAI2026/dolphin-ai-releases', tag: `v${version}`, token: 'test-token', outputPath, summaryPath,
       fetchImpl: async () => {

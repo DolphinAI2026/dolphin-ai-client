@@ -15,7 +15,6 @@ function artifactNames(version) {
     macosUpdater: `${prefix}-macos-aarch64-updater.app.tar.gz`,
     linuxAppImage: `${prefix}-linux-x86_64.AppImage`,
     linuxDeb: `${prefix}-linux-x86_64.deb`,
-    linuxUpdater: `${prefix}-linux-x86_64-updater.AppImage.tar.gz`,
   };
 }
 
@@ -161,9 +160,8 @@ export async function prepareRelease({ version, repository, tag, input, output, 
     names.macosUpdater,
     `${names.macosUpdater}.sig`,
     names.linuxAppImage,
+    `${names.linuxAppImage}.sig`,
     names.linuxDeb,
-    names.linuxUpdater,
-    `${names.linuxUpdater}.sig`,
   ];
   const sources = new Map();
   for (const name of required) {
@@ -180,8 +178,8 @@ export async function prepareRelease({ version, repository, tag, input, output, 
       url: releaseUrl(repository, tag, names.macosUpdater),
     },
     'linux-x86_64': {
-      signature: (await readFile(sources.get(`${names.linuxUpdater}.sig`), 'utf8')).trim(),
-      url: releaseUrl(repository, tag, names.linuxUpdater),
+      signature: (await readFile(sources.get(`${names.linuxAppImage}.sig`), 'utf8')).trim(),
+      url: releaseUrl(repository, tag, names.linuxAppImage),
     },
   };
   for (const [platform, update] of Object.entries(platforms)) {
@@ -256,7 +254,7 @@ async function selfTest() {
     const fixtures = [
       names.windowsSetup, `${names.windowsSetup}.sig`, names.macosDmg,
       names.macosUpdater, `${names.macosUpdater}.sig`, names.linuxAppImage, names.linuxDeb,
-      names.linuxUpdater, `${names.linuxUpdater}.sig`,
+      `${names.linuxAppImage}.sig`,
     ];
     await Promise.all(fixtures.map((name) => writeFile(path.join(input, name), name.endsWith('.sig') ? `signature-${name}` : name)));
     const result = await prepareRelease({
@@ -267,7 +265,7 @@ async function selfTest() {
       output,
     });
     const latest = JSON.parse(await readFile(path.join(output, 'latest.json'), 'utf8'));
-    const expectedUrl = releaseUrl('DolphinAI2026/dolphin-ai-releases', 'v0.2.70', names.linuxUpdater);
+    const expectedUrl = releaseUrl('DolphinAI2026/dolphin-ai-releases', 'v0.2.70', names.linuxAppImage);
     if (latest.platforms['linux-x86_64'].url !== expectedUrl || result.latest.version !== version) {
       throw new Error('latest.json does not use the release download URL');
     }

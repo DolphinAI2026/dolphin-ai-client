@@ -71,7 +71,7 @@ copy_single_artifact() {
     cp "$source" "$destination"
 }
 
-copy_linux_updater_artifacts() {
+copy_linux_signatures() {
     local source_dir="$1" release_dir="$2" prefix="$3" source base suffix destination
     local signature_count=0
     while IFS= read -r -d '' source; do
@@ -79,17 +79,16 @@ copy_linux_updater_artifacts() {
         suffix=""
         [[ "$base" == *.sig ]] && suffix=".sig" && base="${base%.sig}"
         case "$base" in
-            *.AppImage.tar.gz) destination="$release_dir/${prefix}-updater.AppImage.tar.gz${suffix}" ;;
             *.AppImage) destination="$release_dir/${prefix}.AppImage${suffix}" ;;
             *.deb) destination="$release_dir/${prefix}.deb${suffix}" ;;
             *)
-                echo "ERROR: unsupported Linux updater artifact: $source" >&2
+                echo "ERROR: unsupported Linux signature artifact: $source" >&2
                 return 1
                 ;;
         esac
         cp "$source" "$destination"
         [[ "$suffix" == ".sig" ]] && ((signature_count += 1))
-    done < <(find "$source_dir" -maxdepth 1 -type f \( -name '*.sig' -o -name '*.AppImage.tar.gz' \) -print0)
+    done < <(find "$source_dir" -maxdepth 1 -type f -name '*.sig' -print0)
     if (( UPDATER_ARTIFACTS_ENABLED )) && (( signature_count == 0 )); then
         echo "ERROR: Tauri updater artifacts were enabled but Linux signatures were not generated." >&2
         return 1
@@ -135,8 +134,8 @@ publish_linux_release() {
     find "$release_dir" -maxdepth 1 -type f \( -iname '*ruijing-*' -o -iname '*dolphin code*' -o -iname '*ruijing-sidecar*' \) -delete
     copy_single_artifact "$appimage_dir" '*.AppImage' "$release_dir/${prefix}.AppImage"
     copy_single_artifact "$deb_dir" '*.deb' "$release_dir/${prefix}.deb"
-    copy_linux_updater_artifacts "$appimage_dir" "$release_dir" "$prefix"
-    copy_linux_updater_artifacts "$deb_dir" "$release_dir" "$prefix"
+    copy_linux_signatures "$appimage_dir" "$release_dir" "$prefix"
+    copy_linux_signatures "$deb_dir" "$release_dir" "$prefix"
     local -a brand_args=(--root "$release_dir" --version "$version" --platform linux)
     (( UPDATER_ARTIFACTS_ENABLED )) && brand_args+=(--require-updater)
     node "$ROOT/scripts/verify-desktop-release-brand.mjs" "${brand_args[@]}"
@@ -221,6 +220,15 @@ repack_linux_appimage_with_pristine_codex() {
         echo "ERROR: AppImage 重新封装后未生成: $output_file" >&2
         return 1
     }
+    if (( UPDATER_ARTIFACTS_ENABLED )); then
+        echo "==> 为最终 AppImage 重新生成更新签名"
+        rm -f "${output_file}.sig"
+        npx tauri signer sign "$output_file"
+        [[ -s "${output_file}.sig" ]] || {
+            echo "ERROR: 最终 AppImage 未生成更新签名: ${output_file}.sig" >&2
+            return 1
+        }
+    fi
 
     mkdir -p /tmp/d-ai-code/build-desktop
     smoke_dir="$(mktemp -d /tmp/d-ai-code/build-desktop/appimage-codex.XXXXXX)"

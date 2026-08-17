@@ -36,9 +36,8 @@ export function expectedAssetNames(version) {
     `${prefix}-macos-aarch64-updater.app.tar.gz`,
     `${prefix}-macos-aarch64-updater.app.tar.gz.sig`,
     `${prefix}-linux-x86_64.AppImage`,
+    `${prefix}-linux-x86_64.AppImage.sig`,
     `${prefix}-linux-x86_64.deb`,
-    `${prefix}-linux-x86_64-updater.AppImage.tar.gz`,
-    `${prefix}-linux-x86_64-updater.AppImage.tar.gz.sig`,
     'latest.json',
     'SHA256SUMS.txt',
   ];

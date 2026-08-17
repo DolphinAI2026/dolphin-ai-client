@@ -436,9 +436,8 @@ jobs:
           if-no-files-found: error
           path: |
             dist-desktop/release/dolphin-ai-${{ needs.release-metadata.outputs.version }}-linux-x86_64.AppImage
+            dist-desktop/release/dolphin-ai-${{ needs.release-metadata.outputs.version }}-linux-x86_64.AppImage.sig
             dist-desktop/release/dolphin-ai-${{ needs.release-metadata.outputs.version }}-linux-x86_64.deb
-            dist-desktop/release/dolphin-ai-${{ needs.release-metadata.outputs.version }}-linux-x86_64-updater.AppImage.tar.gz
-            dist-desktop/release/dolphin-ai-${{ needs.release-metadata.outputs.version }}-linux-x86_64-updater.AppImage.tar.gz.sig
 
   release:
     needs: [release-metadata, build-windows, build-macos, build-linux]
@@ -510,7 +509,7 @@ jobs:
           for artifact in \
             dist-desktop/publish/dolphin-ai-${{ needs.release-metadata.outputs.version }}-windows-x86_64-setup.exe \
             dist-desktop/publish/dolphin-ai-${{ needs.release-metadata.outputs.version }}-macos-aarch64-updater.app.tar.gz \
-            dist-desktop/publish/dolphin-ai-${{ needs.release-metadata.outputs.version }}-linux-x86_64-updater.AppImage.tar.gz; do
+            dist-desktop/publish/dolphin-ai-${{ needs.release-metadata.outputs.version }}-linux-x86_64.AppImage; do
             minisign -Vm "${artifact}" -x "${artifact}.sig" -P "${updater_pubkey}"
           done
 
