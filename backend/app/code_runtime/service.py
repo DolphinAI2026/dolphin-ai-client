@@ -1107,6 +1107,7 @@ async def open_code_session(
     auth_provider: str | None = None,
     browser_session_id: str | None = None,
     on_local_phase: Callable[[str], None] | None = None,
+    on_phase: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     session = await resolve_code_session(db, session_id)
     if session is not None:
@@ -1145,6 +1146,12 @@ async def open_code_session(
     desktop_runtime = is_local_code_application_id(external_app_id)
     bootstrap = None
 
+    remote_phase = on_phase
+
+    def set_remote_phase(phase: str) -> None:
+        if remote_phase is not None:
+            remote_phase(phase)
+
     async def workspace_open_once() -> dict[str, Any]:
         if workspace_open is not None:
             return await workspace_open(external_app_id, handoff_id)
@@ -1157,6 +1164,8 @@ async def open_code_session(
             auth_provider=auth_provider,
         )
 
+    if not desktop_runtime:
+        set_remote_phase("provisioning")
     if desktop_runtime:
         local_runtime = LocalRuntimeClient.from_environment()
         proxy_token = create_local_model_proxy_token(
@@ -1198,6 +1207,7 @@ async def open_code_session(
             )
     else:
         opened = await workspace_open_once()
+    set_remote_phase("initializing")
     builder_url = str(opened.get("specReviewUrl") or opened.get("builderUrl") or "").strip()
     if not builder_url:
         raise HTTPException(status_code=502, detail="Code Control Plane 未返回 builder URL")
@@ -1220,6 +1230,7 @@ async def open_code_session(
                     builder_url,
                     **bootstrap_kwargs,
                 )
+                set_remote_phase("opening_workbench")
                 break
             except HTTPException as exc:
                 auth_error = str(
@@ -1230,6 +1241,7 @@ async def open_code_session(
                     and bootstrap_attempt == 0
                 ):
                     opened = await workspace_open_once()
+                    set_remote_phase("initializing")
                     builder_url = str(
                         opened.get("specReviewUrl") or opened.get("builderUrl") or ""
                     ).strip()

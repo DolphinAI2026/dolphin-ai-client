@@ -6,11 +6,70 @@ import { controlPlaneCodeAuthorization } from '@/utils/controlPlaneCodeSession'
 // This owner must change with any automatic activate retry added by the client.
 export const CODE_RUNTIME_ACTIVATION_RETRY_DELAYS_MS = [] as const
 
+// 首次冷启动会同步等待 Control Plane 部署 Sandbox；必须长于后端的 workspace/open 预算。
+export const CODE_RUNTIME_WORKSPACE_OPEN_TIMEOUT_MS = 690_000
+
+export type CodeExecutionLocation = 'local' | 'remote'
+export type CodeRailHistorySource = CodeExecutionLocation | 'all'
+export type CodeSessionPolicy = 'resume_recent' | 'create_new'
+export type CodeSessionPurpose = 'standard' | 'project_initialization' | 'project_recheck'
+export type CodeLocationAvailability = 'ready' | 'missing' | 'unreadable' | 'unavailable'
+export type LocalApplicationDirectoryMode = 'new_directory' | 'existing_directory'
+
+export interface CodeApplicationLocation {
+  location: CodeExecutionLocation
+  location_id: string
+  external_application_id: string
+  availability: CodeLocationAvailability
+  workspace_id?: string | null
+  workspace_path?: string | null
+  environment_name?: string | null
+  original_application?: CodeApplication
+}
+
+export interface UnifiedCodeApplication {
+  logical_application_id: string
+  app_name: string
+  app_code?: string | null
+  local?: CodeApplicationLocation
+  remote?: CodeApplicationLocation
+  association: 'local_only' | 'remote_only' | 'linked'
+}
+
+// Retained for one compatibility cycle as a request for one execution location.
+export type CodeApplicationSource = CodeExecutionLocation
+
+export const CODE_APPLICATION_SOURCE_STORAGE_KEY = 'dolphin-code-application-source-v1'
+export const CODE_APPLICATION_SOURCE_CHANGED_EVENT = 'code-application-source-changed'
+
+export function loadStoredCodeApplicationSource(
+  fallback: CodeApplicationSource,
+): CodeApplicationSource {
+  try {
+    const stored = localStorage.getItem(CODE_APPLICATION_SOURCE_STORAGE_KEY)
+    if (stored === 'local' || stored === 'remote') return stored
+  } catch { /* private mode */ }
+  return fallback
+}
+
+export function storeCodeApplicationSource(source: CodeApplicationSource): void {
+  try { localStorage.setItem(CODE_APPLICATION_SOURCE_STORAGE_KEY, source) } catch { /* private mode */ }
+  window.dispatchEvent(new CustomEvent(CODE_APPLICATION_SOURCE_CHANGED_EVENT, { detail: source }))
+}
+
 export interface CodeApplication extends MergedApplication {
   id: string
   external_application_id: string
-  source: 'd-ai-code'
+  source: 'd-ai-code' | 'desktop-local'
   app_type: 'ai-code'
+  local_workspace_path?: string | null
+  workspace_id?: string | null
+  logical_application_id?: string | null
+  linked_remote_application_id?: string | null
+  linked_remote_deployment_id?: string | null
+  availability?: CodeLocationAvailability
+  already_registered?: boolean
+  initialize_project?: boolean
   repository?: Record<string, any> | null
   owner?: Record<string, any> | null
 }
@@ -20,17 +79,42 @@ export interface CodeApplicationListResponse {
   page: number
   pageSize: number
   total: number
-  source: 'd-ai-code'
+  source: 'd-ai-code' | 'desktop-local'
 }
 
 export interface CreateCodeApplicationRequest {
   app_name: string
   app_code: string
   seed_project_id?: string | null
+  local_application?: boolean
+  local_workspace_path?: string | null
+  directory_mode?: LocalApplicationDirectoryMode
+  initialize_project?: boolean
+  linked_remote_application_id?: string | null
+  linked_remote_deployment_id?: string | null
 }
+
+export interface CreateCodeSessionFromApplicationRequest {
+  logical_application_id: string
+  external_application_id: string
+  execution_location: CodeExecutionLocation
+  session_policy: CodeSessionPolicy
+  session_purpose: CodeSessionPurpose
+  app_name?: string | null
+  app_code?: string | null
+}
+
+type LegacyCreateCodeSessionFromApplicationRequest = Pick<
+  CreateCodeSessionFromApplicationRequest,
+  'external_application_id' | 'app_name' | 'app_code'
+>
 
 export interface CodeRuntimeOpenResponse {
   session_id: string
+  route_id: string
+  logical_application_id?: string | null
+  execution_location?: CodeExecutionLocation | null
+  session_purpose: CodeSessionPurpose
   app_id: number | null
   external_application_id: string
   workspace_id?: string | null
@@ -41,6 +125,48 @@ export interface CodeRuntimeOpenResponse {
   cache_profile?: 'normal' | 'performance'
   browser_hot_frames?: number
   server_warm_sandboxes_per_user?: number
+}
+
+export interface CodeRuntimeOpenErrorContext {
+  shell_session_id: string
+  logical_application_id: string
+  execution_location: CodeExecutionLocation
+  session_purpose: CodeSessionPurpose
+  alternative_location?: CodeExecutionLocation | null
+  alternative_availability?: CodeLocationAvailability | null
+}
+
+export function codeRuntimeOpenErrorContext(error: any): CodeRuntimeOpenErrorContext | null {
+  const detail = error?.response?.data?.detail
+  const context = detail && typeof detail === 'object' ? detail.context : null
+  if (!context || (context.execution_location !== 'local' && context.execution_location !== 'remote')) {
+    return null
+  }
+  return context as CodeRuntimeOpenErrorContext
+}
+
+export function codeRuntimeErrorMessage(error: any, fallback: string): string {
+  const detail = error?.response?.data?.detail
+  if (detail && typeof detail === 'object') {
+    const code = String(detail.code || '').trim()
+    const message = String(detail.message || '').trim()
+    return [code, message].filter(Boolean).join(': ') || fallback
+  }
+  return String(detail || error?.message || fallback)
+}
+
+export type CodeWorkspaceOpenPhase =
+  | 'provisioning'
+  | 'initializing'
+  | 'checking_project'
+  | 'starting_runtime'
+  | 'opening_workbench'
+
+export interface CodeWorkspaceOpenStatus {
+  phase: CodeWorkspaceOpenPhase
+  runtime_state: string
+  runtime_scope_id?: string
+  sandbox_instance_id?: string | null
 }
 
 export interface CodeAgentSessionRecord {
@@ -56,16 +182,24 @@ export interface CodeAgentSessionRecord {
   deletedAt?: string | null
   capabilityStale?: boolean | null
   codexSessionResumable?: boolean | null
+  sandboxInstanceId?: string | null
 }
 
 export interface CodeRailHistoryApp {
   shell_session_id: string
   external_application_id: string
+  logical_application_id: string
+  execution_location: CodeExecutionLocation
+  session_purpose?: CodeSessionPurpose | null
   app_name?: string | null
   app_code?: string | null
+  workspace_path?: string | null
+  environment_name?: string | null
   runtime_session_id?: string | null
   sessions: CodeAgentSessionRecord[]
   error?: string | null
+  user_id?: number | null
+  user_name?: string | null
 }
 
 export interface CodeRailHistoryResponse {
@@ -78,6 +212,14 @@ export interface CodeAgentSessionActivateResponse {
   session?: Record<string, any> | null
 }
 
+export type CodeProjectInitializationDispatchState = 'sent' | 'already_sent' | 'retryable_failed'
+
+export interface CodeProjectInitializationDispatchResponse {
+  state: CodeProjectInitializationDispatchState
+  session_id: string
+  client_message_id: string
+}
+
 export function resolveCodeRuntimeEmbedUrl(url: string, baseUrl = import.meta.env.BASE_URL): string {
   if (!url.startsWith('/api/code-runtime/')) return url
   const base = String(baseUrl || '/').replace(/\/+$/, '')
@@ -85,11 +227,21 @@ export function resolveCodeRuntimeEmbedUrl(url: string, baseUrl = import.meta.en
 }
 
 export const codeRuntimeApi = {
-  listApplications(params?: { keyword?: string; provisionStatus?: string; page?: number; pageSize?: number }) {
-    return request.get<any, CodeApplicationListResponse>('/code/applications', { params, headers: controlPlaneCodeAuthorization() })
+  listApplications(params?: { source?: CodeApplicationSource; keyword?: string; provisionStatus?: string; page?: number; pageSize?: number }) {
+    return request.get<any, CodeApplicationListResponse>('/code/applications', {
+      params,
+      ...(params?.source === 'local' ? {} : { headers: controlPlaneCodeAuthorization() }),
+    })
   },
   createApplication(body: CreateCodeApplicationRequest) {
-    return request.post<any, CodeApplication>('/code/applications', body, { headers: controlPlaneCodeAuthorization() })
+    return request.post<any, CodeApplication>('/code/applications', body, body.local_application
+      ? undefined
+      : { headers: controlPlaneCodeAuthorization() })
+  },
+  defaultWorkspace(appCode: string) {
+    return request.get<any, { workspace_root: string; workspace_path: string }>('/code/applications/default-workspace', {
+      params: { app_code: appCode },
+    })
   },
   createSessionFromApp(appId: number, body?: { title?: string; selected_llm_config_id?: number | null }) {
     return request.post<any, AIChatSession>('/code/sessions/from-app', {
@@ -99,11 +251,24 @@ export const codeRuntimeApi = {
     }, { headers: controlPlaneCodeAuthorization() })
   },
   createSessionFromExternalApp(
-    app: { external_application_id: string; app_name?: string | null; app_code?: string | null },
+    app: CreateCodeSessionFromApplicationRequest | LegacyCreateCodeSessionFromApplicationRequest,
     body?: { title?: string; selected_llm_config_id?: number | null },
   ) {
+    const locationRequest = app as Partial<CreateCodeSessionFromApplicationRequest>
     return request.post<any, AIChatSession>('/code/sessions/from-external-app', {
       external_application_id: app.external_application_id,
+      ...(locationRequest.logical_application_id
+        ? { logical_application_id: locationRequest.logical_application_id }
+        : {}),
+      ...(locationRequest.execution_location
+        ? { execution_location: locationRequest.execution_location }
+        : {}),
+      ...(locationRequest.session_policy
+        ? { session_policy: locationRequest.session_policy }
+        : {}),
+      ...(locationRequest.session_purpose
+        ? { session_purpose: locationRequest.session_purpose }
+        : {}),
       ...(app.app_name ? { app_name: app.app_name } : {}),
       ...(app.app_code ? { app_code: app.app_code } : {}),
       ...(body?.title ? { title: body.title } : {}),
@@ -112,14 +277,43 @@ export const codeRuntimeApi = {
   },
   async openSession(sessionRef: number | string) {
     const encodedSessionRef = encodeURIComponent(String(sessionRef))
-    const opened = await request.post<any, CodeRuntimeOpenResponse>(`/code/sessions/${encodedSessionRef}/open`, undefined, { headers: controlPlaneCodeAuthorization() })
+    const opened = await request.post<any, CodeRuntimeOpenResponse>(
+      `/code/sessions/${encodedSessionRef}/open`,
+      undefined,
+      {
+        headers: controlPlaneCodeAuthorization(),
+        timeout: CODE_RUNTIME_WORKSPACE_OPEN_TIMEOUT_MS,
+      },
+    )
     return {
       ...opened,
       embed_url: resolveCodeRuntimeEmbedUrl(opened.embed_url),
     }
   },
-  listRailHistory() {
-    return request.get<any, CodeRailHistoryResponse>('/code/rail/history', { headers: controlPlaneCodeAuthorization() })
+  getOpenStatus(sessionRef: number | string) {
+    const encodedSessionRef = encodeURIComponent(String(sessionRef))
+    return request.get<any, CodeWorkspaceOpenStatus>(
+      `/code/sessions/${encodedSessionRef}/open-status`,
+    )
+  },
+  restartLocalRuntime(sessionRef: number | string) {
+    const encodedSessionRef = encodeURIComponent(String(sessionRef))
+    return request.post<any, { runtime_state: string; stopped: boolean }>(
+      `/code/sessions/${encodedSessionRef}/local-runtime/restart`,
+    )
+  },
+  rebindLocalWorkspace(sessionRef: number | string, localWorkspacePath: string) {
+    const encodedSessionRef = encodeURIComponent(String(sessionRef))
+    return request.patch<any, { workspace_id: string; local_workspace_path: string }>(
+      `/code/sessions/${encodedSessionRef}/local-workspace`,
+      { local_workspace_path: localWorkspacePath },
+    )
+  },
+  listRailHistory(source: CodeRailHistorySource = 'all', scope: 'user' | 'tenant' = 'user') {
+    return request.get<any, CodeRailHistoryResponse>('/code/rail/history', {
+      params: { source, scope },
+      ...(source === 'local' ? {} : { headers: controlPlaneCodeAuthorization() }),
+    })
   },
   listAgentSessions(shellSessionId: string) {
     return request.get<any, { sessions: CodeAgentSessionRecord[] }>(
@@ -137,6 +331,14 @@ export const codeRuntimeApi = {
     const encodedShellSessionId = encodeURIComponent(shellSessionId)
     return request.post<any, CodeAgentSessionActivateResponse>(
       `/code/sessions/${encodedShellSessionId}/agent-sessions/${encodeURIComponent(runtimeSessionId)}/activate`, undefined, { headers: controlPlaneCodeAuthorization() },
+    )
+  },
+  dispatchProjectInitialization(shellSessionId: string) {
+    const encodedShellSessionId = encodeURIComponent(shellSessionId)
+    return request.post<any, CodeProjectInitializationDispatchResponse>(
+      `/code/sessions/${encodedShellSessionId}/project-initialization/dispatch`,
+      undefined,
+      { headers: controlPlaneCodeAuthorization() },
     )
   },
   deleteAgentSession(shellSessionId: string, runtimeSessionId: string) {

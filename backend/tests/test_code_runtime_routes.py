@@ -2005,6 +2005,38 @@ async def test_open_local_code_runtime_session_does_not_require_control_plane_au
 
 
 @pytest.mark.asyncio
+async def test_get_code_runtime_open_status_supports_regular_code_session(db_session):
+    from app.routes.code_runtime import get_code_runtime_open_status
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        title="远程 Code",
+        mode="code",
+        status="active",
+        external_application_id="remote-code-app",
+    )
+    db_session.add(session)
+    await db_session.flush()
+    db_session.add(
+        CodeRuntimeBinding(
+            tenant_id=7,
+            user_id=11,
+            session_id=session.id,
+            external_application_id="remote-code-app",
+            runtime_base_url="https://runtime.test/workspaces/remote-code-app",
+            builder_url="https://runtime.test/workspaces/remote-code-app/builder",
+            status="ready",
+        )
+    )
+    await db_session.flush()
+
+    status = await get_code_runtime_open_status(session.public_id, _ctx(), db_session)
+
+    assert status == {"phase": "opening_workbench", "runtime_state": "ready"}
+
+
+@pytest.mark.asyncio
 async def test_open_code_runtime_session_serializes_same_session_first_open(monkeypatch):
     import app.routes.code_runtime as code_runtime_routes
     from app.routes.code_runtime import open_code_runtime_session

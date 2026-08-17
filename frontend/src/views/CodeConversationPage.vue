@@ -74,6 +74,7 @@
       <CodeWorkspaceOpening
         v-if="showWorkspaceOpening"
         :phase="workspaceOpeningPhase"
+        :mode="workspaceOpeningMode"
         :started-at="workspaceOpeningStartedAt"
         :error="errorMessage"
         :can-restart="canRestartLocalRuntime"
@@ -198,6 +199,7 @@ const newCodeAppPrompt = ref('')
 const newCodeAppError = ref('')
 const creatingCodeApplication = ref(false)
 const localWorkspaceOpening = ref(false)
+const workspaceOpeningMode = ref<'local' | 'remote'>('remote')
 const workspaceOpeningPhase = ref<CodeWorkspaceOpenPhase>('checking_project')
 const workspaceOpeningStartedAt = ref(Date.now())
 const workspaceRecoveryBusy = ref(false)
@@ -368,6 +370,7 @@ function stopOpenStatusPolling() {
 function resetWorkspaceOpening() {
   stopOpenStatusPolling()
   localWorkspaceOpening.value = false
+  workspaceOpeningMode.value = 'remote'
   workspaceOpeningPhase.value = 'checking_project'
   workspaceOpeningStartedAt.value = Date.now()
   workspaceRecoveryBusy.value = false
@@ -386,6 +389,7 @@ function isLocalWorkspaceError(message: string): boolean {
 function startOpenStatusPolling(sessionRef: string, requestSeq: number) {
   stopOpenStatusPolling()
   const pollingSeq = openStatusPollingSeq
+  workspaceOpeningMode.value = currentCodeApplicationSource() === 'local' ? 'local' : 'remote'
   workspaceOpeningStartedAt.value = Date.now()
   workspaceOpeningPhase.value = 'checking_project'
 
@@ -558,9 +562,7 @@ async function openCurrentSession() {
       return
     }
 
-    if (currentCodeApplicationSource() !== 'remote') {
-      startOpenStatusPolling(sessionRef, requestSeq)
-    }
+    startOpenStatusPolling(sessionRef, requestSeq)
     const openedResult = await awaitCurrentCodeFrameOpenRequest(
       isCurrentRequest,
       () => codeRuntimeApi.openSession(sessionRef),
@@ -576,6 +578,7 @@ async function openCurrentSession() {
     stopOpenStatusPolling()
     if (opened.external_application_id.startsWith('local-')) {
       localWorkspaceOpening.value = true
+      workspaceOpeningMode.value = 'local'
       workspaceOpeningPhase.value = 'opening_workbench'
     } else {
       localWorkspaceOpening.value = false
@@ -652,6 +655,7 @@ async function openCurrentSession() {
         ? { state: recoveryState, originalLocation: openErrorContext!.execution_location }
         : null
       if (isLocalWorkspaceError(message)) {
+        workspaceOpeningMode.value = 'local'
         localWorkspaceOpening.value = true
         workspaceOpeningPhase.value = workspaceErrorPhase(message)
       }
