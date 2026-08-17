@@ -36,6 +36,12 @@ def test_sidecar_entry_declares_workspace_form_editor_for_freezing():
     )
 
 
+def test_sidecar_spec_collects_coding_modules_without_app_config_scan():
+    spec_path = Path(__file__).resolve().parents[1] / "dolphin-ai-sidecar.spec"
+
+    assert 'collect_submodules("app.coding")' in spec_path.read_text(encoding="utf-8")
+
+
 def test_desktop_builds_run_the_sidecar_startup_smoke_check():
     root = Path(__file__).resolve().parents[2]
 

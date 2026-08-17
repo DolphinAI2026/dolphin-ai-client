@@ -28,6 +28,9 @@ hiddenimports += collect_submodules("uvicorn")
 hiddenimports += collect_submodules("jose")
 hiddenimports += collect_submodules("lxml")
 hiddenimports += collect_submodules("sqlalchemy.dialects")
+# `app` 的全量扫描会在 CI 中触发配置校验，失败时会漏掉部分子包。
+# coding 包本身不加载配置，单独扫描确保 sidecar 的工作区依赖被稳定冻结。
+hiddenimports += collect_submodules("app.coding")
 hiddenimports += collect_submodules("app")
 hiddenimports += [
     "app.main",
