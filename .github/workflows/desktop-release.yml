@@ -17,7 +17,7 @@ env:
   AGENT_RUNTIME_REPO_URL: https://git.dfy.definesys.cn/orcamatrix/agent-runtime.git
   AGENT_RUNTIME_REVISION: c98437dbde5c803670a8694c7558870a05eb4c6e
   AGENTIC_CODING_REPO_URL: https://git.dfy.definesys.cn/support/agentic-coding.git
-  AGENTIC_CODING_REVISION: eef0836123f8b94f4424c88726476695747f8c96
+  AGENTIC_CODING_REVISION: 24fe9aa558039bf776b90d92ed8fdfd8d7b1e10e
   SUPERPOWERS_REPO_URL: https://github.com/obra/superpowers.git
   SUPERPOWERS_REVISION: 44c9b2d6e889982ac18c27d05a19fefe335194e1
   CODEX_VERSION: 0.147.0
