@@ -510,7 +510,10 @@ jobs:
             dist-desktop/publish/dolphin-ai-${{ needs.release-metadata.outputs.version }}-windows-x86_64-setup.exe \
             dist-desktop/publish/dolphin-ai-${{ needs.release-metadata.outputs.version }}-macos-aarch64-updater.app.tar.gz \
             dist-desktop/publish/dolphin-ai-${{ needs.release-metadata.outputs.version }}-linux-x86_64.AppImage; do
-            minisign -Vm "${artifact}" -x "${artifact}.sig" -P "${updater_pubkey}"
+            minisign_signature="${artifact}.minisig"
+            base64 --decode < "${artifact}.sig" > "${minisign_signature}"
+            minisign -Vm "${artifact}" -x "${minisign_signature}" -P "${updater_pubkey}"
+            rm -f "${minisign_signature}"
           done
 
       - name: Publish verified public draft Release
