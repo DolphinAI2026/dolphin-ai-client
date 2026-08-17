@@ -31,6 +31,9 @@ hiddenimports += collect_submodules("sqlalchemy.dialects")
 hiddenimports += collect_submodules("app")
 hiddenimports += [
     "app.main",
+    # WorkspaceManager imports this at module load. Keep it explicit because
+    # PyInstaller's package scan has omitted it from macOS onefile builds.
+    "app.coding.form_component_editor",
     "greenlet", "aiosqlite",
     "sqlalchemy.dialects.sqlite.aiosqlite",
     "uvicorn.logging", "uvicorn.loops.auto", "uvicorn.loops.asyncio",

@@ -1,8 +1,14 @@
 import os
-from pathlib import PureWindowsPath
+from pathlib import Path, PureWindowsPath
 
 import desktop_sidecar as ds
 import desktop_sidecar
+
+
+def test_sidecar_freeze_includes_workspace_form_component_editor():
+    spec_path = Path(__file__).resolve().parents[1] / "dolphin-ai-sidecar.spec"
+
+    assert '"app.coding.form_component_editor"' in spec_path.read_text(encoding="utf-8")
 
 
 def test_sqlite_database_url_removes_windows_verbatim_prefix():
