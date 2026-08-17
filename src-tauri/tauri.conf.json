@@ -37,8 +37,8 @@
   },
   "plugins": {
     "updater": {
-      "endpoints": ["https://github.com/Mars-hub404/apaas-builder-ai/releases/latest/download/latest.json"],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY5OUREMjQxMEZDOTcxNUMKUldSY2Nja1BRZEtkK2E4Y0kxQzdjRVZTRCtCMVVkUVVYaURhVGdGb28rUVh0cUYrczJFczM3b0wK"
+      "endpoints": ["https://github.com/DolphinAI2026/dolphin-ai-releases/releases/latest/download/latest.json"],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENGOERGRUE1NzMwNzZGRkQKUldUOWJ3ZHpwZjZOei9KdklsdkhvbFhQTXdCZWl3cFhobnNYUXRDVUNwVUwydEtMQWtSMWJJc0UK"
     }
   }
 }

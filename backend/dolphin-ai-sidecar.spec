@@ -30,6 +30,7 @@ hiddenimports += collect_submodules("lxml")
 hiddenimports += collect_submodules("sqlalchemy.dialects")
 hiddenimports += collect_submodules("app")
 hiddenimports += [
+    "form_component_editor_impl",
     "app.main",
     "greenlet", "aiosqlite",
     "sqlalchemy.dialects.sqlite.aiosqlite",
@@ -102,6 +103,7 @@ a = Analysis(
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
+    hookspath=[BACKEND],
     excludes=excludes,
     noarchive=False,
 )

@@ -22,12 +22,10 @@ function requiredAssets(version) {
   const prefix = `dolphin-ai-${version}`;
   return [
     ...Object.values(primaryOutputAssets(version)),
-    `${prefix}-windows-x86_64-updater.nsis.zip`,
-    `${prefix}-windows-x86_64-updater.nsis.zip.sig`,
+    `${prefix}-windows-x86_64-setup.exe.sig`,
     `${prefix}-macos-aarch64-updater.app.tar.gz`,
     `${prefix}-macos-aarch64-updater.app.tar.gz.sig`,
-    `${prefix}-linux-x86_64-updater.AppImage.tar.gz`,
-    `${prefix}-linux-x86_64-updater.AppImage.tar.gz.sig`,
+    `${prefix}-linux-x86_64.AppImage.sig`,
   ];
 }
 
@@ -141,7 +139,7 @@ function releaseFixture(version, omit = '') {
   const assets = requiredAssets(version)
     .filter((name) => name !== omit)
     .map((name) => ({ name, browser_download_url: `https://downloads.example.test/${name}` }));
-  return { html_url: `https://github.com/Mars-hub404/apaas-builder-ai/releases/tag/v${version}`, assets };
+  return { html_url: `https://github.com/DolphinAI2026/dolphin-ai-releases/releases/tag/v${version}`, assets };
 }
 
 async function assertUnchanged(pathname, expected, failure, expectedText) {
@@ -160,7 +158,7 @@ async function selfTest() {
     for (const invalidTag of ['v0.2.70-rc.1', 'v0.2.70+build.7']) {
       await expectFailure(
         () => reportRelease({
-          repository: 'Mars-hub404/apaas-builder-ai',
+          repository: 'DolphinAI2026/dolphin-ai-releases',
           tag: invalidTag,
           token: 'test-token',
           outputPath,
@@ -176,7 +174,7 @@ async function selfTest() {
       outputPath,
       'output before failure\n',
       () => reportRelease({
-        repository: 'Mars-hub404/apaas-builder-ai', tag: `v${version}`, token: 'test-token', outputPath, summaryPath,
+        repository: 'DolphinAI2026/dolphin-ai-releases', tag: `v${version}`, token: 'test-token', outputPath, summaryPath,
         fetchImpl: fetchFixture(releaseFixture(version, 'latest.json')),
       }),
       'latest.json',
@@ -194,7 +192,7 @@ async function selfTest() {
       outputPath,
       'output before failure\n',
       () => reportRelease({
-        repository: 'Mars-hub404/apaas-builder-ai', tag: `v${version}`, token: 'test-token', outputPath, summaryPath,
+        repository: 'DolphinAI2026/dolphin-ai-releases', tag: `v${version}`, token: 'test-token', outputPath, summaryPath,
         fetchImpl: fetchFixture(duplicate),
       }),
       'duplicate attachment: latest.json',
@@ -212,7 +210,7 @@ async function selfTest() {
       return { ok: true, status: 200, json: async () => releaseFixture(version) };
     };
     const urls = await reportRelease({
-      repository: 'Mars-hub404/apaas-builder-ai', tag: `v${version}`, token: 'test-token', outputPath, summaryPath,
+      repository: 'DolphinAI2026/dolphin-ai-releases', tag: `v${version}`, token: 'test-token', outputPath, summaryPath,
       fetchImpl: retryFixture,
       sleepImpl: async () => {},
     });
@@ -223,7 +221,7 @@ async function selfTest() {
 
     let jsonAttempts = 0;
     await reportRelease({
-      repository: 'Mars-hub404/apaas-builder-ai', tag: `v${version}`, token: 'test-token', outputPath, summaryPath,
+      repository: 'DolphinAI2026/dolphin-ai-releases', tag: `v${version}`, token: 'test-token', outputPath, summaryPath,
       fetchImpl: async () => {
         jsonAttempts += 1;
         if (jsonAttempts === 1) return { ok: true, status: 200, json: async () => { throw new Error('injected JSON parse failure'); } };
@@ -235,7 +233,7 @@ async function selfTest() {
 
     let notFoundAttempts = 0;
     await reportRelease({
-      repository: 'Mars-hub404/apaas-builder-ai', tag: `v${version}`, token: 'test-token', outputPath, summaryPath,
+      repository: 'DolphinAI2026/dolphin-ai-releases', tag: `v${version}`, token: 'test-token', outputPath, summaryPath,
       fetchImpl: async () => {
         notFoundAttempts += 1;
         if (notFoundAttempts === 1) return { ok: false, status: 404, json: async () => ({ message: 'not ready' }) };
@@ -246,9 +244,9 @@ async function selfTest() {
     if (notFoundAttempts !== 2) throw new Error('Release API 404 responses must retry within the bounded loop');
 
     let incompleteAttempts = 0;
-    const missingLinuxSignature = `dolphin-ai-${version}-linux-x86_64-updater.AppImage.tar.gz.sig`;
+    const missingLinuxSignature = `dolphin-ai-${version}-linux-x86_64.AppImage.sig`;
     await reportRelease({
-      repository: 'Mars-hub404/apaas-builder-ai', tag: `v${version}`, token: 'test-token', outputPath, summaryPath,
+      repository: 'DolphinAI2026/dolphin-ai-releases', tag: `v${version}`, token: 'test-token', outputPath, summaryPath,
       fetchImpl: async () => {
         incompleteAttempts += 1;
         const release = incompleteAttempts === 1 ? releaseFixture(version, missingLinuxSignature) : releaseFixture(version);
@@ -274,7 +272,7 @@ async function selfTest() {
       timeoutOutput,
       'output before timeout\n',
       () => reportRelease({
-        repository: 'Mars-hub404/apaas-builder-ai', tag: `v${version}`, token: 'test-token',
+        repository: 'DolphinAI2026/dolphin-ai-releases', tag: `v${version}`, token: 'test-token',
         outputPath: timeoutOutput, summaryPath: timeoutSummary, fetchImpl: timeoutFetch, timeoutMs: 1, maxAttempts: 1,
       }),
       'timed out',
@@ -294,12 +292,16 @@ async function main() {
     return;
   }
   if (process.argv.slice(2).length > 0) throw new Error('Only --self-test is supported');
-  const { GITHUB_REPOSITORY, GITHUB_REF_NAME, GITHUB_TOKEN, GITHUB_OUTPUT, GITHUB_STEP_SUMMARY } = process.env;
+  const {
+    RELEASE_REPOSITORY, GITHUB_REF_NAME, RELEASES_GITHUB_TOKEN, GITHUB_OUTPUT, GITHUB_STEP_SUMMARY,
+  } = process.env;
   if (!GITHUB_OUTPUT || !GITHUB_STEP_SUMMARY) throw new Error('GITHUB_OUTPUT and GITHUB_STEP_SUMMARY are required');
+  if (!RELEASE_REPOSITORY) throw new Error('RELEASE_REPOSITORY is required to read the public Release');
+  if (!RELEASES_GITHUB_TOKEN) throw new Error('RELEASES_GITHUB_TOKEN is required to read the public Release');
   await reportRelease({
-    repository: GITHUB_REPOSITORY,
+    repository: RELEASE_REPOSITORY,
     tag: GITHUB_REF_NAME,
-    token: GITHUB_TOKEN,
+    token: RELEASES_GITHUB_TOKEN,
     outputPath: GITHUB_OUTPUT,
     summaryPath: GITHUB_STEP_SUMMARY,
   });

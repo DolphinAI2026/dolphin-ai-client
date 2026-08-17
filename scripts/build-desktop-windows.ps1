@@ -88,7 +88,6 @@ function Write-Utf8NoBom($Path, $Content) {
 }
 
 function Get-PythonCommand {
-  # Prefer python from PATH (set by actions/setup-python) over py -3 which may pick system Python 3.14
   $python = Get-Command python -ErrorAction SilentlyContinue
   if ($python) { return @("python") }
   $py = Get-Command py -ErrorAction SilentlyContinue
@@ -258,11 +257,6 @@ try {
         & $VenvPython -m PyInstaller --version | Out-Null
         Assert-NativeSuccess "PyInstaller availability check" $LASTEXITCODE
       }
-      # 注入构建期 env 防 collect_submodules("app") 触发 Settings() 校验失败
-      [Environment]::SetEnvironmentVariable("JWT_SECRET_KEY", "pyinstaller-build-placeholder", "Process")
-      [Environment]::SetEnvironmentVariable("ENCRYPTION_KEY", "pyinstaller-placeholder-key", "Process")
-      [Environment]::SetEnvironmentVariable("DATABASE_URL", "sqlite+aiosqlite:///:memory:", "Process")
-      [Environment]::SetEnvironmentVariable("ALLOW_DEFAULT_ENCRYPTION_KEY", "1", "Process")
       & $VenvPython -m PyInstaller dolphin-ai-sidecar.spec --clean --noconfirm
       Assert-NativeSuccess "PyInstaller sidecar build" $LASTEXITCODE
     } finally {
@@ -280,6 +274,13 @@ try {
     $Dest = Join-Path $BinDir "dolphin-ai-sidecar-$Target.exe"
     Copy-Item $Sidecar $Dest -Force
     Get-Item $Dest | Format-List FullName,Length,LastWriteTime
+  }
+
+  Invoke-Step "Verify packaged sidecar startup" {
+    $VenvPython = Join-Path $Backend ".venv\Scripts\python.exe"
+    $Sidecar = Join-Path $Backend "dist\dolphin-ai-sidecar.exe"
+    & $VenvPython (Join-Path $Root "scripts\verify-desktop-sidecar.py") --sidecar $Sidecar
+    Assert-NativeSuccess "Desktop sidecar startup smoke check" $LASTEXITCODE
   }
 
   Invoke-Step "6/6 Build Tauri Windows package" {
@@ -451,23 +452,11 @@ try {
         Copy-Item $Installer.FullName $NamedInstaller -Force
         Write-Host ""
         Write-Host "Download-ready installer: $NamedInstaller"
-        $InstallerSignatures = Get-ChildItem $BundleRoot -Recurse -File -Filter "*.sig" |
-          Where-Object { $_.Name -match "\.exe\.sig$" -or $_.Name -match "\.nsis\.zip\.sig$" }
-        foreach ($InstallerSignature in $InstallerSignatures) {
-          $SignatureName = if ($InstallerSignature.Name -match "\.nsis\.zip\.sig$") {
-            "dolphin-ai-$PackageVersion-windows-x86_64-updater.nsis.zip.sig"
-          } else {
-            "dolphin-ai-$PackageVersion-windows-x86_64-setup.exe.sig"
-          }
-          Copy-Item $InstallerSignature.FullName (Join-Path $DownloadDir $SignatureName) -Force
+        $InstallerSignature = Get-Item -LiteralPath "$($Installer.FullName).sig" -ErrorAction SilentlyContinue
+        if ($InstallerSignature) {
+          Copy-Item $InstallerSignature.FullName (Join-Path $DownloadDir "dolphin-ai-$PackageVersion-windows-x86_64-setup.exe.sig") -Force
         }
-        $UpdaterPayload = Get-ChildItem $BundleRoot -Recurse -File -Filter "*.nsis.zip" |
-          Sort-Object LastWriteTime -Descending |
-          Select-Object -First 1
-        if ($UpdaterPayload) {
-          Copy-Item $UpdaterPayload.FullName (Join-Path $DownloadDir "dolphin-ai-$PackageVersion-windows-x86_64-updater.nsis.zip") -Force
-        }
-        if ($UpdaterArtifactsEnabled -and -not $InstallerSignatures) {
+        if ($UpdaterArtifactsEnabled -and -not $InstallerSignature) {
           throw "Missing Tauri updater signature for Windows package version $PackageVersion."
         }
         $BrandGateArgs = @(

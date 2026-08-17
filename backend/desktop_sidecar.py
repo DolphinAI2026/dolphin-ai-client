@@ -12,6 +12,10 @@ import sys
 import traceback
 from pathlib import Path
 
+# Keep the implementation at backend root. PyInstaller follows this direct
+# dependency without importing or scanning the configuration-sensitive app package.
+from form_component_editor_impl import normalize_form_component_editor_artifacts
+
 
 def ensure_jwt_secret(data_dir: Path) -> str:
     """每安装实例持久化一个 JWT 密钥 (避免每次启动 session 失效)。"""

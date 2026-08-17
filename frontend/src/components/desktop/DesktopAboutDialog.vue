@@ -18,7 +18,7 @@
       <dl class="desktop-about-details">
         <div>
           <dt>版本</dt>
-          <dd>v{{ __APP_VERSION__ }}</dd>
+          <dd>v{{ appVersion }}</dd>
         </div>
         <div>
           <dt>构建提交</dt>
@@ -53,6 +53,7 @@ const emit = defineEmits<{ (event: 'update:modelValue', value: boolean): void }>
 
 const checking = ref(false)
 const errorText = ref('')
+const appVersion = __APP_VERSION__
 const desktopUpdateAvailable = __DESKTOP__ && !__DESKTOP_WEB_PREVIEW__
 const shortRevision = computed(() => (__BUILD_REVISION__ || 'dev').slice(0, 12))
 const buildTarget = computed(() => __BUILD_TARGET__ || 'unknown')

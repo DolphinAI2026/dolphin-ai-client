@@ -11,12 +11,10 @@ function artifactNames(version) {
   const prefix = `dolphin-ai-${version}`;
   return {
     windowsSetup: `${prefix}-windows-x86_64-setup.exe`,
-    windowsUpdater: `${prefix}-windows-x86_64-updater.nsis.zip`,
     macosDmg: `${prefix}-macos-aarch64.dmg`,
     macosUpdater: `${prefix}-macos-aarch64-updater.app.tar.gz`,
     linuxAppImage: `${prefix}-linux-x86_64.AppImage`,
     linuxDeb: `${prefix}-linux-x86_64.deb`,
-    linuxUpdater: `${prefix}-linux-x86_64-updater.AppImage.tar.gz`,
   };
 }
 
@@ -157,15 +155,13 @@ export async function prepareRelease({ version, repository, tag, input, output, 
   const names = artifactNames(version);
   const required = [
     names.windowsSetup,
-    names.windowsUpdater,
-    `${names.windowsUpdater}.sig`,
+    `${names.windowsSetup}.sig`,
     names.macosDmg,
     names.macosUpdater,
     `${names.macosUpdater}.sig`,
     names.linuxAppImage,
+    `${names.linuxAppImage}.sig`,
     names.linuxDeb,
-    names.linuxUpdater,
-    `${names.linuxUpdater}.sig`,
   ];
   const sources = new Map();
   for (const name of required) {
@@ -174,16 +170,16 @@ export async function prepareRelease({ version, repository, tag, input, output, 
 
   const platforms = {
     'windows-x86_64': {
-      signature: (await readFile(sources.get(`${names.windowsUpdater}.sig`), 'utf8')).trim(),
-      url: releaseUrl(repository, tag, names.windowsUpdater),
+      signature: (await readFile(sources.get(`${names.windowsSetup}.sig`), 'utf8')).trim(),
+      url: releaseUrl(repository, tag, names.windowsSetup),
     },
     'darwin-aarch64': {
       signature: (await readFile(sources.get(`${names.macosUpdater}.sig`), 'utf8')).trim(),
       url: releaseUrl(repository, tag, names.macosUpdater),
     },
     'linux-x86_64': {
-      signature: (await readFile(sources.get(`${names.linuxUpdater}.sig`), 'utf8')).trim(),
-      url: releaseUrl(repository, tag, names.linuxUpdater),
+      signature: (await readFile(sources.get(`${names.linuxAppImage}.sig`), 'utf8')).trim(),
+      url: releaseUrl(repository, tag, names.linuxAppImage),
     },
   };
   for (const [platform, update] of Object.entries(platforms)) {
@@ -241,7 +237,7 @@ async function selfTest() {
       await expectFailure(
         () => prepareRelease({
           version: invalidVersion,
-          repository: 'Mars-hub404/apaas-builder-ai',
+          repository: 'DolphinAI2026/dolphin-ai-releases',
           tag: `v${invalidVersion}`,
           input: root,
           output: path.join(root, 'invalid-output'),
@@ -256,40 +252,40 @@ async function selfTest() {
     const output = path.join(root, 'output');
     await mkdir(input, { recursive: true });
     const fixtures = [
-      names.windowsSetup, names.windowsUpdater, `${names.windowsUpdater}.sig`, names.macosDmg,
+      names.windowsSetup, `${names.windowsSetup}.sig`, names.macosDmg,
       names.macosUpdater, `${names.macosUpdater}.sig`, names.linuxAppImage, names.linuxDeb,
-      names.linuxUpdater, `${names.linuxUpdater}.sig`,
+      `${names.linuxAppImage}.sig`,
     ];
     await Promise.all(fixtures.map((name) => writeFile(path.join(input, name), name.endsWith('.sig') ? `signature-${name}` : name)));
     const result = await prepareRelease({
       version,
-      repository: 'Mars-hub404/apaas-builder-ai',
+      repository: 'DolphinAI2026/dolphin-ai-releases',
       tag: 'v0.2.70',
       input,
       output,
     });
     const latest = JSON.parse(await readFile(path.join(output, 'latest.json'), 'utf8'));
-    const expectedUrl = releaseUrl('Mars-hub404/apaas-builder-ai', 'v0.2.70', names.linuxUpdater);
+    const expectedUrl = releaseUrl('DolphinAI2026/dolphin-ai-releases', 'v0.2.70', names.linuxAppImage);
     if (latest.platforms['linux-x86_64'].url !== expectedUrl || result.latest.version !== version) {
       throw new Error('latest.json does not use the release download URL');
     }
 
     await writeFile(path.join(output, 'sentinel.txt'), 'existing release boundary');
-    await writeFile(path.join(input, `${names.windowsUpdater}.sig`), ' \n');
+    await writeFile(path.join(input, `${names.windowsSetup}.sig`), ' \n');
     await expectFailure(
-      () => prepareRelease({ version, repository: 'Mars-hub404/apaas-builder-ai', tag: 'v0.2.70', input, output }),
+      () => prepareRelease({ version, repository: 'DolphinAI2026/dolphin-ai-releases', tag: 'v0.2.70', input, output }),
       'Updater signature is empty for windows-x86_64',
     );
     if (await readFile(path.join(output, 'sentinel.txt'), 'utf8') !== 'existing release boundary') {
       throw new Error('Empty updater signatures must not modify the release output boundary');
     }
-    await writeFile(path.join(input, `${names.windowsUpdater}.sig`), `signature-${names.windowsUpdater}.sig`);
+    await writeFile(path.join(input, `${names.windowsSetup}.sig`), `signature-${names.windowsSetup}.sig`);
 
     const duplicate = path.join(input, 'duplicate');
     await mkdir(duplicate);
     await writeFile(path.join(duplicate, names.linuxDeb), names.linuxDeb);
     await expectFailure(
-      () => prepareRelease({ version, repository: 'Mars-hub404/apaas-builder-ai', tag: 'v0.2.70', input, output }),
+      () => prepareRelease({ version, repository: 'DolphinAI2026/dolphin-ai-releases', tag: 'v0.2.70', input, output }),
       `Expected exactly one ${names.linuxDeb}`,
     );
     if (await readFile(path.join(output, 'sentinel.txt'), 'utf8') !== 'existing release boundary') {
@@ -302,7 +298,7 @@ async function selfTest() {
     await expectFailure(
       () => prepareRelease({
         version,
-        repository: 'Mars-hub404/apaas-builder-ai',
+        repository: 'DolphinAI2026/dolphin-ai-releases',
         tag: 'v0.2.70',
         input,
         output: outerCleanupOutput,
@@ -332,7 +328,7 @@ async function selfTest() {
 
     await rm(path.join(input, names.macosDmg));
     await expectFailure(
-      () => prepareRelease({ version, repository: 'Mars-hub404/apaas-builder-ai', tag: 'v0.2.70', input, output }),
+      () => prepareRelease({ version, repository: 'DolphinAI2026/dolphin-ai-releases', tag: 'v0.2.70', input, output }),
       names.macosDmg,
     );
 
