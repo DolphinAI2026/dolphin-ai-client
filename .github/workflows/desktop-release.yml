@@ -397,29 +397,6 @@ jobs:
           PORTABLE_PYTHON_ROOT="${PORTABLE_PYTHON_ROOT}" \
           CODEX_NATIVE_ROOT="${CODEX_NATIVE_ROOT}" \
             bash scripts/prepare-local-runtime-appliance-linux.sh
-
-
-      - name: Pre-extract linuxdeploy AppImages
-        shell: bash
-        run: |
-          set -euo pipefail
-          LINUXDEPLOY_CACHE="${HOME}/.cache/tauri"
-          mkdir -p "$LINUXDEPLOY_CACHE"
-          for tool in linuxdeploy-x86_64.AppImage linuxdeploy-plugin-appimage-x86_64.AppImage; do
-            url="https://github.com/tauri-apps/binary-releases/releases/download/linuxdeploy/${tool}"
-            dest="$LINUXDEPLOY_CACHE/${tool}"
-            if [[ ! -f "$dest" ]]; then
-              curl -fsSL -o "$dest" "$url"
-              chmod +x "$dest"
-            fi
-            extracted="${dest}.extracted"
-            if [[ ! -d "$extracted" ]]; then
-              mkdir -p "$extracted"
-              "$dest" --appimage-extract-and-run --appimage-extract "$extracted" 2>/dev/null || true
-            fi
-          done
-          echo "linuxdeploy tools prepared"
-          ls -la "$LINUXDEPLOY_CACHE"
       - name: Stamp desktop version
         shell: bash
         env:
