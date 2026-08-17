@@ -58,7 +58,7 @@ CODEX_NATIVE_ROOT="$(resolve_codex_native_root)"
 CODEX_VENDOR="${CODEX_NATIVE_ROOT}/vendor/x86_64-unknown-linux-musl"
 require_executable "${CODEX_VENDOR}/bin/codex"
 
-PACK_PYTHON="$(readlink -f "${AGENTIC_CODING_ROOT}/.venv/bin/python")"
+PACK_PYTHON="${AGENTIC_CODING_ROOT}/.venv/bin/python"
 require_executable "${PACK_PYTHON}"
 
 case "$(uname -s)-$(uname -m)" in
