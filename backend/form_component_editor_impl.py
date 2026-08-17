@@ -779,9 +779,10 @@ def _build_sanitized_setting_script(spec: FormComponentEditorSpec, content: str)
             f"{_indent_block(_join_object_entries(extra_watch_entries), '  ')}\n"
             "}"
         )
+    created_parts_line = "\n".join(part for part in created_body_parts if part.strip())
     option_entries.append(
         "created() {\n"
-        f"{_indent_block('\n'.join(part for part in created_body_parts if part.strip()), '  ')}\n"
+        f"{_indent_block(created_parts_line, '  ')}\n"
         "}"
     )
     if extra_method_entries:
