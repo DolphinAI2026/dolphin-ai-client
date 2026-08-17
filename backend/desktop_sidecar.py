@@ -12,9 +12,9 @@ import sys
 import traceback
 from pathlib import Path
 
-# This module is stdlib-only. Keep the import at entrypoint scope so PyInstaller
-# freezes it independently of the configuration-sensitive app package scan.
-from app.coding.form_component_editor import normalize_form_component_editor_artifacts
+# Keep the implementation at backend root. PyInstaller follows this direct
+# dependency without importing or scanning the configuration-sensitive app package.
+from form_component_editor_impl import normalize_form_component_editor_artifacts
 
 
 def ensure_jwt_secret(data_dir: Path) -> str:

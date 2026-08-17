@@ -21,7 +21,6 @@ from typing import Awaitable, Callable, Optional, Union
 from enum import Enum
 
 from app import runtime
-from app.coding.form_component_editor import normalize_form_component_editor_artifacts
 from app.coding.runtime_env import ensure_node_tool_env, resolve_executable
 
 logger = logging.getLogger(__name__)

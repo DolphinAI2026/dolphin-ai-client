@@ -25,21 +25,21 @@ def test_sidecar_smoke_checker_preserves_executable_symlinks(tmp_path):
     assert _load_sidecar_smoke_checker().sidecar_path(executable) == executable
 
 
-def test_sidecar_entry_declares_workspace_form_editor_for_freezing():
+def test_sidecar_entry_declares_root_form_editor_for_freezing():
     entry_path = Path(__file__).resolve().parents[1] / "desktop_sidecar.py"
     tree = ast.parse(entry_path.read_text(encoding="utf-8"))
 
     assert any(
         isinstance(node, ast.ImportFrom)
-        and node.module == "app.coding.form_component_editor"
+        and node.module == "form_component_editor_impl"
         for node in tree.body
     )
 
 
-def test_sidecar_spec_collects_coding_modules_without_app_config_scan():
+def test_sidecar_spec_does_not_scan_configuration_sensitive_coding_package():
     spec_path = Path(__file__).resolve().parents[1] / "dolphin-ai-sidecar.spec"
 
-    assert 'collect_submodules("app.coding")' in spec_path.read_text(encoding="utf-8")
+    assert 'collect_submodules("app.coding")' not in spec_path.read_text(encoding="utf-8")
 
 
 def test_desktop_builds_run_the_sidecar_startup_smoke_check():
