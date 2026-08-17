@@ -87,6 +87,15 @@ _MANAGER_INLINE_SECRET = re.compile(
 _MANAGER_URL_CREDENTIALS = re.compile(r"(?i)(https?://)[^/\s@]+@")
 logger = logging.getLogger(__name__)
 
+def local_workspace_scope_tenant_id(ctx: Any) -> int:
+    """Use a device-local scope for desktop workspaces, not a remote tenant."""
+    return 0 if runtime.is_desktop() else int(ctx.tenant_id)
+
+
+def _is_local_session(session: Any) -> bool:
+    return _text(getattr(session, "external_application_id", None)).startswith("local-")
+
+
 
 def _error(status_code: int, code: str, message: str) -> HTTPException:
     return HTTPException(status_code=status_code, detail=f"{code}: {message}")

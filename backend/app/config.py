@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     )
 
     # aPaaS Platform
-    # 登录方式：control_plane 或 apaas。local/coding 仅保留旧部署兼容。
+    # 登录方式：control_plane 或 apaas。local 已退役，不再创建本地账号。
     auth_provider: str = "control_plane"
     # Builder 登录策略和产品入口可由配置文件显式覆盖；留空时兼容 AUTH_PROVIDER。
     builder_auth_default_login_provider: str = ""

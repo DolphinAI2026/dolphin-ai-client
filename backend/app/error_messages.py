@@ -37,6 +37,11 @@ APAAS_TOKEN_EXPIRED_GENERIC = "APaaS平台Token已过期，请重新连接平台
 # 自动刷新失败、当前场景倾向指向"上线/发布"链路
 APAAS_LOGIN_FAILED = "平台登录失效，请重新连接APaaS平台"
 
+# 本地账号登录已退役。桌面“本地”只表示数据/Runtime 所在设备，
+# 不表示可以绕过 Control Plane 或 aPaaS 身份认证。
+LOCAL_AUTH_RETIRED_CODE = "LOCAL_AUTH_RETIRED"
+LOCAL_AUTH_RETIRED_MESSAGE = "本地账号登录已停用，请使用 Control Plane 或 aPaaS 账号登录"
+
 
 # ── 前端与后端共享的匹配片段 ────────────────────────────────────
 # 这些子串出现在 detail/error_msg 中即视为"平台 Token 失效"。
