@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   expectedAssetNames,
   parseReleaseMetadata,
+  releaseUploadArgs,
   retryTransientUpload,
   validateCandidateVersion,
   validateExistingRelease,
@@ -79,4 +80,19 @@ test('transient GitHub upload connection failures are retried', async () => {
 
   assert.equal(result, 'uploaded');
   assert.equal(attempts, 3);
+});
+
+test('release asset uploads use the GitHub CLI release endpoint', () => {
+  assert.deepEqual(
+    releaseUploadArgs({
+      repository: 'DolphinAI2026/dolphin-ai-releases',
+      tag: `v${version}`,
+      file: `/tmp/dolphin-ai-${version}-windows-x86_64-setup.exe`,
+    }),
+    [
+      'release', 'upload', `v${version}`,
+      `/tmp/dolphin-ai-${version}-windows-x86_64-setup.exe`,
+      '--repo', 'DolphinAI2026/dolphin-ai-releases', '--clobber',
+    ],
+  );
 });

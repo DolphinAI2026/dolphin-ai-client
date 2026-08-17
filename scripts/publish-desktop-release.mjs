@@ -208,12 +208,15 @@ export async function retryTransientUpload(operation, { delays = uploadRetryDela
   }
 }
 
-async function uploadReleaseAsset({ repository, releaseId, name, file }) {
-  await retryTransientUpload(() => runGh([
-    'api', '--method', 'POST', '--hostname', 'uploads.github.com',
-    `repos/${repository}/releases/${releaseId}/assets?name=${encodeURIComponent(name)}`,
-    '-H', 'Content-Type: application/octet-stream', '--input', file,
-  ], { parseJson: false }));
+export function releaseUploadArgs({ repository, tag, file }) {
+  return ['release', 'upload', tag, file, '--repo', repository, '--clobber'];
+}
+
+async function uploadReleaseAsset({ repository, tag, file }) {
+  await retryTransientUpload(() => runGh(
+    releaseUploadArgs({ repository, tag, file }),
+    { parseJson: false },
+  ));
 }
 
 async function getLatestRelease(repository) {
@@ -281,7 +284,7 @@ async function publishRelease(options) {
     release = await patchRelease({ repository, releaseId: release.id, body });
   }
 
-  for (const [name, file] of sourceFiles) await uploadReleaseAsset({ repository, releaseId: release.id, name, file });
+  for (const [, file] of sourceFiles) await uploadReleaseAsset({ repository, tag, file });
   const verified = (await listReleases(repository)).find((candidate) => candidate.id === release.id);
   if (!verified) throw new Error('Draft Release disappeared before verification');
   validateReleaseAssets({ version, assets: verified.assets, expectedDigests });
