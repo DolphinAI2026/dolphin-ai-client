@@ -5,7 +5,7 @@
         <AppIcon :name="error ? 'warning' : 'coding'" :size="22" />
       </span>
       <div>
-        <h1>{{ error ? '本地 Code 工作台未能打开' : '正在打开本地 Code 工作台' }}</h1>
+        <h1>{{ title }}</h1>
         <p>{{ error ? '可在当前页面恢复后重试' : `已用时 ${elapsedSeconds} 秒` }}</p>
       </div>
     </div>
@@ -60,11 +60,13 @@ import type { CodeWorkspaceOpenPhase } from '@/api/codeRuntime'
 const props = withDefaults(defineProps<{
   phase: CodeWorkspaceOpenPhase
   startedAt: number
+  mode?: 'local' | 'remote'
   error?: string
   canRestart?: boolean
   canRebind?: boolean
   busy?: boolean
 }>(), {
+  mode: 'remote',
   error: '',
   canRestart: false,
   canRebind: false,
@@ -78,16 +80,28 @@ const emit = defineEmits<{
   'rebind': []
 }>()
 
-const steps: Array<{ phase: CodeWorkspaceOpenPhase; label: string }> = [
+const localSteps: Array<{ phase: CodeWorkspaceOpenPhase; label: string }> = [
   { phase: 'checking_project', label: '检查本地项目' },
   { phase: 'starting_runtime', label: '启动本地环境' },
   { phase: 'opening_workbench', label: '打开 Code 工作台' },
 ]
+const remoteSteps: Array<{ phase: CodeWorkspaceOpenPhase; label: string }> = [
+  { phase: 'provisioning', label: '分配沙箱环境' },
+  { phase: 'initializing', label: '启动运行环境' },
+  { phase: 'opening_workbench', label: '打开 Code 工作台' },
+]
+const steps = computed(() => props.mode === 'local' ? localSteps : remoteSteps)
+const title = computed(() => {
+  const scope = props.mode === 'local' ? '本地' : '远程'
+  return props.error
+    ? 'Code 工作台未能打开'
+    : `正在打开 ${scope} Code 工作台`
+})
 const now = ref(Date.now())
 let elapsedTimer: number | undefined
 const activeStepIndex = computed(() => Math.max(
   0,
-  steps.findIndex(step => step.phase === props.phase),
+  steps.value.findIndex(step => step.phase === props.phase),
 ))
 const elapsedSeconds = computed(() => Math.max(
   0,

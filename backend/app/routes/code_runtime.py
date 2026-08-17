@@ -131,7 +131,7 @@ async def sandbox_auth_state_endpoint() -> dict[str, str]:
 
 _control_plane_user_locks: dict[int, asyncio.Lock] = {}
 _code_session_open_locks: dict[str, asyncio.Lock] = {}
-_local_code_open_phases: dict[tuple[int, int, str], str] = {}
+_code_open_state: dict[tuple[int, int, str], tuple[str, str]] = {}
 
 
 def _control_plane_user_lock(user_id: int) -> asyncio.Lock:
@@ -151,7 +151,7 @@ def _code_session_open_lock(session_ref: str) -> asyncio.Lock:
     return lock
 
 
-def _local_code_open_phase_key(
+def _code_open_phase_key(
     session: AIChatSession,
     ctx: AuthContext,
     session_ref: str,
@@ -212,6 +212,23 @@ async def _owned_local_code_session(
         session.external_application_id or ""
     ):
         raise HTTPException(status_code=400, detail="该会话不是本地 Code 应用")
+    return session
+
+
+async def _owned_code_session(
+    db: AsyncSession,
+    session_ref: str,
+    ctx: AuthContext,
+) -> AIChatSession:
+    session = await resolve_code_session(db, session_ref)
+    if (
+        session is None
+        or not _code_session_matches_context(session, ctx)
+        or int(session.user_id) != int(ctx.user.id)
+    ):
+        raise HTTPException(status_code=404, detail="Code 会话不存在")
+    if session.mode != "code":
+        raise HTTPException(status_code=400, detail="该会话不是 Code 会话")
     return session
 
 
@@ -752,33 +769,42 @@ async def open_code_runtime_session(
     async with _code_session_open_lock(lock_key):
         if session is None:
             session = await resolve_code_session(db, session_ref)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Code 会话不存在")
         uses_local_builder = bool(
-            session
-            and not session.app_id
+            not session.app_id
             and is_local_code_application_id(session.external_application_id or "")
+        )
+        phase_key = _code_open_phase_key(session, ctx, session_ref)
+        _code_open_state[phase_key] = (
+            "checking_project" if uses_local_builder else "provisioning",
+            "opening",
         )
         if uses_local_builder:
             authorization, auth_provider = None, None
-            phase_key = _local_code_open_phase_key(session, ctx, session_ref)
-            _local_code_open_phases[phase_key] = "checking_project"
         else:
             authorization, auth_provider = await _control_plane_request_auth(request, ctx, db)
         open_kwargs: dict[str, Any] = {}
-        if uses_local_builder:
-            open_kwargs["on_local_phase"] = lambda phase: _local_code_open_phases.__setitem__(
-                phase_key,
-                phase,
-            )
-        result = await open_code_session(
-            db=db,
-            session_id=session_ref,
-            ctx=ctx,
-            authorization_header=authorization,
-            auth_provider=auth_provider,
-            **open_kwargs,
+        open_kwargs["on_local_phase"] = lambda phase: _code_open_state.__setitem__(
+            phase_key,
+            (phase, "opening"),
         )
-        if uses_local_builder:
-            _local_code_open_phases[phase_key] = "opening_workbench"
+        if not uses_local_builder:
+            open_kwargs["on_phase"] = lambda phase: _code_open_state.__setitem__(
+                phase_key,
+                (phase, "opening"),
+            )
+        try:
+            result = await open_code_session(
+                db=db,
+                session_id=session_ref,
+                ctx=ctx,
+                authorization_header=authorization,
+                auth_provider=auth_provider,
+                **open_kwargs,
+            )
+        finally:
+            _code_open_state.pop(phase_key, None)
         try:
             await db.commit()
         except Exception as exc:
@@ -798,14 +824,20 @@ async def get_code_runtime_open_status(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    session = await _owned_local_code_session(db, session_ref, ctx)
-    in_flight_phase = _local_code_open_phases.get(
-        _local_code_open_phase_key(session, ctx, session_ref)
-    )
-    if in_flight_phase:
+    session = await _owned_code_session(db, session_ref, ctx)
+    in_flight = _code_open_state.get(_code_open_phase_key(session, ctx, session_ref))
+    if in_flight:
+        phase, runtime_state = in_flight
         return {
-            "phase": in_flight_phase,
-            "runtime_state": "opening",
+            "phase": phase,
+            "runtime_state": runtime_state,
+        }
+    if session.app_id or not is_local_code_application_id(
+        session.external_application_id or ""
+    ):
+        return {
+            "phase": "opening_workbench",
+            "runtime_state": "ready",
         }
     return await LocalRuntimeClient.from_environment().application_open_status(
         db,
@@ -821,7 +853,7 @@ async def restart_local_code_runtime(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     session = await _owned_local_code_session(db, session_ref, ctx)
-    _local_code_open_phases.pop(_local_code_open_phase_key(session, ctx, session_ref), None)
+    _code_open_state.pop(_code_open_phase_key(session, ctx, session_ref), None)
     result = await LocalRuntimeClient.from_environment().restart_application(
         db,
         session,
@@ -840,7 +872,7 @@ async def rebind_local_code_workspace(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     session = await _owned_local_code_session(db, session_ref, ctx)
-    _local_code_open_phases.pop(_local_code_open_phase_key(session, ctx, session_ref), None)
+    _code_open_state.pop(_code_open_phase_key(session, ctx, session_ref), None)
     client = LocalRuntimeClient.from_environment()
     await client.restart_application(
         db,

@@ -1926,6 +1926,40 @@ async def test_open_code_session_uses_control_plane_when_desktop_manager_is_not_
 
 
 @pytest.mark.asyncio
+async def test_open_code_session_emits_remote_provisioning_phases(db_session):
+    from app.code_runtime.service import open_code_session
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="code-app-1",
+        title="远程 Code",
+        mode="code",
+        status="active",
+    )
+    db_session.add(session)
+    await db_session.commit()
+    phases: list[str] = []
+
+    async def fake_open(_external_application_id: str, _handoff_id: str | None = None):
+        return {
+            "workspaceId": "ws-1",
+            "sandboxInstanceId": "sandbox-1",
+            "specReviewUrl": "https://sandbox.example.com/workspaces/ws-1/builder?token=entry-token",
+        }
+
+    await open_code_session(
+        db=db_session,
+        session_id=session.id,
+        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7, tenant_role="member"),
+        workspace_open=fake_open,
+        on_phase=phases.append,
+    )
+
+    assert phases == ["provisioning", "initializing", "opening_workbench"]
+
+
+@pytest.mark.asyncio
 async def test_open_code_session_bootstraps_token_free_binding_and_new_browser_session(
     db_session,
     monkeypatch,
