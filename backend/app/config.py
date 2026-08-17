@@ -14,6 +14,38 @@ APP_VERSION = "1.0.0"
 # 上线 / 发布时写入平台的摘要（历史为 "aPaaS Builder 应用上线"）。
 APP_DEPLOY_ABSTRACT = f"{APP_BRAND} 应用上线"
 
+SYSTEM_ASSISTANT_ENFORCE_NOT_READY = "SYSTEM_ASSISTANT_ENFORCE_NOT_READY"
+SUPPORTED_GOVERNANCE_POLICIES = frozenset({"legacy", "shadow"})
+
+
+def validate_governance_policy(
+    value: str | None,
+    *,
+    policy_revision: int = 1,
+    min_policy_revision: int = 1,
+    projection_cache_seconds: int = 300,
+) -> str:
+    """Validate B0 startup configuration without adding an enforce fallback."""
+    policy = str(value or "legacy").strip().lower()
+    if policy == "enforce":
+        raise RuntimeError(SYSTEM_ASSISTANT_ENFORCE_NOT_READY)
+    if policy not in SUPPORTED_GOVERNANCE_POLICIES:
+        raise ValueError(f"SYSTEM_ASSISTANT_GOVERNANCE_POLICY_UNSUPPORTED: {policy}")
+    if (
+        isinstance(policy_revision, bool)
+        or isinstance(min_policy_revision, bool)
+        or not isinstance(policy_revision, int)
+        or not isinstance(min_policy_revision, int)
+        or policy_revision <= 0
+        or min_policy_revision <= 0
+        or min_policy_revision > policy_revision
+        or isinstance(projection_cache_seconds, bool)
+        or not isinstance(projection_cache_seconds, int)
+        or projection_cache_seconds <= 0
+    ):
+        raise RuntimeError("SYSTEM_ASSISTANT_POLICY_REVISION_INVALID")
+    return policy
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -171,6 +203,13 @@ class Settings(BaseSettings):
     dolphin_code_performance_browser_hot_frames: int = 5
     dolphin_code_normal_server_warm_sandboxes_per_user: int = 4
     dolphin_code_performance_server_warm_sandboxes_per_user: int = 10
+
+    # B0 governance remains diagnostic-only until a later release explicitly
+    # authorizes enforce; validation lives in system_assistant.policy.
+    system_assistant_governance_policy: str = "legacy"
+    system_assistant_policy_revision: int = 1
+    system_assistant_min_policy_revision: int = 1
+    system_assistant_projection_cache_seconds: int = 300
 
     # ai-builder 自身的对外 chat URL — 给外部 MCP 客户端生成 deeplink 时用。
     # 外部 agent 把 md push 到 cache 后，工具返回值带

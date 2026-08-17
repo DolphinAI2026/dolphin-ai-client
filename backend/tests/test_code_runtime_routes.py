@@ -4078,6 +4078,7 @@ async def test_sandbox_auth_metrics_endpoint_is_hidden_and_renders_prometheus_te
     assert response.status_code == 200
     assert b"sandbox_auth_renew_total" in response.body
     assert b"sandbox_auth_singleflight_join_total" in response.body
+    assert b"system_assistant_projection_load_total" in response.body
 
 
 def test_recoverable_runtime_auth_error_requires_stable_known_header():

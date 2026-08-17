@@ -130,9 +130,9 @@ _EXPECTED_CONFIG_WHITELIST: frozenset[str] = frozenset({
 
 
 def test_registry_loadable():
-    """yaml 文件能 load, version=1, tools 非空."""
+    """yaml 文件能 load, version=1 或 version=2, tools 非空."""
     r = load()
-    assert r["version"] == 1, "version 必须是 1 (后续升级走 v2)"
+    assert r["version"] in {1, 2}, "version 必须是 1 或 2"
     # PR1 round2-p2 #2: load() 返 MappingProxyType (read-only view) — 不是 dict
     # 但接受任意 Mapping 实现 (dict / MappingProxyType 都通).
     assert isinstance(r["tools"], Mapping)

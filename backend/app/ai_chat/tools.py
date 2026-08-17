@@ -18,6 +18,8 @@ from typing import Any
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.system_assistant.result_envelope import legacy_result_text
+
 from app.agents.python_runner import build_python_argv as _build_python_argv, run_python_in_dir
 from app.models import (
     AIChatSession,
@@ -1707,7 +1709,7 @@ async def execute_tool(
         args = await _inject_locked_app_ctx(tool_name, args, session, db)
         args = _force_locked_ws_id(tool_name, args, session)
         try:
-            return await handler(args, session, db)
+            return legacy_result_text(await handler(args, session, db))
         except Exception as e:
             return f"错误：工具 '{tool_name}' 执行异常 - {e}"
 
@@ -1750,7 +1752,7 @@ async def execute_tool(
         # 还接收 md_content (未改 schema), 继续 intercept.
         if tool_name == "update_app_from_doc":
             await _persist_spec_artifact(tool_name, args, result_text, session, db)
-        return result_text
+        return legacy_result_text(result_text)
 
     return f"错误：未知工具 '{tool_name}'"
 

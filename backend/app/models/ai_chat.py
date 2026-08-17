@@ -275,6 +275,12 @@ class AIChatToolCall(Base):
     # pending / running / success / error / aborted
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Nullable governance compatibility projection; ActionRun remains authoritative.
+    action_run_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    correlation_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    result_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    error_code: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    snapshot_digest: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

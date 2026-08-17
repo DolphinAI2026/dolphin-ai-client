@@ -76,6 +76,12 @@ class AgentStep(Base):
     args_json: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
     result_text: Mapped[Optional[str]] = mapped_column(BigText, nullable=True)
     status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # Nullable governance compatibility projection; ActionRun remains authoritative.
+    action_run_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    correlation_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    result_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    error_code: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    snapshot_digest: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # llm step 用
     prompt_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

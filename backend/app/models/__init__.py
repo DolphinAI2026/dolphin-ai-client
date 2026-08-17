@@ -33,6 +33,7 @@ from app.models.spec_document import SpecDocument  # noqa: F401
 from app.models.spec_section import SpecSection  # noqa: F401  — design-v4 草稿层 SpecSection
 from app.models.agent_observability import AgentRun, AgentStep  # noqa: F401  — Agent 可观测底座
 from app.models.audit_log import AuditLog  # noqa: F401
+from app.models.system_assistant_governance import ActionRun, ActionTicket  # noqa: F401
 
 
 class User(Base):

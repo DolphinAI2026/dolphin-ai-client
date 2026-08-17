@@ -51,6 +51,10 @@ from app.system_assistant.contracts import (
     assistant_model_purpose,
     normalize_assistant_profile,
 )
+from app.system_assistant.session_lifecycle import (
+    SessionHasActiveAction,
+    delete_session_with_guard,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -677,14 +681,13 @@ async def delete_session(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     s = await _load_session_or_404(db, session_id, ctx)
-    # 防御性显式清理子表（即使 FK CASCADE 没生效也能干净删掉）
-    from sqlalchemy import delete as sql_delete
-    await db.execute(sql_delete(AIChatToolCall).where(AIChatToolCall.session_id == session_id))
-    await db.execute(sql_delete(AIChatMessage).where(AIChatMessage.session_id == session_id))
-    await db.execute(sql_delete(AIChatAttachment).where(AIChatAttachment.session_id == session_id))
-    await db.execute(sql_delete(AIChatArtifact).where(AIChatArtifact.session_id == session_id))
-    await db.delete(s)
-    await db.commit()
+    try:
+        await delete_session_with_guard(db, s.id)
+    except SessionHasActiveAction as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code},
+        ) from exc
     # 清理 in-memory abort event
     _session_aborts.pop(session_id, None)
     return {"ok": True}
@@ -916,9 +919,19 @@ async def abort_session(
     await _load_session_or_404(db, session_id, ctx)
     ev = get_or_create_abort_event(session_id)
     ev.set()
+    # Cancel durable governed runs even when this process no longer owns the
+    # detached task (for example after a restart).  The legacy response/event
+    # protocol below remains unchanged.
+    from app.system_assistant.session_lifecycle import cancel_session_action_runs
+
+    if isinstance(db, AsyncSession):
+        await cancel_session_action_runs(db, session_id)
     h = ai_chat_run_registry.get(session_id)
     if h and not h.task.done():
         h.task.cancel()
+        # The durable run is cancelled before legacy ToolCall cleanup.  The
+        # old SSE payload remains unchanged, while an in-flight governed
+        # handler receives an immediately invalidated execution generation.
         now = datetime.utcnow()
         rows = (await db.execute(
             select(AIChatToolCall).where(

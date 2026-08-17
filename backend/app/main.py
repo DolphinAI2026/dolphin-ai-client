@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import FileResponse, Response
-from app.config import settings, APP_TITLE, APP_DESCRIPTION, APP_VERSION
+from app.config import settings, APP_TITLE, APP_DESCRIPTION, APP_VERSION, validate_governance_policy
 from app.builder_auth.product_guard import (
     ProductDisabledError,
     product_disabled_exception_handler,
@@ -72,6 +72,13 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_governance_policy(
+        settings.system_assistant_governance_policy,
+        policy_revision=settings.system_assistant_policy_revision,
+        min_policy_revision=settings.system_assistant_min_policy_revision,
+        projection_cache_seconds=settings.system_assistant_projection_cache_seconds,
+    )
+
     # 安全门(deploy-readiness 阻断项): ENCRYPTION_KEY 不许用仓库里的默认值跑——
     # 否则所有 aPaaS 密码都用一把公开的 key 加密。本地开发/历史数据要继续用默认 key,
     # 必须显式 ALLOW_DEFAULT_ENCRYPTION_KEY=1 表态。
@@ -91,9 +98,21 @@ async def lifespan(app: FastAPI):
     # 启动时初始化数据库
     await init_db()
 
+    # B0 仅在 shadow 模式执行有界恢复扫描。对象 verifier 尚未挂载或扫描
+    # 超时时只发布 degraded 健康信息，不形成 readiness 阻断。
+    from app.database import AsyncSessionLocal
+    from app.system_assistant.recovery_coordinator import (
+        run_configured_startup_recovery_scan,
+    )
+    await run_configured_startup_recovery_scan(
+        app,
+        policy=settings.system_assistant_governance_policy,
+        session_factory=AsyncSessionLocal,
+        change_port=getattr(app.state, "system_assistant_change_recovery_port", None),
+    )
+
     # 运行种子数据
     from app.seed_data import seed_initial_data
-    from app.database import AsyncSessionLocal
     async with AsyncSessionLocal() as session:
         await seed_initial_data(session)
 

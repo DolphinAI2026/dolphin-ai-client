@@ -16,7 +16,7 @@
 #   category  工具语义标签 (内省用, 不影响行为)
 #
 # 2026-05-26 生成: 114 工具 (mcp_server.py 实测).
-version: 1
+version: 2
 tools:
   add_apaas_dict_option:
     sections: [data]

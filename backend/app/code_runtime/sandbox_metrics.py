@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from itertools import product
+from typing import Protocol
+
+from app.system_assistant.telemetry import governance_telemetry
 
 
 _RENEW_RESULTS = ("success", "failure")
@@ -50,6 +53,7 @@ def _series(name: str, **labels: str) -> str:
 class SandboxAuthMetricsRegistry:
     def __init__(self) -> None:
         self._counters: dict[str, float] = {}
+        self._collectors: list[MetricsCollector] = []
         for result, reason in product(_RENEW_RESULTS, _RENEW_REASONS):
             self._counters[_series(
                 "sandbox_auth_renew_total",
@@ -159,7 +163,17 @@ class SandboxAuthMetricsRegistry:
             self._renew_duration_count
         )
         snapshot["sandbox_auth_renew_duration_sum"] = self._renew_duration_sum
+        for collector in self._collectors:
+            snapshot.update(collector.snapshot())
         return snapshot
+
+    def register_collector(self, collector: "MetricsCollector") -> None:
+        if collector not in self._collectors:
+            self._collectors.append(collector)
+
+    def unregister_collector(self, collector: "MetricsCollector") -> None:
+        if collector in self._collectors:
+            self._collectors.remove(collector)
 
     def render(self) -> str:
         lines = [
@@ -172,12 +186,26 @@ class SandboxAuthMetricsRegistry:
             "# TYPE sandbox_builder_url_cleanup_total counter",
             "# TYPE builder_stage_duration_seconds summary",
         ]
-        snapshot = self.snapshot()
+        sandbox_snapshot = dict(self._counters)
+        sandbox_snapshot.update(self._builder_stage_count)
+        sandbox_snapshot.update(self._builder_stage_sum)
+        sandbox_snapshot["sandbox_auth_renew_duration_count"] = float(self._renew_duration_count)
+        sandbox_snapshot["sandbox_auth_renew_duration_sum"] = self._renew_duration_sum
         lines.extend(
             f"{name} {value:g}"
-            for name, value in sorted(snapshot.items())
+            for name, value in sorted(sandbox_snapshot.items())
         )
-        return "\n".join(lines) + "\n"
+        rendered = "\n".join(lines) + "\n"
+        for collector in self._collectors:
+            rendered += collector.render()
+        return rendered
 
 
 sandbox_auth_metrics = SandboxAuthMetricsRegistry()
+sandbox_auth_metrics.register_collector(governance_telemetry)
+
+
+class MetricsCollector(Protocol):
+    def snapshot(self) -> dict[str, float]: ...
+
+    def render(self) -> str: ...
