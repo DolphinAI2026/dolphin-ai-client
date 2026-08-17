@@ -109,6 +109,15 @@ mkdir -p "${APPLIANCE_PURELIB}"
 "${APPLIANCE_PYTHON}" -m pip install --no-cache-dir --target "${APPLIANCE_PURELIB}" \
   -r "${AGENTIC_CODING_ROOT}/requirements.txt"
 
+# The local Runtime only runs CLI services.  Tcl/Tk and _tkinter are unused,
+# but python-build-standalone includes them.  Keeping them makes linuxdeploy
+# chase unavailable Tcl dependencies while assembling the AppImage.
+printf '[local-runtime-appliance] remove unused Tcl/Tk runtime components\n'
+find "${APPLIANCE_DIR}/agentic-coding/.venv" -type d -name tkinter -prune -print -exec rm -rf {} +
+find "${APPLIANCE_DIR}/agentic-coding/.venv" -type f \
+  \( -name '_tkinter*.so' -o -name 'libtcl*.so*' -o -name 'libtk*.so*' \) \
+  -print -delete
+
 printf '[local-runtime-appliance] build offline agentic pack\n'
 "${AGENTIC_CODING_ROOT}/bin/agentic-pack" build \
   --profile sandbox-container \
