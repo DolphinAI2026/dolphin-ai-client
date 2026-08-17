@@ -17,7 +17,7 @@ env:
   AGENT_RUNTIME_REPO_URL: https://git.dfy.definesys.cn/orcamatrix/agent-runtime.git
   AGENT_RUNTIME_REVISION: c98437dbde5c803670a8694c7558870a05eb4c6e
   AGENTIC_CODING_REPO_URL: https://git.dfy.definesys.cn/support/agentic-coding.git
-  AGENTIC_CODING_REVISION: 24fe9aa558039bf776b90d92ed8fdfd8d7b1e10e
+  AGENTIC_CODING_REVISION: 379d7a82cc026179e116a7d3d5a6e50c6f2ef7af
   SUPERPOWERS_REPO_URL: https://github.com/obra/superpowers.git
   SUPERPOWERS_REVISION: 44c9b2d6e889982ac18c27d05a19fefe335194e1
   CODEX_VERSION: 0.147.0
@@ -163,6 +163,7 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
           DOLPHIN_RELEASE_BUILD: '1'
+          APPIMAGE_EXTRACT_AND_RUN: "1"
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
@@ -283,6 +284,7 @@ jobs:
         shell: bash
         env:
           DOLPHIN_RELEASE_BUILD: '1'
+          APPIMAGE_EXTRACT_AND_RUN: "1"
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: bash scripts/build-desktop.sh
@@ -322,7 +324,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libfuse2
 
       - name: Checkout fixed runtime and capability dependencies
         shell: bash
@@ -404,6 +406,7 @@ jobs:
         shell: bash
         env:
           DOLPHIN_RELEASE_BUILD: '1'
+          APPIMAGE_EXTRACT_AND_RUN: "1"
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: bash scripts/build-desktop.sh
