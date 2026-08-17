@@ -496,3 +496,4 @@ jobs:
           GITHUB_REF_NAME: ${{ needs.release-metadata.outputs.tag }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/report-desktop-release.mjs
+
