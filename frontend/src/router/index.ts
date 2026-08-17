@@ -8,45 +8,14 @@ import {
 import { useUserStore } from '@/stores/user'
 import { usePreviewStore } from '@/stores/preview'
 import { modeForRoutePath, useModeStore } from '@/stores/mode'
-import {
-  loadProductAvailability,
-  productForRoute,
-  redirectForDisabledProduct,
-} from '@/stores/productAvailability'
 import request, {
   getAuthSessionState,
   isAuthSessionAlignmentPending,
 } from '@/utils/request'
-import { getCachedDesktopState, getDesktopState, resolveDesktopProductScope } from '@/utils/desktop'
-import {
-  loadDesktopBootstrapDecision,
-  resolveDesktopRedirect,
-  resolveDesktopSettingsRedirect,
-  resolveDesktopWorkspaceRedirect,
-} from './desktopGuard'
+import { resolveDesktopRedirect } from './desktopGuard'
 import { normalizeTenantPublicId, resolveTenantUrl } from './tenantUrlGuard'
-import { resolveExternalLoginRedirect, safeLoginRedirectPath } from './loginRedirect'
-
-const desktopRoutes: RouteRecordRaw[] = __DESKTOP__ ? [
-    {
-      path: '/desktop-setup',
-      name: 'DesktopSetup',
-      component: () => import('@/views/DesktopSetupWizard.vue'),
-      meta: { tenantContext: 'none' }
-    },
-    {
-      path: '/desktop-settings',
-      name: 'DesktopSettings',
-      component: () => import('@/views/DesktopSettings.vue'),
-      meta: { requiresAuth: true, tenantContext: 'none' },
-    },
-    {
-      path: '/desktop-unavailable',
-      name: 'DesktopUnavailable',
-      component: () => import('@/views/DesktopUnavailable.vue'),
-      meta: { requiresAuth: true, tenantContext: 'none' }
-    },
-] : []
+import { safeLoginRedirectPath } from './loginRedirect'
+import { fetchOnboardingState, isOnboardingConfirmed, markOnboardingConfirmed } from '@/composables/useOnboardingState'
 
 export const routes: RouteRecordRaw[] = [
     { path: '/login', name: 'Login',
@@ -62,13 +31,13 @@ export const routes: RouteRecordRaw[] = [
       // 首页 = AI Builder 融合页(新建欢迎草稿 + 对话流), 与 /ai-chat 同组件。
       // (2026-06-21 撤回 ModeHome —— 用已有的新会话欢迎页, 不重复造。)
       component: () => import('@/views/AIChatPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true, product: 'builder' }
+      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true }
     },
     {
       path: '/chat/:id?',
       name: 'Chat',
       component: () => import('@/views/ChatPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' },
+      meta: { requiresAuth: true, tenantContext: 'required' },
       beforeEnter: (to, _from, next) => {
         // ChatPage 必须绑定到某个应用才有意义
         // 没 app_id / conversation_id / deploy_app_id 也没 pending 上传素材的话直接重定向应用列表
@@ -91,23 +60,14 @@ export const routes: RouteRecordRaw[] = [
       path: '/ai-chat/:id?',
       name: 'AIChat',
       component: () => import('@/views/AIChatPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' },
-      beforeEnter: (to, _from, next) => {
-        // Code 会话已经迁移到 /code/:id（由 agent-runtime 承载）。
-        // 保留 /ai-chat 给 Builder，但让历史 mode=code 链接失效，避免再次创建旧会话。
-        if (String(to.query.mode || '') === 'code') {
-          next({ path: '/code/apps' })
-          return
-        }
-        next()
-      },
+      meta: { requiresAuth: true, tenantContext: 'required' }
     },
     {
       path: '/code',
       component: () => import('@/views/CodeShellLayout.vue'),
       // Code uses the per-tab Control Plane ticket (`cp_tid`), not the
       // Builder/aPaaS local tenant URL contract.
-      meta: { requiresAuth: true, tenantContext: 'none', product: 'code' },
+      meta: { requiresAuth: true, tenantContext: 'none' },
       children: [
         {
           path: '',
@@ -117,11 +77,6 @@ export const routes: RouteRecordRaw[] = [
           path: 'apps',
           name: 'CodeApps',
           component: () => import('@/views/Apps.vue'),
-        },
-        {
-          path: 'system-assistant',
-          name: 'CodeSystemAssistant',
-          component: () => import('@/views/SystemAssistantPage.vue'),
         },
         {
           path: 'new',
@@ -140,13 +95,13 @@ export const routes: RouteRecordRaw[] = [
       path: '/db-connections',
       name: 'DbConnections',
       component: () => import('@/views/DbConnectionsPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true, product: 'builder' }
+      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true }
     },
     {
       path: '/apps',
       name: 'Apps',
       component: () => import('@/views/Apps.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
+      meta: { requiresAuth: true, tenantContext: 'required' }
     },
     // /projects (v2) 已删 — Project 表无真实进度字段, 真应用页在 /project/:id (单数).
     // /agents /specs /industry /runtime /mcp(McpHub) 这几个 v2 stub 页已删 (2026-06-08 清理).
@@ -154,123 +109,97 @@ export const routes: RouteRecordRaw[] = [
       path: '/workspace-catalog',
       name: 'WorkspaceCatalog',
       component: () => import('@/views/WorkspaceCatalogPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
+      meta: { requiresAuth: true, tenantContext: 'required' }
     },
     {
       path: '/workspace/:id?',
       name: 'Workspace',
       component: () => import('@/views/workspace/WorkspaceShell.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true, product: 'builder' }
+      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true }
     },
     {
       path: '/tenant-logs',
       name: 'TenantLogs',
       component: () => import('@/views/TenantLogsPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
-    },
-    {
-      path: '/audit-logs', name: 'AuditLogs',
-      component: () => import('@/views/TenantAuditLogsPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', requiresTenantAdmin: true, product: 'builder' }
-    },
-    {
-      path: '/applications/:id/audit-logs', name: 'ApplicationAuditLogs',
-      component: () => import('@/views/ApplicationAuditLogsPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
+      meta: { requiresAuth: true, tenantContext: 'required' }
     },
     {
       path: '/hub',
       name: 'CapabilitiesHub',
-      redirect: to => {
-        const tab = String(Array.isArray(to.query.tab) ? to.query.tab[0] : to.query.tab || 'skills')
-        const target = tab === 'knowledge'
-          ? '/knowledge'
-          : tab === 'mcp'
-            ? '/admin/mcp'
-            : tab === 'models' || tab === 'gateway'
-              ? '/settings'
-              : '/skills'
-        const query = target === '/settings'
-          ? { ...to.query, section: 'ai' }
-          : (() => {
-              const next = { ...to.query }
-              delete next.tab
-              return next
-            })()
-        return { path: target, query, hash: to.hash }
-      },
-      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true, product: 'builder' }
+      component: () => import('@/views/CapabilitiesHubPage.vue'),
+      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true }
     },
     {
-      // 技能库由统一设置页进入；保留直达路径兼容旧书签。
+      // 技能库已并入 hub;老链接 / router.push('/skills') 重定向到 hub 的技能 tab
       path: '/skills',
       name: 'Skills',
-      component: () => import('@/views/SkillLibraryPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
+      redirect: to => ({
+        path: '/hub',
+        query: { ...to.query, tab: 'skills' },
+        hash: to.hash,
+      }),
+      meta: { requiresAuth: true, tenantContext: 'required' }
     },
     {
       path: '/skills/:name/workspace',
       name: 'SkillWorkspace',
       component: () => import('@/views/SkillWorkspacePage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
+      meta: { requiresAuth: true, tenantContext: 'required' }
     },
     {
       path: '/project/:id',
       name: 'ProjectOverview',
       component: () => import('@/views/ProjectOverview.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
+      meta: { requiresAuth: true, tenantContext: 'required' }
     },
     {
       path: '/project/:id/git',
       name: 'ProjectGitSetup',
       component: () => import('@/views/ProjectGitSetup.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
+      meta: { requiresAuth: true, tenantContext: 'required' }
     },
     {
       path: '/git/callback/:provider',
       name: 'GitOAuthCallback',
       component: () => import('@/views/GitOAuthCallback.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
+      meta: { requiresAuth: true, tenantContext: 'required' }
     },
     {
       path: '/settings',
       name: 'Settings',
-      component: () => import('@/views/SettingsHubPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'none', navExpanded: true }
+      redirect: to => {
+        const rawTab = Array.isArray(to.query.tab) ? to.query.tab[0] : to.query.tab
+        const tab = String(rawTab || 'llm')
+        if (tab === 'envs') {
+          return { path: '/platform-envs', query: { ...to.query, tab: 'envs' }, hash: to.hash }
+        }
+        if (tab === 'assistant') {
+          return { path: '/platform-envs', query: { ...to.query, tab: 'assistant' }, hash: to.hash }
+        }
+        if (tab === 'team' || tab === 'members') {
+          return { path: '/tenant-users', query: { ...to.query }, hash: to.hash }
+        }
+        return { path: '/platform-envs', query: { ...to.query, tab: 'llm' }, hash: to.hash }
+      },
+      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true }
     },
     {
-      // Legacy CodingPage is kept only for the workspace preview iframe.
-      // User-facing Code sessions live under /code/* now.
       path: '/coding',
       name: 'Coding',
       component: () => import('@/views/CodingPage.vue'),
-      meta: {
-        requiresAuth: true,
-        tenantContext: 'required',
-        navExpanded: true,
-        product: 'code',
-        deprecated: true,
-      },
-      beforeEnter: (to, _from, next) => {
-        // The embedded Code preview is the only supported legacy entry.
-        if (String(to.query.embed || '') === 'true') {
-          next()
-          return
-        }
-        next({ path: '/code/apps', replace: true })
-      },
+      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true }
     },
     {
       path: '/admin/mcp',
       name: 'McpTools',
       component: () => import('@/views/McpToolsPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true, product: 'builder' }
+      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true }
     },
     {
       path: '/admin/agent-prompts',
       name: 'AgentPrompts',
       component: () => import('@/views/AgentPromptsPage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', requiresTenantAdmin: true, navExpanded: true, product: 'builder' }
+      meta: { requiresAuth: true, tenantContext: 'required', requiresTenantAdmin: true, navExpanded: true }
     },
     {
       path: '/work/:appId',
@@ -280,14 +209,14 @@ export const routes: RouteRecordRaw[] = [
         query: { ...to.query, app_id: String(to.params.appId) },
         hash: to.hash,
       }),
-      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
+      meta: { requiresAuth: true, tenantContext: 'required' }
     },
     // M3 (2026-05-27): 删 /datasources stub — 用老 /db-connections 真页 (DbConnectionsPage)
     // 当 "数据源" nav 入口. 重定向兼容 G3 老路径.
     {
       path: '/datasources',
       redirect: '/db-connections',
-      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
+      meta: { requiresAuth: true, tenantContext: 'required' }
     },
     // M1: 删 4 stub 路由 (/apis /docs /reports /models) — 产品定位不符.
     // L1: 删 /manage stub — admin-spa 已是平台管理完整入口. nav 管理直跳 /platform-admin.
@@ -295,39 +224,49 @@ export const routes: RouteRecordRaw[] = [
       path: '/platform-envs',
       name: 'PlatformEnvs',
       component: () => import('@/views/PlatformEnvs.vue'),
-      // The settings hub links to a single-purpose view. Keep the old
-      // unqualified route as the compatibility page with both tabs.
-      props: route => ({
-        only: route.query.tab === 'llm' ? 'llm' : route.query.tab === 'envs' ? 'envs' : undefined,
-      }),
-      meta: { requiresAuth: true, tenantContext: 'required', requiresTenantAdmin: true, navExpanded: true, product: 'builder' }
+      meta: { requiresAuth: true, tenantContext: 'required', requiresTenantAdmin: true, navExpanded: true }
     },
     {
       path: '/platform-admin/:pathMatch(.*)*',
       name: 'PlatformAdmin',
       component: () => import('@/views/PlatformAdminEmbed.vue'),
-      meta: { requiresAuth: true, tenantContext: 'none', requiresPlatformAdmin: true, navExpanded: true, desktop: 'hidden', product: 'builder' }
+      meta: { requiresAuth: true, tenantContext: 'none', requiresPlatformAdmin: true, navExpanded: true, desktop: 'hidden' }
     },
     {
       path: '/tenant-users',
       name: 'TenantUsers',
       component: () => import('@/views/TenantUsers.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', requiresTenantAdmin: true, navExpanded: true, product: 'builder' }
+      meta: { requiresAuth: true, tenantContext: 'required', requiresTenantAdmin: true, navExpanded: true }
     },
     {
       path: '/admin/tenants',
       name: 'PlatformTenants',
       component: () => import('@/views/PlatformTenants.vue'),
-      meta: { requiresAuth: true, tenantContext: 'none', requiresPlatformAdmin: true, navExpanded: true, desktop: 'hidden', product: 'builder' }
+      meta: { requiresAuth: true, tenantContext: 'none', requiresPlatformAdmin: true, navExpanded: true, desktop: 'hidden' }
     },
     {
-      // 知识库由统一设置页进入；保留直达路径兼容旧书签。
+      // 知识库已并入 hub;老链接重定向到 hub 的知识 tab(hub 内按 isPlatformAdmin 过滤可见性)
       path: '/knowledge',
       name: 'knowledge-base',
-      component: () => import('@/views/KnowledgeBasePage.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
+      redirect: to => ({
+        path: '/hub',
+        query: { ...to.query, tab: 'knowledge' },
+        hash: to.hash,
+      }),
+      meta: { requiresAuth: true, tenantContext: 'required' }
     },
-    ...desktopRoutes,
+    {
+      path: '/desktop-setup',
+      name: 'DesktopSetup',
+      component: () => import('@/views/DesktopSetupWizard.vue'),
+      meta: { requiresAuth: true, tenantContext: 'none' }
+    },
+    {
+      path: '/desktop-unavailable',
+      name: 'DesktopUnavailable',
+      component: () => import('@/views/DesktopUnavailable.vue'),
+      meta: { requiresAuth: true, tenantContext: 'none' }
+    },
     {
       path: '/generate/:id?',
       name: 'Generate',
@@ -337,7 +276,7 @@ export const routes: RouteRecordRaw[] = [
         query: { ...to.query, deploy_app_id: to.params.id as string },
         hash: to.hash,
       }),
-      meta: { requiresAuth: true, tenantContext: 'required', product: 'builder' }
+      meta: { requiresAuth: true, tenantContext: 'required' }
     }
 ]
 
@@ -357,8 +296,6 @@ let previewStatusRestoreInFlightGeneration: number | null = null
 let previewStatusRestoreFailures = 0
 let previewStatusRestoreRetryAt = 0
 const PREVIEW_STATUS_RETRY_DELAYS_MS = [0, 1_000, 5_000, 30_000]
-let desktopBootstrapReadyForDocument = false
-let userRefreshRevision: number | null = null
 
 async function restorePreviewStatus(): Promise<boolean> {
   const previewStore = usePreviewStore()
@@ -374,32 +311,6 @@ async function restorePreviewStatus(): Promise<boolean> {
 
 export function installRouterGuards(targetRouter: Router): void {
   targetRouter.beforeEach(async (to, _from, next) => {
-  if (typeof __DESKTOP__ !== 'undefined' && __DESKTOP__) {
-    if (!desktopBootstrapReadyForDocument) {
-      const desktopDecision = await loadDesktopBootstrapDecision(getDesktopState, to.path)
-      desktopBootstrapReadyForDocument = desktopDecision.readyForDocument
-      if (desktopDecision.redirect) {
-        next({ path: desktopDecision.redirect, replace: true })
-        return
-      }
-    }
-
-    const settingsRedirect = resolveDesktopSettingsRedirect(true, to.path)
-    if (settingsRedirect) {
-      next({ path: settingsRedirect, replace: true })
-      return
-    }
-
-    const workspaceEntryScope = resolveDesktopProductScope(getCachedDesktopState()?.config)
-    if (workspaceEntryScope) {
-      const workspaceRedirect = resolveDesktopWorkspaceRedirect(workspaceEntryScope, to.path)
-      if (workspaceRedirect) {
-        next({ path: workspaceRedirect, replace: true })
-        return
-      }
-    }
-  }
-
   const userStore = useUserStore()
   const modeStore = useModeStore()
   let hasCommittedSession = hasCommittedAuthSession()
@@ -436,23 +347,6 @@ export function installRouterGuards(targetRouter: Router): void {
   }
 
   if (to.meta.requiresAuth) {
-    // A tab can retain the previous Pinia user after its signed session
-    // changes. Refresh once per committed session before resolving the
-    // tenant URL, including the canonical `/apps` entry without tenantId.
-    const session = getAuthSessionState()
-    if (
-      to.meta.tenantContext === 'required'
-      && userStore.user
-      && session.token
-      && userRefreshRevision !== session.revision
-    ) {
-      userRefreshRevision = session.revision
-      try {
-        await userStore.fetchUser()
-      } catch {
-        // Tenant URL resolution remains fail-closed if the refresh is unavailable.
-      }
-    }
     const tenantResolution = await resolveTenantUrl(to, userStore, modeStore)
     if (tenantResolution !== true) {
       if (tenantResolution === false) {
@@ -460,15 +354,6 @@ export function installRouterGuards(targetRouter: Router): void {
       } else {
         next(tenantResolution as RouteLocationRaw)
       }
-      return
-    }
-
-    const productRedirect = redirectForDisabledProduct(
-      await loadProductAvailability(),
-      productForRoute(to),
-    )
-    if (productRedirect) {
-      next({ path: productRedirect, replace: true })
       return
     }
   }
@@ -486,10 +371,30 @@ export function installRouterGuards(targetRouter: Router): void {
     return
   }
 
+  if (
+    to.meta.requiresAuth
+    && userStore.isPlatformAdmin
+    && !userStore.tenantId
+    && !to.path.startsWith('/platform-admin')
+  ) {
+    next('/platform-admin')
+    return
+  }
+
   if (__DESKTOP__ && hasCommittedSession) {
     // 功能边界: hidden 路由落降级页
     const red = resolveDesktopRedirect(true, (to.meta as any), to.path)
     if (red) { next({ path: red, replace: true }); return }
+    // 首启分流: 未配齐 aPaaS+LLM → 向导 (排除向导/登录/降级页自身防环; 已确认配齐则跳过拉取)
+    const exempt = ['/desktop-setup', '/desktop-unavailable', '/login'].some(p => to.path.startsWith(p))
+    if (!exempt && !isOnboardingConfirmed()) {
+      const st = await fetchOnboardingState()
+      if (st.configured) {
+        markOnboardingConfirmed()
+      } else {
+        next({ path: '/desktop-setup', replace: true }); return
+      }
+    }
   }
 
   if (to.meta.requiresAuth) {
@@ -498,16 +403,6 @@ export function installRouterGuards(targetRouter: Router): void {
   }
 
   if (to.path === '/login' && hasCommittedSession) {
-    const externalRedirect = resolveExternalLoginRedirect(to.query.redirect)
-    if (externalRedirect) {
-      if (!localStorage.getItem('access_token')?.trim()) {
-        next()
-        return
-      }
-      window.location.replace(externalRedirect)
-      next(false)
-      return
-    }
     next(safeLoginRedirectPath(to.query.redirect) || '/')
   } else {
     next()

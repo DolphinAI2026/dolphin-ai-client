@@ -163,51 +163,6 @@ async def test_apaas_auth_provider_does_not_fall_back_to_local_password(db_sessi
 
 
 @pytest.mark.asyncio
-async def test_apaas_login_does_not_exchange_control_plane_token_when_binding_flag_is_set(
-    db_session,
-    monkeypatch,
-):
-    _set_auth_provider(monkeypatch, "apaas")
-    monkeypatch.setattr(settings, "control_plane_binding_enabled", True)
-    monkeypatch.setattr(settings, "apaas_base_url", "https://apaas.example/backend")
-
-    async def fake_platform_login(_username, _password):
-        return None, {}
-
-    async def fake_backend_login(_username, _password, _tenant_id=""):
-        return "apaas-backend-token", {
-            "data": {
-                "token": "apaas-backend-token",
-                "defaultTenantId": "apaas-tenant-1",
-                "user": {"id": "apaas-user-1", "username": "apaas_admin"},
-            }
-        }
-
-    async def fake_switchable_tenants(_backend_token, _default_tenant_id):
-        return []
-
-    async def unexpected_control_plane_exchange(*_args, **_kwargs):
-        raise AssertionError("aPaaS-only login must not exchange a Full Workspace token")
-
-    monkeypatch.setattr(auth_routes, "_apaas_platform_login", fake_platform_login)
-    monkeypatch.setattr(auth_routes, "_apaas_backend_login", fake_backend_login)
-    monkeypatch.setattr(auth_routes, "_apaas_switchable_tenants", fake_switchable_tenants)
-    monkeypatch.setattr(auth_routes, "exchange_apaas_token", unexpected_control_plane_exchange)
-
-    response = await login(
-        UserLogin(username="apaas_admin", password="secret"),
-        db_session,
-    )
-
-    assert response.access_token
-    payload = decode_token(response.access_token)
-    user = await db_session.get(User, int(payload["sub"]))
-    assert user is not None
-    assert user.account_source == "apaas"
-    assert control_plane_access_token(user) is None
-
-
-@pytest.mark.asyncio
 async def test_control_plane_auth_provider_uses_platform_binding_without_merging_apaas_user(
     db_session,
     monkeypatch,
@@ -330,39 +285,6 @@ async def test_control_plane_auth_provider_allows_login_without_captcha_when_dis
     assert payload["type"] == "control_plane_code"
     assert payload["cp_tid"] == "tenant-1"
     assert "tid" not in payload
-
-
-@pytest.mark.asyncio
-async def test_control_plane_login_prefers_the_users_own_organization_over_shared_default(
-    db_session,
-    monkeypatch,
-):
-    _set_auth_provider(monkeypatch, "control_plane")
-    monkeypatch.setattr(settings, "control_plane_binding_enabled", False)
-
-    async def fake_control_plane_login(*_args):
-        return auth_routes.ControlPlaneAuthResult(
-            username="admin",
-            display_name="Admin",
-            external_user_id="admin-user",
-            roles=["CONTROL_PLANE_ADMIN"],
-            tenant_id="2077284540335579137",
-            tenant_name="示例租户",
-            available_tenants=[
-                {"tenant_id": "0", "tenant_name": "admin 的组织"},
-                {"tenant_id": "2077284540335579137", "tenant_name": "示例租户"},
-            ],
-            access_token="control-plane-access-token",
-        )
-
-    monkeypatch.setattr(auth_routes, "login_to_control_plane", fake_control_plane_login)
-
-    response = await login(UserLogin(username="admin", password="password"), db_session)
-
-    payload = decode_token(response.access_token)
-    assert payload["type"] == "control_plane_code"
-    assert payload["cp_tid"] == "0"
-    assert payload["cp_tname"] == "admin 的组织"
 
 
 @pytest.mark.asyncio

@@ -40,14 +40,12 @@ from app.deps import (
     get_auth_context,
     get_platform_auth_context,
     platform_admin_has_unscoped_tenant_access,
-    platform_admin_has_bound_tenant_access,
     resolve_default_tenant_id_for_user,
 )
 from app.config import settings
 from app import runtime
 from app.error_messages import SELECT_TOKEN_INVALID, SELECT_TOKEN_EXPIRED
 from app.tenant_public_id import ensure_tenant_public_id
-from app.builder_ai_management import exchange_web_console_session
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -913,10 +911,7 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
             ),
         )
 
-    # A pure aPaaS deployment owns its Builder identity and tenant context.
-    # The binding flag is only meaningful when Control Plane is the selected
-    # authentication authority; it must not pull Full Workspace into aPaaS login.
-    if settings.control_plane_binding_enabled and _auth_provider() == "control_plane":
+    if settings.control_plane_binding_enabled:
         if not local_tenants:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -960,27 +955,12 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
             local_tenants,
         )
         await db.commit()
-        web_console = None
-        try:
-            web_console = await exchange_web_console_session(
-                user_id=str(user.apaas_user_id or user.id),
-                username=user.username,
-                apaas_access_token=str(user.apaas_token or backend_token or platform_token or ""),
-                apaas_tenant_id=str(selected.apaas_tenant_id_str or user.apaas_tenant_id or ""),
-            )
-        except HTTPException as exc:
-            logger.warning(
-                "Builder AI 管理会话创建失败，保留 aPaaS 登录结果: status=%s",
-                exc.status_code,
-            )
         return LoginResponse(
             access_token=access_token,
             tenants=tenant_options,
             entry_path="/",
             is_platform_admin=is_platform_admin,
             has_tenant_context=True,
-            web_console_access_token=(web_console or {}).get("access_token"),
-            web_console_tenant_id=(web_console or {}).get("tenant_id"),
         )
 
     if is_platform_admin:
@@ -1306,23 +1286,6 @@ def _control_plane_code_token(
     )
 
 
-def _prefer_control_plane_personal_tenant(
-    identity: ControlPlaneAuthResult,
-) -> ControlPlaneAuthResult:
-    """Use the account's own Code organization when the remote default is shared."""
-    username = str(identity.username or "").strip()
-    personal_name = f"{username} 的组织" if username else ""
-    if not personal_name:
-        return identity
-
-    for tenant in getattr(identity, "available_tenants", None) or []:
-        tenant_id = str(tenant.get("tenant_id") or "").strip()
-        tenant_name = str(tenant.get("tenant_name") or "").strip()
-        if tenant_id and tenant_name == personal_name:
-            return replace(identity, tenant_id=tenant_id, tenant_name=tenant_name)
-    return identity
-
-
 async def _control_plane_login_response(user_data: UserLogin, db: AsyncSession) -> LoginResponse:
     captcha_id = str(user_data.captcha_id or "").strip()
     captcha_code = str(user_data.captcha_code or "").strip()
@@ -1332,8 +1295,6 @@ async def _control_plane_login_response(user_data: UserLogin, db: AsyncSession) 
         captcha_id,
         captcha_code,
     )
-    if not runtime.is_desktop():
-        identity = _prefer_control_plane_personal_tenant(identity)
     user = await _ensure_control_plane_user(db, identity)
     if runtime.is_desktop():
         tenant_role = (
@@ -1442,13 +1403,6 @@ async def _try_apaas_provider_login_response(
     except SQLAlchemyError as exc:
         await db.rollback()
         logger.exception("aPaaS 登录同步本地数据库失败，已回滚")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="aPaaS 登录成功，但本地数据库同步失败，请稍后重试或联系管理员",
-        ) from exc
-    except (ConnectionError, TimeoutError) as exc:
-        await db.rollback()
-        logger.exception("aPaaS 登录同步本地数据库连接失败，已回滚")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="aPaaS 登录成功，但本地数据库同步失败，请稍后重试或联系管理员",
@@ -1773,18 +1727,6 @@ async def switch_tenant(
     本地兜底平台管理员可以切到任意 active 租户；aPaaS 登录用户仅限自己可登录的
     active membership。aPaaS 平台管理员的全量租户同步不等于拥有工作台登录权限。
     """
-    if (
-        ctx.user.account_source == "control_plane"
-        and not runtime.is_desktop()
-        and (
-            ctx.tenant_access_scope == "control_plane_code"
-            or bool(getattr(ctx, "control_plane_tenant_id", None))
-        )
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="Control Plane 登录必须通过组织切换，不能切换 Builder 本地租户",
-        )
     if runtime.is_desktop() and ctx.user.account_source == "control_plane":
         token = control_plane_access_token(ctx.user)
         if not token:
@@ -1830,10 +1772,6 @@ async def switch_tenant(
         ).scalar_one_or_none()
         if not tenant:
             raise HTTPException(status_code=404, detail="租户不存在或未启用")
-    elif await platform_admin_has_bound_tenant_access(db, ctx.user, int(data.tenant_id)):
-        tenant = await db.get(Tenant, int(data.tenant_id))
-        if not tenant or tenant.status != 1:
-            raise HTTPException(status_code=404, detail="租户不存在或未启用")
     else:
         membership = (
             await db.execute(
@@ -1860,9 +1798,5 @@ async def switch_tenant(
     except Exception as exc:
         logger.warning("switch-tenant 后写 current_app slot 失败: %s", exc)
 
-    access_token = create_access_token(
-        ctx.user,
-        tenant_id=data.tenant_id,
-        apaas_tenant_id=str(tenant.apaas_tenant_id_str or "").strip() or None,
-    )
+    access_token = create_access_token(ctx.user, tenant_id=data.tenant_id)
     return Token(access_token=access_token)

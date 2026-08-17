@@ -35,22 +35,6 @@ class AuthContext:
     control_plane_tenant_name: Optional[str] = None
 
 
-def is_control_plane_context(ctx: AuthContext) -> bool:
-    """Return whether the remote Control Plane owns this request's scope.
-
-    A Control Plane ticket deliberately has no local Builder tenant.  Keep
-    this check centralized so tenant-scoped Builder routes do not accidentally
-    reintroduce a local SQLite tenant requirement.  Standalone aPaaS sessions
-    remain local-projection backed and therefore return ``False``.
-    """
-    return (
-        str(getattr(getattr(ctx, "user", None), "account_source", "") or "")
-        .strip()
-        .lower()
-        == "control_plane"
-    )
-
-
 async def resolve_default_tenant_id_for_user(db: AsyncSession, user_id: int) -> int | None:
     """Return the user's default active tenant id, falling back to the first active membership."""
     result = await db.execute(
@@ -85,14 +69,6 @@ async def resolve_effective_tenant_id(db: AsyncSession, ctx: AuthContext) -> int
     scoped, so platform admins fall back to their default membership, then the
     first active tenant in the system.
     """
-    if is_control_plane_context(ctx):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "CONTROL_PLANE_REMOTE_SCOPE_REQUIRED",
-                "message": "当前请求由 Control Plane 组织负责，不能使用本地 Builder 租户配置",
-            },
-        )
     if ctx.tenant_id and ctx.tenant_id > 0:
         return ctx.tenant_id
     if ctx.tenant_access_scope == "platform_only":
@@ -124,35 +100,6 @@ async def resolve_bound_apaas_tenant_id(db: AsyncSession, tenant_id: int | None)
     value = result.scalar_one_or_none()
     text = str(value or "").strip()
     return text or None
-
-
-async def platform_admin_has_bound_tenant_access(
-    db: AsyncSession,
-    user: User,
-    tenant_id: int,
-) -> bool:
-    """Whether an external platform admin may enter a bound aPaaS tenant.
-
-    External aPaaS admins are not globally unscoped, but a local tenant with an
-    explicit PlatformEnv binding is a valid workbench target. Unrelated local
-    tenants still require a UserTenant membership.
-    """
-    if not user.is_platform_admin or platform_admin_has_unscoped_tenant_access(user):
-        return False
-    from app.models import PlatformEnv
-
-    result = await db.execute(
-        select(Tenant.id)
-        .join(PlatformEnv, PlatformEnv.tenant_id == Tenant.id)
-        .where(
-            Tenant.id == int(tenant_id),
-            Tenant.status == 1,
-            PlatformEnv.platform_tenant_id.is_not(None),
-            PlatformEnv.platform_tenant_id != "",
-        )
-        .limit(1)
-    )
-    return result.scalar_one_or_none() is not None
 
 
 def _first_text(*values: object) -> str | None:
@@ -191,23 +138,6 @@ def _control_plane_code_context(user: User, payload: dict) -> AuthContext | None
         control_plane_tenant_id=control_plane_tenant_id,
         control_plane_tenant_name=str(payload.get("cp_tname") or "").strip() or None,
     )
-
-
-async def _resolve_control_plane_code_context(
-    db: AsyncSession,
-    user: User,
-    payload: dict,
-) -> AuthContext | None:
-    """Keep Control Plane organization authority independent of local tenants.
-
-    Older builds projected a Control Plane organization into ``Tenant`` and
-    even wrote mapping fields during authentication.  That made unrelated
-    Builder routes silently depend on desktop SQLite.  The remote organization
-    id is now the only tenant authority for this context; standalone/aPaaS
-    sessions continue to use their own local projection path.
-    """
-    del db
-    return _control_plane_code_context(user, payload)
 
 
 def platform_admin_has_unscoped_tenant_access(user: User) -> bool:
@@ -306,7 +236,7 @@ async def _get_auth_context_allow_platform_only(
             user = result.scalar_one_or_none()
             if not user or not user.is_active:
                 raise credentials_exception
-            control_plane_context = await _resolve_control_plane_code_context(db, user, payload)
+            control_plane_context = _control_plane_code_context(user, payload)
             if not control_plane_context:
                 raise credentials_exception
             return control_plane_context
@@ -393,20 +323,6 @@ async def _get_auth_context_allow_platform_only(
             apaas_user_id=eff_apaas_uid,
             apaas_tenant_id=eff_apaas_tid,
             tenant_access_scope="unscoped",
-        )
-
-    # An external aPaaS platform admin may enter a local tenant that has an
-    # explicit platform binding, even without a UserTenant row.
-    if await platform_admin_has_bound_tenant_access(db, user, tenant_id):
-        return AuthContext(
-            user=user,
-            tenant_id=tenant_id,
-            tenant_role="platform_admin",
-            org_permissions={"*": True},
-            apaas_user_id=eff_apaas_uid,
-            apaas_tenant_id=eff_apaas_tid,
-            tenant_access_scope="tenant",
-            control_plane_tenant_id=str(payload.get("cp_tid") or user.coding_tenant_id or "").strip() or None,
         )
 
     # Get user-tenant relationship
@@ -505,7 +421,7 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
             raise ValueError("User not found")
         if not user.is_active:
             raise ValueError("User is disabled")
-        control_plane_context = await _resolve_control_plane_code_context(db, user, payload)
+        control_plane_context = _control_plane_code_context(user, payload)
         if control_plane_context:
             return control_plane_context
 

@@ -20,18 +20,11 @@ def _stub_service_runtime_bootstrap(monkeypatch):
     from app.code_runtime import service
     from app.code_runtime.sandbox_auth import RuntimeBootstrap, split_entry_token
 
-    async def fake_bootstrap(
-        builder_url: str,
-        *,
-        runtime_base_url: str | None = None,
-    ):
+    async def fake_bootstrap(builder_url: str):
         clean_builder_url, _entry_token = split_entry_token(builder_url)
         return RuntimeBootstrap(
             clean_builder_url=clean_builder_url,
-            runtime_base_url=(
-                runtime_base_url
-                or service.derive_runtime_base_url(clean_builder_url)
-            ),
+            runtime_base_url=service.derive_runtime_base_url(clean_builder_url),
             runtime_cookie="test-runtime-cookie",
             runtime_cookie_hash="c" * 64,
             expires_at=None,
@@ -649,66 +642,24 @@ def test_derive_runtime_base_url_strips_builder_suffix():
     assert derive_runtime_base_url("https://sandbox.example.com/builder") == "https://sandbox.example.com"
 
 
-def test_control_plane_base_url_derives_from_workspace_login_url(monkeypatch):
-    from app.config import settings
+def test_control_plane_base_url_defaults_to_local_dev_port(monkeypatch):
     from app.code_runtime.service import control_plane_base_url
 
     monkeypatch.delenv("DOLPHIN_CODE_CONTROL_PLANE_URL", raising=False)
-    monkeypatch.setattr(settings, "dolphin_code_control_plane_url", "")
-    monkeypatch.setattr(settings, "dolphin_workspace_base_url", "https://om-demo.example")
 
-    assert control_plane_base_url() == "https://om-demo.example/control-plane"
+    assert control_plane_base_url() == "http://127.0.0.1:8080"
 
 
-def test_local_model_proxy_token_is_stable_and_scope_bound(monkeypatch):
-    from app.config import settings
-    from app.code_runtime.service import create_local_model_proxy_token
-
-    monkeypatch.setattr(settings, "jwt_secret_key", "unit-test-secret", raising=False)
-
-    first = create_local_model_proxy_token(
-        application_id="application-a",
-        user_id=11,
-        tenant_id=0,
-        control_plane_tenant_id="tenant-cp",
-    )
-    second = create_local_model_proxy_token(
-        application_id="application-a",
-        user_id=11,
-        tenant_id=0,
-        control_plane_tenant_id="tenant-cp",
-    )
-    other = create_local_model_proxy_token(
-        application_id="application-b",
-        user_id=11,
-        tenant_id=0,
-        control_plane_tenant_id="tenant-cp",
-    )
-
-    assert first == second
-    assert first != other
-    assert len(first) >= 40
-
-
-def test_control_plane_headers_combine_user_bearer_and_delegated_identity(monkeypatch):
+def test_control_plane_headers_prefer_user_token_and_add_workspace_tenant(monkeypatch):
     from app.config import settings
     from app.code_runtime import service
 
     monkeypatch.delenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", raising=False)
-    monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_DELEGATION_SECRET", "shared-secret")
     monkeypatch.setattr(settings, "dolphin_code_control_plane_token", "settings-token", raising=False)
-    monkeypatch.setattr(settings, "dolphin_code_control_plane_delegation_secret", "", raising=False)
 
     ctx = SimpleNamespace(
-        user=SimpleNamespace(
-            id=11,
-            username="admin",
-            display_name="Admin User",
-            coding_tenant_id="default",
-        ),
-        apaas_user_id="apaas-user-1",
+        user=SimpleNamespace(coding_tenant_id="default"),
         apaas_tenant_id="apaas-tenant-1",
-        tenant_id=7,
     )
     headers = service._control_plane_headers(
         "Bearer user-token",
@@ -718,39 +669,7 @@ def test_control_plane_headers_combine_user_bearer_and_delegated_identity(monkey
     assert headers["Authorization"] == "Bearer user-token"
     assert "X-Auth-Provider" not in headers
     assert headers["X-Tenant-Id"] == "default"
-    assert headers["X-AI-Builder-Delegation-Secret"] == "shared-secret"
-    assert headers["X-AI-Builder-Delegated-User-Id"] == "apaas-user-1"
-    assert headers["X-AI-Builder-Delegated-Username"] == "ai-builder-admin-11"
-    assert headers["X-AI-Builder-Delegated-Display-Name-B64"] == "QWRtaW4gVXNlcg=="
-
-
-def test_control_plane_headers_omit_delegated_headers_without_context(monkeypatch):
-    from app.config import settings
-    from app.code_runtime import service
-
-    monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_DELEGATION_SECRET", "shared-secret")
-    monkeypatch.setattr(settings, "dolphin_code_control_plane_delegation_secret", "", raising=False)
-
-    headers = service._control_plane_headers("Bearer user-token")
-
-    assert headers == {"Authorization": "Bearer user-token"}
-
-
-@pytest.mark.parametrize(
-    ("username", "expected"),
-    [
-        ("admin", "ai-builder-admin-11"),
-        ("root", "ai-builder-root-11"),
-    ],
-)
-def test_delegated_identity_headers_map_reserved_usernames(username, expected):
-    from app.code_runtime import service
-
-    headers = service._delegated_identity_headers(
-        SimpleNamespace(user=SimpleNamespace(id=11, username=username)),
-    )
-
-    assert headers["X-AI-Builder-Delegated-Username"] == expected
+    assert not any(key.startswith("X-AI-Builder-") for key in headers)
 
 
 def test_control_plane_headers_prefer_current_builder_tenant_mapping(monkeypatch):
@@ -791,32 +710,6 @@ def test_control_plane_headers_prefer_active_builder_tenant_mapping(monkeypatch)
     )
 
     assert headers["X-Tenant-Id"] == "0"
-
-
-def test_control_plane_headers_use_apaas_tenant_without_untrusted_delegation(monkeypatch):
-    from app.config import settings
-    from app.code_runtime import service
-
-    monkeypatch.delenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", raising=False)
-    monkeypatch.delenv("DOLPHIN_CODE_CONTROL_PLANE_DELEGATION_SECRET", raising=False)
-    monkeypatch.setattr(settings, "dolphin_code_control_plane_token", "", raising=False)
-    monkeypatch.setattr(settings, "dolphin_code_control_plane_delegation_secret", "", raising=False)
-
-    ctx = SimpleNamespace(
-        user=SimpleNamespace(coding_tenant_id=None),
-        control_plane_tenant_id=None,
-        apaas_tenant_id="apaas-tenant-1",
-        tenant_id=3,
-    )
-    headers = service._control_plane_headers(
-        "Bearer apaas-access-token",
-        delegated_context=ctx,
-        auth_provider="apaas",
-    )
-
-    assert headers["Authorization"] == "Bearer apaas-access-token"
-    assert headers["X-Tenant-Id"] == "apaas-tenant-1"
-    assert not any(key.startswith("X-AI-Builder-") for key in headers)
 
 
 @pytest.mark.asyncio
@@ -879,74 +772,6 @@ def test_control_plane_headers_include_delegation_secret(monkeypatch):
     assert headers["X-AI-Builder-Delegation-Secret"] == "shared-secret"
 
 
-@pytest.mark.parametrize(
-    ("username", "expected"),
-    [
-        ("admin", "ai-builder-admin-11"),
-        ("root", "ai-builder-root-11"),
-    ],
-)
-def test_workspace_open_headers_preserve_trusted_delegation_with_coordinator_token(
-    monkeypatch,
-    username,
-    expected,
-):
-    from app.config import settings
-    from app.code_runtime import service
-
-    monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_TOKEN", "workspace-token")
-    monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_DELEGATION_SECRET", "shared-secret")
-    monkeypatch.setattr(settings, "dolphin_code_control_plane_delegation_secret", "", raising=False)
-    ctx = SimpleNamespace(
-        user=SimpleNamespace(
-            id=11,
-            username=username,
-            display_name="Admin User",
-            coding_tenant_id="tenant-current",
-        ),
-        apaas_user_id="apaas-user-1",
-        apaas_tenant_id="apaas-tenant-1",
-        tenant_id=7,
-    )
-
-    headers = service._workspace_open_headers(
-        "Bearer user-token",
-        delegated_context=ctx,
-        shell_session_id=42,
-    )
-
-    assert headers["Content-Type"] == "application/json"
-    assert headers["Authorization"] == "Bearer workspace-token"
-    assert headers["X-Tenant-Id"] == "tenant-current"
-    assert headers["X-AI-Builder-Delegation-Secret"] == "shared-secret"
-    assert headers["X-AI-Builder-Delegated-User-Id"] == "apaas-user-1"
-    assert headers["X-AI-Builder-Delegated-Username"] == expected
-    assert headers["X-AI-Builder-Delegated-Display-Name-B64"] == "QWRtaW4gVXNlcg=="
-
-
-def test_workspace_open_headers_omit_delegated_identity_without_secret(monkeypatch):
-    from app.config import settings
-    from app.code_runtime import service
-
-    monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_TOKEN", "workspace-token")
-    monkeypatch.delenv("DOLPHIN_CODE_CONTROL_PLANE_DELEGATION_SECRET", raising=False)
-    monkeypatch.setattr(settings, "dolphin_code_control_plane_delegation_secret", "", raising=False)
-    ctx = SimpleNamespace(
-        user=SimpleNamespace(id=11, username="admin", coding_tenant_id="tenant-current"),
-        apaas_user_id="apaas-user-1",
-        tenant_id=7,
-    )
-
-    headers = service._workspace_open_headers(
-        "Bearer user-token",
-        delegated_context=ctx,
-    )
-
-    assert headers["Content-Type"] == "application/json"
-    assert headers["Authorization"] == "Bearer workspace-token"
-    assert not any(key.startswith("X-AI-Builder-") for key in headers)
-
-
 @pytest.mark.asyncio
 async def test_default_workspace_open_reports_control_plane_connection_target(monkeypatch):
     import httpx
@@ -969,7 +794,6 @@ async def test_default_workspace_open_reports_control_plane_connection_target(mo
 
     monkeypatch.delenv("DOLPHIN_CODE_CONTROL_PLANE_URL", raising=False)
     monkeypatch.setattr(settings, "dolphin_code_control_plane_url", "")
-    monkeypatch.setattr(settings, "dolphin_workspace_base_url", "https://om-demo.example")
     monkeypatch.setattr(settings, "dolphin_code_builder_url", "")
     monkeypatch.setattr(service.httpx, "AsyncClient", FailingClient)
 
@@ -977,7 +801,7 @@ async def test_default_workspace_open_reports_control_plane_connection_target(mo
         await service.default_workspace_open("app-1")
 
     assert exc.value.status_code == 503
-    assert "https://om-demo.example/control-plane" in str(exc.value.detail)
+    assert "http://127.0.0.1:8080" in str(exc.value.detail)
 
 
 @pytest.mark.asyncio
@@ -1050,42 +874,6 @@ async def test_default_workspace_open_rebases_builder_urls_to_local_builder(monk
     assert opened["chatUrl"] == "http://127.0.0.1:5173/builder/?token=entry-token"
     assert opened["specReviewUrl"] == "http://127.0.0.1:5173/builder/?tab=spec&token=entry-token"
     assert opened["webideUrl"] == "https://sandbox.mock/workspaces/ws-1/ide/?token=entry-token"
-
-
-@pytest.mark.asyncio
-async def test_default_workspace_open_uses_configured_cold_start_timeout(monkeypatch):
-    from app.config import settings
-    from app.code_runtime import service
-
-    timeouts: list[object] = []
-
-    class FakeResponse:
-        status_code = 200
-        text = ""
-
-        def json(self):
-            return {"specReviewUrl": "https://sandbox.example.com/builder"}
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            timeouts.append(kwargs["timeout"])
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_args):
-            return False
-
-        async def post(self, _url: str, **_kwargs):
-            return FakeResponse()
-
-    monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_URL", "https://code.example.com/control-plane")
-    monkeypatch.setattr(settings, "dolphin_code_workspace_open_timeout_seconds", 660)
-    monkeypatch.setattr(service.httpx, "AsyncClient", FakeClient)
-
-    await service.default_workspace_open("app-1")
-
-    assert timeouts[0].read == 660
 
 
 @pytest.mark.asyncio
@@ -1169,106 +957,6 @@ async def test_list_code_applications_fetches_and_maps_control_plane_apps(monkey
 
 
 @pytest.mark.asyncio
-async def test_list_code_applications_uses_local_mode_without_control_plane(monkeypatch):
-    from app.code_runtime import service
-
-    class UnexpectedClient:
-        def __init__(self, *args, **kwargs):
-            raise AssertionError("control plane should not be called in local mode")
-
-    monkeypatch.setenv("DOLPHIN_CODE_LOCAL_CODE_APPLICATIONS", "true")
-    monkeypatch.setattr(service.httpx, "AsyncClient", UnexpectedClient)
-
-    result = await service.list_code_applications(keyword="crm", page=2, page_size=5)
-
-    assert result == {
-        "items": [],
-        "page": 2,
-        "pageSize": 5,
-        "total": 0,
-        "source": "d-ai-code-local",
-    }
-
-
-@pytest.mark.asyncio
-async def test_list_code_applications_restores_local_workspaces(
-    db_session,
-    tmp_path,
-    monkeypatch,
-):
-    from app.code_runtime import service
-    from app.models import RegisteredWorkspace
-
-    class UnexpectedClient:
-        def __init__(self, *args, **kwargs):
-            raise AssertionError("local application list must not call Control Plane")
-
-    local_path = tmp_path / "sales-assistant"
-    local_path.mkdir()
-    other_path = tmp_path / "other-app"
-    other_path.mkdir()
-    db_session.add_all([
-        RegisteredWorkspace(
-            ws_id="11_local",
-            abs_path=str(local_path.resolve()),
-            user_id=11,
-            tenant_id=7,
-            workspace_type="code-local-application",
-            apaas_app_id="local-sales",
-            display_name="销售助手",
-        ),
-        RegisteredWorkspace(
-            ws_id="12_other",
-            abs_path=str(other_path.resolve()),
-            user_id=12,
-            tenant_id=7,
-            workspace_type="code-local-application",
-            apaas_app_id="local-other",
-            display_name="其他应用",
-        ),
-    ])
-    await db_session.commit()
-    monkeypatch.setattr(service.httpx, "AsyncClient", UnexpectedClient)
-    ctx = SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7)
-
-    result = await service.list_code_applications(
-        source="local",
-        keyword="销售",
-        db=db_session,
-        ctx=ctx,
-    )
-
-    assert result["source"] == "desktop-local"
-    assert result["total"] == 1
-    assert result["items"] == [{
-        "id": "local-sales",
-        "external_application_id": "local-sales",
-        "app_name": "销售助手",
-        "app_code": "sales-assistant",
-        "description": None,
-        "source": "desktop-local",
-        "app_type": "ai-code",
-        "status": "READY",
-        "local_status": "completed",
-        "remote_status": None,
-        "models": 0,
-        "forms": 0,
-        "roles": 0,
-        "dicts": 0,
-        "local_workspace_path": str(local_path.resolve()),
-        "workspace_id": "11_local",
-        "logical_application_id": None,
-        "linked_remote_application_id": None,
-        "linked_remote_deployment_id": None,
-        "availability": "ready",
-        "repository": None,
-        "owner": None,
-        "created_at": result["items"][0]["created_at"],
-        "updated_at": result["items"][0]["updated_at"],
-    }]
-
-
-@pytest.mark.asyncio
 async def test_list_code_applications_rejects_non_json_success_response(monkeypatch):
     from app.code_runtime import service
 
@@ -1302,7 +990,7 @@ async def test_list_code_applications_rejects_non_json_success_response(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_create_code_application_posts_to_control_plane_without_seed_project_id(monkeypatch):
+async def test_create_code_application_posts_to_control_plane_with_default_seed(monkeypatch):
     from app.code_runtime import service
 
     calls: list[dict] = []
@@ -1354,6 +1042,7 @@ async def test_create_code_application_posts_to_control_plane_without_seed_proje
         "json": {
             "appCode": "sales-lead-helper",
             "appName": "销售线索评分助手",
+            "seedProjectId": "1781233861147",
         },
     }]
     assert result["external_application_id"] == "code-app-new"
@@ -1363,135 +1052,7 @@ async def test_create_code_application_posts_to_control_plane_without_seed_proje
 
 
 @pytest.mark.asyncio
-async def test_create_code_application_uses_local_mode_without_control_plane(monkeypatch):
-    from app.code_runtime import service
-
-    class UnexpectedClient:
-        def __init__(self, *args, **kwargs):
-            raise AssertionError("control plane should not be called in local mode")
-
-    monkeypatch.setenv("DOLPHIN_CODE_LOCAL_CODE_APPLICATIONS", "true")
-    monkeypatch.setattr(service.httpx, "AsyncClient", UnexpectedClient)
-
-    result = await service.create_code_application(
-        app_name="Dolphin Code CRM",
-        app_code="dolphin-code-crm",
-    )
-
-    assert result["external_application_id"].startswith("local-")
-    assert result["app_name"] == "Dolphin Code CRM"
-    assert result["app_code"] == "dolphin-code-crm"
-    assert result["status"] == "READY"
-    assert result["local_status"] == "completed"
-
-
-@pytest.mark.asyncio
-async def test_create_code_application_registers_existing_local_workspace(
-    db_session,
-    tmp_path,
-    monkeypatch,
-):
-    from sqlalchemy import select
-
-    from app.code_runtime import service
-    from app.models import RegisteredWorkspace
-
-    class UnexpectedClient:
-        def __init__(self, *args, **kwargs):
-            raise AssertionError("local application create must not call Control Plane")
-
-    monkeypatch.setattr(service.httpx, "AsyncClient", UnexpectedClient)
-    project_path = tmp_path / "sales-local"
-    project_path.mkdir()
-    (project_path / "README.md").write_text("existing", encoding="utf-8")
-    ctx = SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7)
-
-    result = await service.create_code_application(
-        app_name="本地销售助手",
-        app_code="sales-local",
-        local_application=True,
-        local_workspace_path=str(project_path),
-        directory_mode="existing_directory",
-        initialize_project=True,
-        db=db_session,
-        ctx=ctx,
-    )
-
-    workspace = (
-        await db_session.execute(
-            select(RegisteredWorkspace).where(
-                RegisteredWorkspace.apaas_app_id == result["external_application_id"]
-            )
-        )
-    ).scalar_one()
-    assert result["external_application_id"].startswith("local-")
-    assert result["local_workspace_path"] == str(project_path.resolve())
-    assert result["workspace_id"] == workspace.ws_id
-    assert workspace.workspace_type == "code-local-application"
-    assert workspace.display_name == "本地销售助手"
-    assert workspace.logical_application_id == result["logical_application_id"]
-    assert result["availability"] == "ready"
-    assert result["already_registered"] is False
-    assert (project_path / "README.md").read_text(encoding="utf-8") == "existing"
-    assert not (project_path / ".git").exists()
-
-    reused = await service.create_code_application(
-        app_name="重复请求",
-        app_code="sales-local-again",
-        local_application=True,
-        local_workspace_path=str(project_path.parent / "." / project_path.name),
-        directory_mode="existing_directory",
-        db=db_session,
-        ctx=ctx,
-    )
-
-    assert reused["external_application_id"] == result["external_application_id"]
-    assert reused["logical_application_id"] == result["logical_application_id"]
-    assert reused["already_registered"] is True
-
-
-@pytest.mark.asyncio
-async def test_list_code_applications_projects_persisted_local_location_contract(
-    db_session,
-    tmp_path,
-):
-    from app.code_runtime import service
-    from app.models import RegisteredWorkspace
-
-    missing_workspace = tmp_path / "missing-local-workspace"
-    db_session.add(RegisteredWorkspace(
-        ws_id="workspace-local-sales",
-        abs_path=str(missing_workspace),
-        user_id=11,
-        tenant_id=7,
-        workspace_type="code-local-application",
-        apaas_app_id="local-sales",
-        logical_application_id="logical-sales",
-        linked_remote_application_id="remote-sales",
-        linked_remote_deployment_id="deployment-sales",
-        display_name="本机销售助手",
-    ))
-    await db_session.commit()
-
-    result = await service.list_code_applications(
-        source="local",
-        db=db_session,
-        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
-    )
-
-    assert result["items"] == [{
-        **result["items"][0],
-        "logical_application_id": "logical-sales",
-        "linked_remote_application_id": "remote-sales",
-        "linked_remote_deployment_id": "deployment-sales",
-        "local_workspace_path": str(missing_workspace),
-        "workspace_id": "workspace-local-sales",
-        "availability": "missing",
-    }]
-
-
-@pytest.mark.asyncio
-async def test_create_code_application_does_not_forward_seed_project_override(monkeypatch):
+async def test_create_code_application_uses_seed_project_override(monkeypatch):
     from app.code_runtime import service
     from app.config import settings
 
@@ -1537,7 +1098,7 @@ async def test_create_code_application_does_not_forward_seed_project_override(mo
     )
 
     assert calls[0]["headers"]["Authorization"] == "Bearer user-token"
-    assert "seedProjectId" not in calls[0]["json"]
+    assert calls[0]["json"]["seedProjectId"] == "90002"
 
 
 @pytest.mark.asyncio
@@ -1639,93 +1200,7 @@ async def test_default_workspace_open_forwards_request_authorization_when_no_ser
 
 
 @pytest.mark.asyncio
-async def test_default_workspace_open_uses_independent_override_url_and_token(monkeypatch):
-    from app.code_runtime import service
-
-    calls: list[dict] = []
-
-    class FakeResponse:
-        status_code = 200
-        text = ""
-
-        def json(self):
-            return {"specReviewUrl": "http://127.0.0.1:61139/builder/"}
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_args):
-            return False
-
-        async def post(self, url: str, **kwargs):
-            calls.append({"url": url, **kwargs})
-            return FakeResponse()
-
-    monkeypatch.setenv(
-        "DOLPHIN_CODE_CONTROL_PLANE_URL",
-        "https://code.example.com/control-plane",
-    )
-    monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_URL", "http://127.0.0.1:44633")
-    monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_TOKEN", "workspace-token")
-
-    async def allow_application_access(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setattr(
-        service,
-        "verify_control_plane_application_access",
-        allow_application_access,
-    )
-    monkeypatch.setattr(service.httpx, "AsyncClient", FakeClient)
-
-    await service.default_workspace_open(
-        "code-app-1",
-        authorization_header="Bearer user-token",
-    )
-
-    assert calls[0]["url"] == "http://127.0.0.1:44633/api/applications/code-app-1/workspace/open"
-    assert calls[0]["headers"] == {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer workspace-token",
-    }
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("workspace_url", "workspace_token"),
-    [
-        ("", "workspace-token"),
-        ("http://127.0.0.1:44633", ""),
-    ],
-)
-async def test_default_workspace_open_requires_override_url_and_token_together(
-    monkeypatch,
-    workspace_url,
-    workspace_token,
-):
-    from app.code_runtime import service
-
-    monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_URL", workspace_url)
-    monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_TOKEN", workspace_token)
-    monkeypatch.setattr(service.settings, "dolphin_code_workspace_open_url", "")
-    monkeypatch.setattr(service.settings, "dolphin_code_workspace_open_token", "")
-
-    with pytest.raises(HTTPException) as exc_info:
-        await service.default_workspace_open(
-            "code-app-1",
-            authorization_header="Bearer user-token",
-        )
-
-    assert exc_info.value.status_code == 503
-    assert exc_info.value.detail == "Code workspace coordinator 配置不完整"
-
-
-@pytest.mark.asyncio
-async def test_default_workspace_open_sends_trusted_delegation_with_user_token(monkeypatch):
+async def test_default_workspace_open_omits_delegation_headers_for_user_token(monkeypatch):
     from app.code_runtime import service
 
     calls: list[dict] = []
@@ -1773,10 +1248,7 @@ async def test_default_workspace_open_sends_trusted_delegation_with_user_token(m
 
     headers = calls[0]["headers"]
     assert headers["Authorization"] == "Bearer user-token"
-    assert headers["X-AI-Builder-Delegation-Secret"] == "shared-secret"
-    assert headers["X-AI-Builder-Delegated-User-Id"] == "100169876816012509184"
-    assert headers["X-AI-Builder-Delegated-Username"] == "ai-builder-admin-11"
-    assert headers["X-AI-Builder-Delegated-Display-Name-B64"] == "5byg5LiJ"
+    assert not any(key.startswith("X-AI-Builder-") for key in headers)
 
 
 def test_delegated_identity_keeps_non_reserved_username():
@@ -1932,106 +1404,6 @@ async def test_bootstrap_runtime_session_uses_entry_token_only_upstream_and_retu
     assert "runtime-cookie-secret" not in repr(bootstrap)
 
 
-@pytest.mark.asyncio
-async def test_bootstrap_runtime_session_uses_control_plane_internal_runtime_url():
-    import httpx
-
-    from app.code_runtime.sandbox_auth import bootstrap_runtime_session
-
-    requested_urls: list[str] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requested_urls.append(str(request.url))
-        return httpx.Response(
-            200,
-            headers={"set-cookie": "apaas_sandbox_token=runtime-cookie; Path=/"},
-        )
-
-    bootstrap = await bootstrap_runtime_session(
-        "https://public.example.test/workspaces/ws-1/builder?token=entry-secret",
-        runtime_base_url="http://runtime-1.dolphin-code.svc.cluster.local:8080",
-        client_factory=lambda: httpx.AsyncClient(
-            transport=httpx.MockTransport(handler)
-        ),
-    )
-
-    assert requested_urls == [
-        "http://runtime-1.dolphin-code.svc.cluster.local:8080/api/status?token=entry-secret"
-    ]
-    assert bootstrap.clean_builder_url == (
-        "https://public.example.test/workspaces/ws-1/builder"
-    )
-    assert bootstrap.runtime_base_url == (
-        "http://runtime-1.dolphin-code.svc.cluster.local:8080"
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "invalid_runtime_base_url",
-    [
-        "ftp://runtime.internal:8080",
-        "http://user:password@runtime.internal:8080",
-        "http://runtime.internal:8080?token=secret",
-        "http://runtime.internal:8080#fragment",
-    ],
-)
-async def test_bootstrap_runtime_session_falls_back_from_invalid_internal_url(
-    invalid_runtime_base_url,
-):
-    import httpx
-
-    from app.code_runtime.sandbox_auth import bootstrap_runtime_session
-
-    requested_urls: list[str] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requested_urls.append(str(request.url))
-        return httpx.Response(
-            200,
-            headers={"set-cookie": "apaas_sandbox_token=runtime-cookie; Path=/"},
-        )
-
-    await bootstrap_runtime_session(
-        "https://public.example.test/workspaces/ws-1/builder?token=entry-secret",
-        runtime_base_url=invalid_runtime_base_url,
-        client_factory=lambda: httpx.AsyncClient(
-            transport=httpx.MockTransport(handler)
-        ),
-    )
-
-    assert requested_urls == [
-        "https://public.example.test/workspaces/ws-1/api/status?token=entry-secret"
-    ]
-
-
-@pytest.mark.asyncio
-async def test_bootstrap_runtime_session_rejects_success_without_runtime_cookie():
-    import httpx
-    from fastapi import HTTPException
-
-    from app.code_runtime.sandbox_auth import bootstrap_runtime_session
-
-    request_urls: list[str] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        request_urls.append(str(request.url))
-        return httpx.Response(200)
-
-    transport = httpx.MockTransport(handler)
-    with pytest.raises(HTTPException) as exc_info:
-        await bootstrap_runtime_session(
-            "https://sandbox.example.com/workspaces/ws-1/builder?token=entry-secret",
-            client_factory=lambda: httpx.AsyncClient(transport=transport),
-        )
-
-    assert request_urls == [
-        "https://sandbox.example.com/workspaces/ws-1/api/status?token=entry-secret",
-    ]
-    assert exc_info.value.status_code == 502
-    assert exc_info.value.detail == "Runtime bootstrap response missing session cookie"
-
-
 def test_runtime_session_expiry_for_storage_normalizes_aware_datetime_to_naive_utc():
     from datetime import datetime, timedelta, timezone
 
@@ -2148,7 +1520,6 @@ async def test_open_code_session_upserts_runtime_binding(db_session):
             "sandboxInstanceId": "sandbox-93001",
             "conversationId": "conversation-93001",
             "specReviewUrl": "https://sandbox.example.com/workspaces/93001/builder?token=entry-token",
-            "runtimeBaseUrl": "http://om-agent-runtime-93001.dolphin-code.svc.cluster.local:8080",
             "handoff": {"handoffId": handoff_id or "handoff-1", "status": "accepted"},
         }
 
@@ -2162,9 +1533,8 @@ async def test_open_code_session_upserts_runtime_binding(db_session):
 
     assert calls == ["91001"]
     assert result["session_id"] == session.public_id
-    assert result["route_id"] == "s1"
-    assert result["external_base_path"] == "/api/code-runtime/s1"
-    assert result["embed_url"].startswith("/api/code-runtime/s1/builder/?")
+    assert result["external_base_path"] == f"/api/code-runtime/{session.public_id}"
+    assert result["embed_url"].startswith(f"/api/code-runtime/{session.public_id}/builder/?")
     assert "dolphin_token=dolphin-embed" in result["embed_url"]
 
     binding = (
@@ -2175,137 +1545,7 @@ async def test_open_code_session_upserts_runtime_binding(db_session):
     assert binding.external_application_id == "91001"
     assert binding.workspace_id == "93001"
     assert binding.sandbox_instance_id == "sandbox-93001"
-    assert binding.runtime_base_url == (
-        "http://om-agent-runtime-93001.dolphin-code.svc.cluster.local:8080"
-    )
-    assert "runtimeBaseUrl" not in result
-    assert "svc.cluster.local" not in repr(result)
-    assert "entry-token" not in repr(result)
-
-
-@pytest.mark.asyncio
-async def test_open_code_session_can_ignore_control_plane_runtime_base_url(
-    db_session,
-    monkeypatch,
-):
-    from app.code_runtime import service
-    from app.code_runtime.service import open_code_session
-    from app.models.ai_chat import CodeRuntimeBinding
-    from sqlalchemy import select
-
-    monkeypatch.setattr(service.settings, "dolphin_code_ignore_runtime_base_url", True)
-
-    app = Application(
-        id=101,
-        tenant_id=7,
-        user_id=11,
-        created_by=11,
-        app_name="销售应用",
-        app_code="sales",
-        app_type="ai-code",
-        status="completed",
-        apaas_app_id="91001",
-    )
-    session = AIChatSession(
-        tenant_id=7,
-        user_id=11,
-        app_id=101,
-        title="销售应用 Code",
-        mode="code",
-        status="active",
-    )
-    db_session.add_all([app, session])
-    await db_session.commit()
-    await db_session.refresh(session)
-
-    async def fake_open(external_application_id: str, handoff_id: str | None = None):
-        return {
-            "applicationId": external_application_id,
-            "workspaceId": "93001",
-            "sandboxInstanceId": "sandbox-93001",
-            "conversationId": "conversation-93001",
-            "specReviewUrl": "https://sandbox.example.com/workspaces/93001/builder?token=entry-token",
-            "runtimeBaseUrl": "http://om-agent-runtime-93001.dolphin-code.svc.cluster.local:8080",
-        }
-
-    result = await open_code_session(
-        db=db_session,
-        session_id=session.id,
-        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7, tenant_role="member"),
-        workspace_open=fake_open,
-        embed_token_factory=lambda **_: "dolphin-embed",
-    )
-
-    binding = (
-        await db_session.execute(
-            select(CodeRuntimeBinding).where(CodeRuntimeBinding.session_id == session.id)
-        )
-    ).scalar_one()
     assert binding.runtime_base_url == "https://sandbox.example.com/workspaces/93001"
-    assert "svc.cluster.local" not in binding.runtime_base_url
-    assert "svc.cluster.local" not in repr(result)
-
-
-@pytest.mark.asyncio
-async def test_open_local_code_session_defers_agent_creation_to_serialized_route(
-    db_session,
-    monkeypatch,
-):
-    from app.code_runtime import service
-    from app.code_runtime.service import open_code_session
-
-    session = AIChatSession(
-        tenant_id=7,
-        user_id=11,
-        external_application_id="local-desktop-app",
-        title="Local Desktop Code",
-        mode="code",
-        status="active",
-    )
-    db_session.add(session)
-    await db_session.commit()
-    manager_calls = 0
-
-    class FakeLocalRuntimeClient:
-        @classmethod
-        def from_environment(cls):
-            return cls()
-
-        async def open_application_with_entry_token(self, _db, _session, _ctx, **_kwargs):
-            nonlocal manager_calls
-            manager_calls += 1
-            return (
-                {
-                    "applicationId": "local-desktop-app",
-                    "workspaceId": "workspace-local",
-                    "sandboxInstanceId": "local-instance",
-                    "conversationId": "",
-                    "runtimeBaseUrl": "http://127.0.0.1:19090",
-                    "specReviewUrl": "http://127.0.0.1:19090/builder/",
-                },
-                "desktop-entry-token",
-            )
-
-    async def unexpected_control_plane(*_args, **_kwargs):
-        raise AssertionError("local application must not call Control Plane")
-
-    monkeypatch.setattr(service, "LocalRuntimeClient", FakeLocalRuntimeClient)
-    monkeypatch.setattr(
-        service,
-        "verify_control_plane_application_access",
-        unexpected_control_plane,
-    )
-
-    result = await open_code_session(
-        db=db_session,
-        session_id=session.id,
-        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
-        workspace_open=unexpected_control_plane,
-    )
-
-    assert manager_calls == 1
-    assert result["external_application_id"] == "local-desktop-app"
-    assert result["runtime_session_id"] is None
 
 
 @pytest.mark.asyncio
@@ -2323,7 +1563,7 @@ async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_en
     session = AIChatSession(
         tenant_id=7,
         user_id=11,
-        external_application_id="local-desktop-code-app",
+        external_application_id="desktop-code-app",
         title="Desktop Code",
         mode="code",
         status="active",
@@ -2333,27 +1573,18 @@ async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_en
     entry_token = "desktop-entry-token-secret"
     opened_calls = 0
     bootstrap_calls = 0
-    provider_options_seen = None
 
     class FakeLocalRuntimeClient:
         @classmethod
         def from_environment(cls):
             return cls()
 
-        async def open_application_with_entry_token(
-            self,
-            _db,
-            _session,
-            _ctx,
-            *,
-            provider_options=None,
-        ):
-            nonlocal opened_calls, provider_options_seen
+        async def open_application_with_entry_token(self, _db, _session, _ctx):
+            nonlocal opened_calls
             opened_calls += 1
-            provider_options_seen = provider_options
             return (
                 {
-                    "applicationId": "local-desktop-code-app",
+                    "applicationId": "desktop-code-app",
                     "workspaceId": "workspace-desktop",
                     "sandboxInstanceId": "desktop-instance",
                     "conversationId": "",
@@ -2374,23 +1605,28 @@ async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_en
     monkeypatch.setenv("DOLPHIN_AGENT_RUNTIME_PATH", "/tmp/agent-runtime")
     monkeypatch.setattr(service, "LocalRuntimeClient", FakeLocalRuntimeClient)
     monkeypatch.setattr(service, "bootstrap_runtime_session", unexpected_bootstrap)
-    async def unexpected_control_plane(*_args, **_kwargs):
-        raise AssertionError("local application must not call Control Plane")
+    verified: list[str] = []
+
+    async def allow_application(external_application_id: str, **_kwargs):
+        verified.append(external_application_id)
+
+    monkeypatch.setattr(service, "verify_control_plane_application_access", allow_application)
+    created_with: list[tuple[str, str]] = []
+
+    async def fake_create_agent_session(runtime_base_url: str, token: str) -> str:
+        created_with.append((runtime_base_url, token))
+        return "desktop-runtime-session-1"
 
     monkeypatch.setattr(
         service,
-        "verify_control_plane_application_access",
-        unexpected_control_plane,
+        "_create_desktop_runtime_agent_session",
+        fake_create_agent_session,
     )
+
     result = await open_code_session(
         db=db_session,
         session_id=session.id,
-        ctx=SimpleNamespace(
-            user=SimpleNamespace(id=11),
-            tenant_id=7,
-            control_plane_tenant_id="tenant-cp",
-        ),
-        authorization_header="Bearer control-plane-user-token",
+        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
         workspace_open=lambda *_args: (_ for _ in ()).throw(
             AssertionError("desktop runtime must not use Control Plane")
         ),
@@ -2403,34 +1639,30 @@ async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_en
         )
     ).scalar_one()
     assert opened_calls == 1
-    assert provider_options_seen["control_plane_url"] == service.control_plane_base_url()
-    assert provider_options_seen["control_plane_authorization"] == "Bearer control-plane-user-token"
-    assert provider_options_seen["control_plane_tenant_id"] == "tenant-cp"
-    assert provider_options_seen["local_proxy_url"].endswith(
-        "/api/code/model-proxy/local-desktop-code-app/v1"
-    )
-    assert provider_options_seen["cache_dir"] == "/tmp/desktop-data/model-catalog-cache"
+    assert verified == ["desktop-code-app"]
     assert bootstrap_calls == 0
     assert binding.execution_target == "desktop_agent_runtime"
-    assert binding.runtime_session_id is None
+    assert binding.runtime_session_id == "desktop-runtime-session-1"
     assert hashlib.sha256(
         decrypt_runtime_cookie(binding.desktop_agent_runtime_token_enc).encode("ascii")
     ).digest() == hashlib.sha256(entry_token.encode("ascii")).digest()
+    assert created_with == [("http://127.0.0.1:19090", entry_token)]
     ownership = (
         await db_session.execute(
             select(CodeRuntimeAgentSession).where(
-                CodeRuntimeAgentSession.session_id == session.id
+                CodeRuntimeAgentSession.session_id == session.id,
+                CodeRuntimeAgentSession.runtime_session_id == "desktop-runtime-session-1",
             )
         )
-    ).scalars().all()
-    assert ownership == []
+    ).scalar_one()
+    assert ownership.conversation_id is None
     if entry_token in repr(result):
         pytest.fail("desktop runtime entry token leaked into public response")
     assert "desktop_agent_runtime_token_enc" not in result
 
 
 @pytest.mark.asyncio
-async def test_desktop_runtime_prepares_one_binding_per_shell_without_changing_runtime_current(
+async def test_desktop_runtime_creates_one_agent_session_per_shell_and_reuses_it(
     db_session,
     monkeypatch,
 ):
@@ -2443,7 +1675,7 @@ async def test_desktop_runtime_prepares_one_binding_per_shell_without_changing_r
     first = AIChatSession(
         tenant_id=7,
         user_id=11,
-        external_application_id="local-desktop-code-app",
+        external_application_id="desktop-code-app",
         title="Desktop Code 1",
         mode="code",
         status="active",
@@ -2451,25 +1683,23 @@ async def test_desktop_runtime_prepares_one_binding_per_shell_without_changing_r
     second = AIChatSession(
         tenant_id=7,
         user_id=11,
-        external_application_id="local-desktop-code-app",
+        external_application_id="desktop-code-app",
         title="Desktop Code 2",
         mode="code",
         status="active",
     )
     db_session.add_all([first, second])
     await db_session.commit()
-    provider_options_seen: list[dict[str, object]] = []
 
     class FakeLocalRuntimeClient:
         @classmethod
         def from_environment(cls):
             return cls()
 
-        async def open_application_with_entry_token(self, _db, _session, _ctx, **kwargs):
-            provider_options_seen.append(kwargs["provider_options"])
+        async def open_application_with_entry_token(self, _db, _session, _ctx):
             return (
                 {
-                    "applicationId": "local-desktop-code-app",
+                    "applicationId": "desktop-code-app",
                     "workspaceId": "workspace-desktop",
                     "sandboxInstanceId": "desktop-instance",
                     "conversationId": "",
@@ -2479,20 +1709,29 @@ async def test_desktop_runtime_prepares_one_binding_per_shell_without_changing_r
                 "desktop-entry-token",
             )
 
+    created: list[str] = []
+
+    async def fake_create_agent_session(_runtime_base_url: str, _token: str) -> str:
+        runtime_session_id = f"desktop-runtime-session-{len(created) + 1}"
+        created.append(runtime_session_id)
+        return runtime_session_id
+
     monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_URL", "http://127.0.0.1:9988")
     monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_TOKEN", "manager-token")
     monkeypatch.setenv("DOLPHIN_DESKTOP_DATA_DIR", "/tmp/desktop-data")
     monkeypatch.setenv("DOLPHIN_AGENT_RUNTIME_PATH", "/tmp/agent-runtime")
     monkeypatch.setattr(service, "LocalRuntimeClient", FakeLocalRuntimeClient)
 
-    async def unexpected_control_plane(*_args, **_kwargs):
-        raise AssertionError("local application must not call Control Plane")
+    async def allow_application(*_args, **_kwargs):
+        return None
 
+    monkeypatch.setattr(service, "verify_control_plane_application_access", allow_application)
     monkeypatch.setattr(
         service,
-        "verify_control_plane_application_access",
-        unexpected_control_plane,
+        "_create_desktop_runtime_agent_session",
+        fake_create_agent_session,
     )
+
     first_open = await open_code_session(
         db=db_session,
         session_id=first.id,
@@ -2510,25 +1749,27 @@ async def test_desktop_runtime_prepares_one_binding_per_shell_without_changing_r
     )
     await db_session.commit()
 
-    assert len({options["local_proxy_url"] for options in provider_options_seen}) == 1
-    assert len({options["local_proxy_token"] for options in provider_options_seen}) == 1
-    assert first_open["runtime_session_id"] is None
-    assert second_open["runtime_session_id"] is None
-    assert reopened_first["runtime_session_id"] is None
+    assert created == ["desktop-runtime-session-1", "desktop-runtime-session-2"]
+    assert first_open["runtime_session_id"] == "desktop-runtime-session-1"
+    assert second_open["runtime_session_id"] == "desktop-runtime-session-2"
+    assert reopened_first["runtime_session_id"] == "desktop-runtime-session-1"
     ownership = (
         await db_session.execute(
             select(CodeRuntimeAgentSession).order_by(CodeRuntimeAgentSession.session_id)
         )
     ).scalars().all()
-    assert ownership == []
+    assert [(record.session_id, record.runtime_session_id) for record in ownership] == [
+        (first.id, "desktop-runtime-session-1"),
+        (second.id, "desktop-runtime-session-2"),
+    ]
     bindings = (
         await db_session.execute(
             select(CodeRuntimeBinding).order_by(CodeRuntimeBinding.session_id)
         )
     ).scalars().all()
     assert [(binding.session_id, binding.runtime_session_id) for binding in bindings] == [
-        (first.id, None),
-        (second.id, None),
+        (first.id, "desktop-runtime-session-1"),
+        (second.id, "desktop-runtime-session-2"),
     ]
 
 
@@ -2543,7 +1784,7 @@ async def test_open_code_session_does_not_fallback_when_configured_desktop_runti
     session = AIChatSession(
         tenant_id=7,
         user_id=11,
-        external_application_id="local-desktop-code-app",
+        external_application_id="desktop-code-app",
         title="Desktop Code",
         mode="code",
         status="active",
@@ -2557,7 +1798,7 @@ async def test_open_code_session_does_not_fallback_when_configured_desktop_runti
         def from_environment(cls):
             return cls()
 
-        async def open_application_with_entry_token(self, _db, _session, _ctx, **_kwargs):
+        async def open_application_with_entry_token(self, _db, _session, _ctx):
             raise HTTPException(status_code=503, detail="LOCAL_RUNTIME_MANAGER_UNAVAILABLE: unavailable")
 
     async def unexpected_control_plane(*_args, **_kwargs):
@@ -2572,14 +1813,10 @@ async def test_open_code_session_does_not_fallback_when_configured_desktop_runti
     monkeypatch.setattr(service, "LocalRuntimeClient", FailingLocalRuntimeClient)
     monkeypatch.setattr(service, "default_workspace_open", unexpected_control_plane)
 
-    async def unexpected_application_check(*_args, **_kwargs):
-        raise AssertionError("local application must not call Control Plane")
+    async def allow_application(*_args, **_kwargs):
+        return None
 
-    monkeypatch.setattr(
-        service,
-        "verify_control_plane_application_access",
-        unexpected_application_check,
-    )
+    monkeypatch.setattr(service, "verify_control_plane_application_access", allow_application)
 
     with pytest.raises(HTTPException, match="LOCAL_RUNTIME_MANAGER_UNAVAILABLE") as exc:
         await open_code_session(
@@ -2593,7 +1830,7 @@ async def test_open_code_session_does_not_fallback_when_configured_desktop_runti
 
 
 @pytest.mark.asyncio
-async def test_remote_code_session_uses_control_plane_even_when_desktop_runtime_is_configured(
+async def test_desktop_runtime_does_not_start_when_control_plane_application_check_fails(
     db_session,
     monkeypatch,
 ):
@@ -2627,6 +1864,7 @@ async def test_remote_code_session_uses_control_plane_even_when_desktop_runtime_
     monkeypatch.setenv("DOLPHIN_DESKTOP_DATA_DIR", "/tmp/desktop-data")
     monkeypatch.setenv("DOLPHIN_AGENT_RUNTIME_PATH", "/tmp/agent-runtime")
     monkeypatch.setattr(service, "LocalRuntimeClient", UnexpectedLocalRuntimeClient)
+    monkeypatch.setattr(service, "verify_control_plane_application_access", denied)
 
     with pytest.raises(HTTPException, match="Tenant is not accessible") as exc:
         await open_code_session(
@@ -2634,7 +1872,6 @@ async def test_remote_code_session_uses_control_plane_even_when_desktop_runtime_
             session_id=session.id,
             ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
             authorization_header="Bearer user-token",
-            workspace_open=denied,
         )
 
     assert exc.value.status_code == 403
@@ -2823,11 +2060,12 @@ async def test_open_code_session_bootstraps_token_free_binding_and_new_browser_s
 
 
 @pytest.mark.asyncio
-async def test_open_code_session_reopens_once_after_expired_launch_token(
+async def test_open_code_session_retries_workspace_bootstrap_once_for_expired_launch_token(
     db_session,
     monkeypatch,
 ):
     from app.code_runtime import service
+    from app.code_runtime.sandbox_auth import RuntimeBootstrap
     from app.code_runtime.service import open_code_session
 
     session = AIChatSession(
@@ -2854,8 +2092,6 @@ async def test_open_code_session_reopens_once_after_expired_launch_token(
         }
 
     async def fake_bootstrap(builder_url: str):
-        from app.code_runtime.sandbox_auth import RuntimeBootstrap
-
         nonlocal bootstraps
         bootstraps += 1
         if bootstraps == 1:
@@ -2883,109 +2119,6 @@ async def test_open_code_session_reopens_once_after_expired_launch_token(
     assert opens == 2
     assert bootstraps == 2
     assert "entry-2" not in result["embed_url"]
-
-
-@pytest.mark.asyncio
-async def test_workspace_token_open_verifies_user_application_access_first(monkeypatch):
-    from app.code_runtime import service
-    events: list[str] = []
-
-    async def verify_access(external_application_id: str, **kwargs):
-        assert external_application_id == "code-app-1"
-        assert kwargs["authorization_header"] == "Bearer user-token"
-        assert kwargs["delegated_context"].tenant_id == 7
-        events.append("verify")
-
-    class FakeResponse:
-        status_code = 200
-        text = ""
-
-        def json(self):
-            return {"specReviewUrl": "https://sandbox.example.com/builder?token=entry"}
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_args):
-            return False
-
-        async def post(self, *_args, **_kwargs):
-            events.append("open")
-            return FakeResponse()
-
-    monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_URL", "https://coordinator.example.com")
-    monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_TOKEN", "workspace-token")
-    monkeypatch.setattr(service, "verify_control_plane_application_access", verify_access)
-    monkeypatch.setattr(service.httpx, "AsyncClient", FakeClient)
-
-    await service.default_workspace_open(
-        "code-app-1",
-        authorization_header="Bearer user-token",
-        delegated_context=SimpleNamespace(tenant_id=7),
-    )
-
-    assert events == ["verify", "open"]
-
-
-@pytest.mark.asyncio
-async def test_workspace_token_open_requires_user_bearer(monkeypatch):
-    from app.code_runtime import service
-
-    monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_URL", "https://coordinator.example.com")
-    monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_TOKEN", "workspace-token")
-
-    with pytest.raises(HTTPException) as exc_info:
-        await service.default_workspace_open("code-app-1")
-
-    assert exc_info.value.status_code == 401
-    assert exc_info.value.detail == "Code workspace 用户鉴权不可用"
-
-
-@pytest.mark.asyncio
-async def test_workspace_token_rejection_is_coordinator_failure(monkeypatch):
-    from app.code_runtime import service
-
-    class FakeResponse:
-        status_code = 401
-        text = "invalid coordinator token"
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_args):
-            return False
-
-        async def post(self, *_args, **_kwargs):
-            return FakeResponse()
-
-    async def allow_application_access(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_URL", "https://coordinator.example.com")
-    monkeypatch.setenv("DOLPHIN_CODE_WORKSPACE_OPEN_TOKEN", "workspace-token")
-    monkeypatch.setattr(
-        service,
-        "verify_control_plane_application_access",
-        allow_application_access,
-    )
-    monkeypatch.setattr(service.httpx, "AsyncClient", FakeClient)
-
-    with pytest.raises(HTTPException) as exc_info:
-        await service.default_workspace_open(
-            "code-app-1",
-            authorization_header="Bearer user-token",
-        )
-
-    assert exc_info.value.status_code == 503
-    assert exc_info.value.detail == "Code workspace coordinator 鉴权失败"
 
 
 @pytest.mark.asyncio
@@ -3352,119 +2485,3 @@ async def test_open_code_session_rejects_non_code_session(db_session):
         )
 
     assert exc.value.status_code == 400
-@pytest.mark.parametrize(
-    ("session_id", "route_id"),
-    [(1, "s1"), (35, "sz"), (36, "s10"), (123, "s3f")],
-)
-def test_code_session_route_id_round_trips(session_id, route_id):
-    from app.code_runtime.service import code_session_route_id, decode_code_session_route_id
-
-    assert code_session_route_id(session_id) == route_id
-    assert decode_code_session_route_id(route_id) == session_id
-
-
-@pytest.mark.parametrize("route_id", ["", "s", "s0", "s01", "S3F", "s-1", "s2147483648"])
-def test_code_session_route_id_rejects_noncanonical_values(route_id):
-    from app.code_runtime.service import decode_code_session_route_id
-
-    assert decode_code_session_route_id(route_id) is None
-
-
-@pytest.mark.asyncio
-async def test_short_code_route_rejects_another_control_plane_tenant(db_session):
-    from app.code_runtime.service import open_code_session
-
-    session = AIChatSession(
-        tenant_id=0,
-        control_plane_tenant_id="cp-tenant-a",
-        user_id=11,
-        title="Tenant A Code",
-        mode="code",
-        status="active",
-        external_application_id="crm",
-    )
-    db_session.add(session)
-    await db_session.commit()
-    await db_session.refresh(session)
-
-    ctx = SimpleNamespace(
-        tenant_id=0,
-        control_plane_tenant_id="cp-tenant-b",
-        user=SimpleNamespace(id=11, account_source="control_plane"),
-    )
-    with pytest.raises(HTTPException, match="Code 会话不存在"):
-        await open_code_session(
-            db=db_session,
-            session_id="s1",
-            ctx=ctx,
-            workspace_open=lambda *_args: pytest.fail("must not open another tenant workspace"),
-        )
-
-
-def test_local_application_location_normalizes_identity_and_availability(tmp_path):
-    from app.code_runtime.application_locations import (
-        build_local_application_location,
-        local_location_id,
-        local_workspace_availability,
-        normalize_local_workspace_path,
-    )
-
-    workspace = tmp_path / "sales" / "workspace"
-    workspace.mkdir(parents=True)
-    alternate_path = workspace.parent / "." / workspace.name
-    missing_path = tmp_path / "sales" / "missing"
-
-    normalized = str(workspace.resolve())
-    assert normalize_local_workspace_path(alternate_path) == normalized
-    assert local_location_id(alternate_path) == local_location_id(workspace)
-    assert local_workspace_availability(workspace) == "ready"
-    assert local_workspace_availability(missing_path) == "missing"
-    assert build_local_application_location(
-        workspace_id="workspace-7",
-        workspace_path=alternate_path,
-    ) == {
-        "location": "local",
-        "location_id": local_location_id(workspace),
-        "availability": "ready",
-        "workspace_id": "workspace-7",
-        "workspace_path": normalized,
-        "environment_name": None,
-    }
-
-
-@pytest.mark.asyncio
-async def test_legacy_code_session_derives_location_and_backfills_on_write(db_session):
-    from app.code_runtime.session_location import (
-        backfill_session_location,
-        derive_session_location,
-    )
-
-    session = AIChatSession(
-        tenant_id=7,
-        user_id=11,
-        external_application_id="local-sales",
-        title="Legacy local session",
-        mode="code",
-        status="active",
-    )
-    db_session.add(session)
-    await db_session.flush()
-
-    assert derive_session_location(session) == {
-        "execution_location": "local",
-        "logical_application_id": "legacy:local-sales",
-    }
-    assert backfill_session_location(session) == {
-        "execution_location": "local",
-        "logical_application_id": "legacy:local-sales",
-    }
-    assert session.execution_location == "local"
-    assert session.logical_application_id == "legacy:local-sales"
-
-    session_id = session.id
-    await db_session.commit()
-    db_session.expire_all()
-    stored = await db_session.get(AIChatSession, session_id)
-    assert stored is not None
-    assert stored.execution_location == "local"
-    assert stored.logical_application_id == "legacy:local-sales"

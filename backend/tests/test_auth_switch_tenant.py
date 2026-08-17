@@ -11,8 +11,8 @@ from sqlalchemy import select
 from app.auth import decode_token, get_password_hash
 from app.code_runtime.auth import store_control_plane_credentials
 from app.config import settings
-from app.deps import AuthContext, get_auth_context
-from app.models import APaaSUserCredential, PlatformEnv, User
+from app.deps import AuthContext
+from app.models import APaaSUserCredential, User
 from app.models.tenant import Tenant, UserTenant
 from app.routes.auth import (
     ControlPlaneCodeTenantSwitchRequest,
@@ -282,104 +282,6 @@ async def test_external_platform_admin_cannot_switch_to_unbound_tenant(
         )
 
     assert exc.value.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_external_platform_admin_can_switch_to_bound_apaas_tenant(db_session):
-    user = User(
-        username="apaas-bound-admin",
-        hashed_password=get_password_hash("secret"),
-        account_source="apaas",
-        apaas_user_id="apaas-user-bound",
-        apaas_tenant_id="old-tenant",
-        is_active=True,
-        is_platform_admin=True,
-    )
-    current = Tenant(tenant_name="Current", tenant_code="current", status=1)
-    target = Tenant(
-        tenant_name="Bound 850",
-        tenant_code="bound-850",
-        status=1,
-        apaas_tenant_id_str="850079360340721665",
-    )
-    db_session.add_all([user, current, target])
-    await db_session.flush()
-    db_session.add(
-        PlatformEnv(
-            tenant_id=target.id,
-            env_name="Bound 850",
-            base_url="https://apaas.example.com/backend",
-            platform_tenant_id="850079360340721665",
-            status="connected",
-            is_default=True,
-        )
-    )
-    db_session.add(UserTenant(user_id=user.id, tenant_id=current.id, status=1, is_default=True))
-    await db_session.commit()
-
-    ctx = AuthContext(
-        user=user,
-        tenant_id=current.id,
-        tenant_role="platform_admin",
-        org_permissions={"*": True},
-    )
-    listed = await list_my_tenants(ctx, db_session)
-    assert {item.tenant_id for item in listed} == {current.id, target.id}
-
-    response = await switch_tenant(TenantSwitchRequest(tenant_id=target.id), ctx, db_session)
-    switched = await get_auth_context(
-        type("Credentials", (), {"credentials": response.access_token})(),
-        db_session,
-    )
-    assert switched.tenant_id == target.id
-    assert switched.apaas_tenant_id == "850079360340721665"
-
-
-@pytest.mark.asyncio
-async def test_tenant_rebind_clears_previous_platform_token(db_session):
-    user = User(
-        username="local-superadmin",
-        hashed_password=get_password_hash("secret"),
-        is_active=True,
-        is_platform_admin=True,
-        account_source="local",
-    )
-    tenant = Tenant(tenant_name="Rebind", tenant_code="rebind", status=1)
-    db_session.add_all([user, tenant])
-    await db_session.flush()
-    env = PlatformEnv(
-        tenant_id=tenant.id,
-        env_name="Rebind",
-        base_url="https://old.example.com/backend",
-        platform_tenant_id="old-tenant",
-        token="old-token",
-        status="connected",
-        is_default=True,
-    )
-    db_session.add(env)
-    await db_session.flush()
-    tenant.apaas_env_id = env.id
-    await db_session.commit()
-
-    ctx = AuthContext(
-        user=user,
-        tenant_id=tenant.id,
-        tenant_role="platform_admin",
-        org_permissions={"*": True},
-    )
-    await update_tenant(
-        tenant.id,
-        TenantUpdateRequest(
-            apaas_base_url="https://new.example.com/backend",
-            apaas_platform_tenant_id="850079360340721665",
-        ),
-        ctx,
-        db_session,
-    )
-    await db_session.refresh(env)
-    assert env.platform_tenant_id == "850079360340721665"
-    assert env.token is None
-    assert env.status == "disconnected"
 
 
 @pytest.mark.asyncio
@@ -686,31 +588,6 @@ async def test_control_plane_code_switch_is_tab_scoped_and_does_not_touch_local_
     assert payload["cp_tid"] == "0"
     assert "tid" not in payload
     assert user.coding_tenant_id == "legacy-tenant"
-
-
-@pytest.mark.asyncio
-async def test_control_plane_context_rejects_builder_local_switch(db_session):
-    user = User(
-        username="remote-admin",
-        hashed_password=get_password_hash("secret"),
-        account_source="control_plane",
-        is_active=True,
-    )
-    tenant = Tenant(tenant_name="Builder 投影", tenant_code="cp-local-switch")
-    db_session.add_all([user, tenant])
-    await db_session.flush()
-    ctx = AuthContext(
-        user=user,
-        tenant_id=tenant.id,
-        tenant_role="platform_admin",
-        org_permissions={"*": True},
-        tenant_access_scope="control_plane_code",
-        control_plane_tenant_id="cp-1",
-    )
-
-    with pytest.raises(HTTPException) as exc:
-        await switch_tenant(TenantSwitchRequest(tenant_id=tenant.id), ctx, db_session)
-    assert exc.value.status_code == 409
 
 
 @pytest.mark.asyncio

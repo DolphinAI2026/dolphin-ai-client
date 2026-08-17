@@ -7,7 +7,6 @@ from app.config import settings
 from app import runtime
 from app.code_runtime.auth import control_plane_access_token, fetch_control_plane_identity
 from app.database import get_db
-from app.crypto import decrypt_password
 from app.models import User
 from app.models.tenant import Tenant, UserTenant, Role
 from app.schemas import UserInfo, TenantOption
@@ -17,7 +16,6 @@ from app.deps import (
     AuthContext,
     get_auth_context,
     get_platform_auth_context,
-    is_control_plane_context,
     platform_admin_has_unscoped_tenant_access,
     require_tenant_admin,
     resolve_default_tenant_id_for_user,
@@ -44,17 +42,6 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-def _reject_control_plane_local_admin(ctx: AuthContext) -> None:
-    if is_control_plane_context(ctx):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "CONTROL_PLANE_REMOTE_MANAGEMENT_REQUIRED",
-                "message": "组织、成员、角色和 aPaaS 绑定由 Control Plane 管理，请打开远程控制台",
-            },
-        )
 
 
 # ─── Shared helpers ────────────────────────────────────────────────────────────
@@ -336,7 +323,6 @@ async def list_all_tenants(
     - q：模糊匹配 tenant_name / tenant_code（不区分大小写）
     - status：1=只看启用 / 0=只看禁用 / 不传=全部
     """
-    _reject_control_plane_local_admin(ctx)
     _require_platform_admin(ctx)
 
     from sqlalchemy import func as sql_func, or_
@@ -377,7 +363,6 @@ async def create_new_tenant(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """新建租户（仅平台管理员）。"""
-    _reject_control_plane_local_admin(ctx)
     _require_platform_admin(ctx)
 
     name = (data.tenant_name or "").strip()
@@ -424,7 +409,6 @@ async def tenant_dashboard(
     ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    _reject_control_plane_local_admin(ctx)
     """平台总览（仅平台管理员）：所有租户的资源使用量聚合。"""
     _require_platform_admin(ctx)
     from app.tenant_quota import get_tenant_usage as _usage
@@ -469,7 +453,6 @@ async def update_tenant(
     ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    _reject_control_plane_local_admin(ctx)
     """编辑租户基本信息（仅平台管理员）。tenant_code 一旦创建不可改。"""
     _require_platform_admin(ctx)
 
@@ -500,8 +483,6 @@ async def update_tenant(
     # 后端帮他 maintain 一条 PlatformEnv 记录：第一次绑定时创建，后续编辑就 update。
     base_url_in = (data.apaas_base_url or "").strip() if data.apaas_base_url is not None else None
     platform_tid_in = (data.apaas_platform_tenant_id or "").strip() if data.apaas_platform_tenant_id is not None else None
-    binding_env = None
-    binding_changed = False
     if base_url_in is not None or platform_tid_in is not None:
         from app.models import PlatformEnv
         # 拿现有 env（如果绑定了）或新建
@@ -522,22 +503,11 @@ async def update_tenant(
             db.add(env)
             await db.flush()
             t.apaas_env_id = env.id
-            binding_changed = True
-        binding_env = env
         # 已存在 env：更新 base_url + tid
         if base_url_in is not None:
-            next_base_url = base_url_in.rstrip("/") if base_url_in else ""
-            binding_changed = binding_changed or env.base_url != next_base_url
-            env.base_url = next_base_url
+            env.base_url = base_url_in.rstrip("/") if base_url_in else ""
         if platform_tid_in is not None:
-            binding_changed = binding_changed or env.platform_tenant_id != platform_tid_in
             env.platform_tenant_id = platform_tid_in
-        if binding_changed:
-            # A token is tenant-bound. Never carry the previous tenant's token
-            # across a rebinding, otherwise the next app query returns the old
-            # tenant's applications while the env row shows the new ID.
-            env.token = None
-            env.status = "disconnected"
 
     # 高级路径：直接传 apaas_env_id（手动指定已存在的 env），UI 默认不暴露
     if data.apaas_env_id is not None and base_url_in is None and platform_tid_in is None:
@@ -558,27 +528,6 @@ async def update_tenant(
             t.apaas_env_id = data.apaas_env_id
 
     await db.commit()
-
-    # Reuse stored credentials when a binding changed so the first /apps load
-    # can reconnect without requiring a second manual login.
-    if binding_changed and binding_env and binding_env.username and binding_env.password_enc:
-        try:
-            from app.apaas_client import APaaSClient
-
-            password = decrypt_password(binding_env.password_enc)
-            client = APaaSClient(
-                base_url=binding_env.base_url,
-                tenant_id=binding_env.platform_tenant_id,
-            )
-            login_result = await client.login(binding_env.username, password)
-            token = (login_result.get("token") or "").strip()
-            if token:
-                binding_env.token = token
-                binding_env.status = "connected"
-                await db.commit()
-        except Exception:
-            logger.info("tenant binding reconnect failed tenant_id=%s", t.id, exc_info=True)
-
     await db.refresh(t)
 
     from sqlalchemy import func as sql_func
@@ -606,7 +555,6 @@ async def delete_tenant(
     - force=true：级联删除应用 + 组件 + 成员关系（DB 层 ON DELETE CASCADE）；
       Vibe Coding workspace 的文件系统目录不会自动删，需平台管理员后续手动清理。
     """
-    _reject_control_plane_local_admin(ctx)
     _require_platform_admin(ctx)
 
     t = (
@@ -705,7 +653,6 @@ async def get_tenant_usage_endpoint(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """返回某租户的资源使用情况（仅平台管理员）。"""
-    _reject_control_plane_local_admin(ctx)
     _require_platform_admin(ctx)
     from app.tenant_quota import get_tenant_usage as _get_usage
     return await _get_usage(db, tenant_id)
@@ -719,7 +666,6 @@ async def update_tenant_status(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """启用 / 禁用租户（仅平台管理员）。被禁用的租户成员仍可见但无法切入。"""
-    _reject_control_plane_local_admin(ctx)
     _require_platform_admin(ctx)
 
     if data.status not in (0, 1):
@@ -754,7 +700,6 @@ async def set_my_default_tenant(
     平台管理员若没有 membership 也允许（fallback：什么都不做，因为 platform_admin
     登录走的是 resolve_default_tenant_id_for_user，没 membership 时本身就走 fallback）。
     """
-    _reject_control_plane_local_admin(ctx)
     membership = (
         await db.execute(
             select(UserTenant).where(
@@ -793,7 +738,6 @@ async def bind_user_apaas_account(
 
     绑定后账号仍按原 account_source 登录；aPaaS 凭据只用于租户、应用和长任务续 token。
     """
-    _reject_control_plane_local_admin(ctx)
     _require_platform_admin(ctx)
 
     username = (data.username or "").strip()
@@ -932,7 +876,6 @@ async def admin_reset_user_password(
 
     新密码限制：6-128 位。重置后旧密码立即失效，但已签发的 JWT 会在过期前继续可用。
     """
-    _reject_control_plane_local_admin(ctx)
     new_pw = (data.new_password or "").strip()
     if len(new_pw) < 6 or len(new_pw) > 128:
         raise HTTPException(status_code=400, detail="密码长度需在 6-128 位之间")
@@ -983,7 +926,6 @@ async def list_platform_users(
 
     返回精简：id / username / display_name / is_platform_admin。不返密码 hash。
     """
-    _reject_control_plane_local_admin(ctx)
     _require_platform_admin(ctx)
     rows = (
         await db.execute(
@@ -1008,15 +950,14 @@ async def list_my_tenants(
 ):
     """返回当前用户可切换的租户列表（用于顶栏 dropdown）。
 
-    普通 aPaaS 用户只返回自己的 active membership。aPaaS 平台管理员还可以切换到
-    已明确绑定 PlatformEnv 的本地租户；未绑定的本地租户仍不在工作台切换范围内。
+    aPaaS 登录用户只返回自己可登录的 active membership。平台管理员的全量租户同步
+    只供平台管理使用，不等于这些租户都能进入工作台。
     """
     if (
-        str(ctx.user.account_source or "").strip().lower() == "control_plane"
+        ctx.user.account_source == "control_plane"
         and (
             runtime.is_desktop()
             or ctx.tenant_access_scope == "control_plane_code"
-            or bool(getattr(ctx, "control_plane_tenant_id", None))
         )
     ):
         token = control_plane_access_token(ctx.user)
@@ -1039,36 +980,6 @@ async def list_my_tenants(
                 stmt.order_by(Tenant.tenant_name.asc())
             )
         ).scalars().all()
-    elif ctx.user.is_platform_admin and str(ctx.user.account_source or "").strip().lower() == "apaas":
-        # aPaaS platform admins can work in every local tenant that has an
-        # explicit platform binding. Membership is not required for these
-        # synchronized tenant records.
-        from app.models import PlatformEnv
-        membership_rows = (
-            await db.execute(
-                select(Tenant)
-                .join(UserTenant, UserTenant.tenant_id == Tenant.id)
-                .where(
-                    UserTenant.user_id == ctx.user.id,
-                    UserTenant.status == 1,
-                    Tenant.status == 1,
-                )
-            )
-        ).scalars().all()
-        bound_rows = (
-            await db.execute(
-                select(Tenant)
-                .join(PlatformEnv, PlatformEnv.tenant_id == Tenant.id)
-                .where(
-                    Tenant.status == 1,
-                    PlatformEnv.platform_tenant_id.is_not(None),
-                    PlatformEnv.platform_tenant_id != "",
-                )
-                .order_by(Tenant.tenant_name.asc())
-            )
-        ).scalars().unique().all()
-        rows_by_id = {row.id: row for row in [*membership_rows, *bound_rows]}
-        rows = sorted(rows_by_id.values(), key=lambda row: (row.tenant_name or "", row.id))
     else:
         rows = (
             await db.execute(
@@ -1090,8 +1001,6 @@ async def list_my_tenants(
 @router.get("/users")
 async def list_users(ctx: Annotated[AuthContext, Depends(get_auth_context)], db: Annotated[AsyncSession, Depends(get_db)]):
     """获取同租户下的所有用户（用于团队成员选择）"""
-    if is_control_plane_context(ctx):
-        return []
     if ctx.tenant_id:
         result = await db.execute(
             select(User.id, User.username, User.display_name)
@@ -1112,7 +1021,6 @@ async def list_tenant_roles(
     ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    _reject_control_plane_local_admin(ctx)
     if ctx.tenant_role == "platform_admin":
         return [
             {
@@ -1152,7 +1060,6 @@ async def list_tenant_users(
     ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    _reject_control_plane_local_admin(ctx)
     if ctx.tenant_role == "platform_admin":
         result = await db.execute(select(User).order_by(User.created_at.asc(), User.id.asc()))
         users = result.scalars().all()
@@ -1177,7 +1084,6 @@ async def invite_tenant_user(
     ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    _reject_control_plane_local_admin(ctx)
     from sqlalchemy.exc import IntegrityError
     username = (req.username or "").strip()
     if not username:
@@ -1341,7 +1247,6 @@ async def update_tenant_user_status(
     ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    _reject_control_plane_local_admin(ctx)
     if req.status not in (0, 1):
         raise HTTPException(status_code=400, detail="status 只能是 0 或 1")
     if user_id == ctx.user.id:
@@ -1385,7 +1290,6 @@ async def update_tenant_user_role(
     ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    _reject_control_plane_local_admin(ctx)
     if ctx.tenant_role == "platform_admin":
         if req.role_code not in ("platform_admin", "normal_user"):
             raise HTTPException(status_code=400, detail="平台管理员只能切换平台超级管理员或普通账号")
@@ -1449,10 +1353,14 @@ async def get_me(ctx: Annotated[AuthContext, Depends(get_platform_auth_context)]
 
     is_desktop_control_plane_account = (
         ctx.user.account_source == "control_plane"
-        and runtime.is_desktop()
-        and bool((getattr(ctx, "control_plane_tenant_id", None) or ctx.user.coding_tenant_id or "").strip())
+        and (
+            (
+                runtime.is_desktop()
+                and bool((ctx.user.coding_tenant_id or "").strip())
+            )
+            or ctx.tenant_access_scope == "control_plane_code"
+        )
     )
-    is_control_plane_account = ctx.user.account_source == "control_plane"
     control_plane_tenant_id = (
         getattr(ctx, "control_plane_tenant_id", None)
         or (ctx.user.coding_tenant_id or "").strip()
@@ -1490,13 +1398,11 @@ async def get_me(ctx: Annotated[AuthContext, Depends(get_platform_auth_context)]
         ),
         tenant_public_id=tenant_public_id,
         control_plane_tenant_id=(
-            control_plane_tenant_id if is_control_plane_account else None
+            control_plane_tenant_id if is_desktop_control_plane_account else None
         ),
         control_plane_tenant_name=(
-            control_plane_tenant_name if is_control_plane_account else None
+            control_plane_tenant_name if is_desktop_control_plane_account else None
         ),
         tenant_role=ctx.tenant_role,
         org_permissions=control_plane_permissions,
-        account_source=ctx.user.account_source,
-        tenant_authority="control_plane" if is_control_plane_account else "builder",
     )

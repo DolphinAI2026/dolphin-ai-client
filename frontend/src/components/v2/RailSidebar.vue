@@ -1,80 +1,29 @@
-<script lang="ts">
-import { MODE_META as railModeMeta, type AppMode as RailAppMode } from '@/stores/mode'
-import {
-  defaultProductHome as railDefaultProductHome,
-  type ProductAvailability as RailProductAvailability,
-} from '@/stores/productAvailability'
-
-export function railTenantHome(
-  desktop: boolean,
-  mode: RailAppMode,
-  availability: RailProductAvailability,
-): string {
-  return desktop ? railModeMeta[mode].home : railDefaultProductHome(availability)
-}
-
-export function createLatestRailNavigationIntent() {
-  let current = 0
-  return {
-    begin: () => ++current,
-    isCurrent: (intent: number) => intent === current,
-  }
-}
-</script>
-
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import {
-  getDesktopState,
-  resolveDesktopProductScope,
-  type DesktopWorkspaceEntryScope,
-} from '@/utils/desktop'
+import { checkAndPromptUpdate } from '@/utils/desktop'
 import { useUserStore } from '@/stores/user'
+import { useThemeStore } from '@/stores/theme'
 import { useCodeApplicationsStore } from '@/stores/codeApplications'
-import {
-  desktopModeLabel,
-  isCodeRoutePath,
-  useModeStore,
-  MODE_META,
-  visibleModeNav,
-  visibleModesForDesktopScope,
-  type AppMode,
-} from '@/stores/mode'
-import {
-  defaultProductHome,
-  enabledProductModes,
-  loadProductAvailability,
-  type ProductAvailability,
-} from '@/stores/productAvailability'
+import { isCodeRoutePath, useModeStore, MODE_META, MODE_ORDER, type AppMode } from '@/stores/mode'
 import { aiChatApi, type AIChatSession } from '@/api/aiChat'
+import { codeRuntimeApi } from '@/api/codeRuntime'
+import { authApi } from '@/api/auth'
 import {
-  CODE_APPLICATION_SOURCE_CHANGED_EVENT,
-  codeRuntimeApi,
-  loadStoredCodeApplicationSource,
-  type CodeApplicationSource,
-  type CodeExecutionLocation,
-} from '@/api/codeRuntime'
-import { getControlPlaneCodeSession } from '@/utils/controlPlaneCodeSession'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import SystemAssistantSessionSections from '@/components/v2/SystemAssistantSessionSections.vue'
+  getControlPlaneCodeSession,
+  setControlPlaneCodeSession,
+} from '@/utils/controlPlaneCodeSession'
+import { ElMessage } from 'element-plus'
 import {
-  groupRailSessionsByApplication,
   normalizeAiSessions,
+  normalizeCodeRailHistory,
   nextAgentQuery,
   railSessionTarget,
   isRailSessionActive,
   railSessionFallback,
-  sortRailSessionsByUpdatedAt,
   type RailSession,
-  type RailSessionGroup,
 } from '@/composables/railSessions'
 import type { CodeAgentSessionRecord, CodeRailHistoryResponse } from '@/api/codeRuntime'
-import {
-  codeRailHistorySessions,
-  groupCodeRailHistoryByApplication,
-  type CodeRailSessionGroup,
-} from './codeRailHistory'
 import ruijingWhaleMarkUrl from '@/assets/brand/ruijing-whale-mark.svg'
 
 interface NavItem { key: string; label: string; icon: string; path: string; badge?: number }
@@ -83,66 +32,37 @@ const props = defineProps<{ collapsed?: boolean }>()
 const route = useRoute()
 const router = useRouter()
 const user = useUserStore()
+const theme = useThemeStore()
 const modeStore = useModeStore()
 const codeApplications = useCodeApplicationsStore()
-const codeApplicationSource = ref<CodeApplicationSource>(
-  __DESKTOP__ ? loadStoredCodeApplicationSource('local') : 'remote',
-)
-const productAvailability = ref<ProductAvailability>({ builder: true, code: true })
 
-const desktopWorkspaceEntryScope = ref<DesktopWorkspaceEntryScope>('both')
-const visibleModeOrder = computed(() => __DESKTOP__
-  ? visibleModesForDesktopScope(desktopWorkspaceEntryScope.value)
-  : enabledProductModes(productAvailability.value))
-// 当前路由驱动左栏导航、会话加载和会话路由；桌面公共路由收敛到当前可见入口。
-const currentMode = computed<AppMode>(() => {
-  const routeMode: AppMode = isCodeRoutePath(route.path) ? 'code' : 'builder'
-  return !visibleModeOrder.value.includes(routeMode)
-    ? visibleModeOrder.value[0]
-    : routeMode
-})
-const isSystemAssistantRoute = computed(() => route.path === '/code/system-assistant')
+// 当前路由驱动左栏导航、会话加载和会话路由，避免持久化 mode 污染另一套 shell。
+const currentMode = computed<AppMode>(() => isCodeRoutePath(route.path) ? 'code' : 'builder')
 
 // 会话历史 —— 收进左栏单一导航(参考 Claude Code), 页面内层 sidebar 隐掉。
 // 统一使用 aiChatApi 会话; Code 模式只展示 mode=code 的应用会话。
 const aiSessions = ref<AIChatSession[]>([])
-const systemAssistantSessionData = ref<AIChatSession[]>([])
 const codeRailHistory = ref<CodeRailHistoryResponse | null>(null)
 const showRecent = computed(() => !effectiveCollapsed.value)
 let railAppsSeq = 0
 let railSessionsSeq = 0
-let systemAssistantSessionsTimer: ReturnType<typeof setInterval> | null = null
 
 // app_id → 应用名映射(供「按应用」分组,code 会话从工作区继承 app_id 后据此归到应用)。
 const appNameById = ref<Map<number, string>>(new Map())
 
-const systemAssistantSessions = computed<RailSession[]>(() =>
-  sortRailSessionsByUpdatedAt(normalizeAiSessions(systemAssistantSessionData.value)),
-)
-const systemAssistantApplicationGroups = computed<CodeRailSessionGroup[]>(() =>
-  groupCodeRailHistoryByApplication(codeRailHistory.value),
-)
-
-// 非系统助手入口仍使用当前模式对应的单一会话源。
-const railSessions = computed<RailSession[]>(() => {
-  return currentMode.value === 'code'
-    ? codeRailHistorySessions(codeRailHistory.value)
-    : normalizeAiSessions(aiSessions.value, appNameById.value)
-})
+// 归一会话列表(单一来源)。
+const railSessions = computed<RailSession[]>(() => currentMode.value === 'code'
+  ? normalizeCodeRailHistory(codeRailHistory.value)
+  : normalizeAiSessions(aiSessions.value, appNameById.value))
 
 async function loadRailApps() {
   const seq = ++railAppsSeq
   const mode = currentMode.value
-  if (isSystemAssistantRoute.value) {
-    appCount.value = undefined
-    appNameById.value = new Map()
-    return
-  }
   try {
     if (mode === 'code') {
       const page = await codeApplications.load(
         { tenantId: user.tenantId || 0, tenantEpoch: 0 },
-        { source: codeApplicationSource.value, pageSize: 100 },
+        { pageSize: 100 },
       )
       if (seq !== railAppsSeq || mode !== currentMode.value) return
       const items = page?.items || []
@@ -179,38 +99,22 @@ async function loadRailSessions() {
   const mode = currentMode.value
   try {
     if (mode === 'code') {
-      const [systemResult, applicationResult] = await Promise.allSettled([
-        aiChatApi.listSessions({ mode: 'code', assistant_profile: 'system_assistant' }),
-        codeRuntimeApi.listRailHistory(),
-      ])
+      const history = await codeRuntimeApi.listRailHistory()
       if (seq !== railSessionsSeq || mode !== currentMode.value) return
-      systemAssistantSessionData.value = systemResult.status === 'fulfilled'
-        ? systemResult.value?.sessions || []
-        : systemAssistantSessionData.value
-      codeRailHistory.value = applicationResult.status === 'fulfilled'
-        ? applicationResult.value
-        : codeRailHistory.value
+      codeRailHistory.value = history
+      aiSessions.value = []
       return
     }
     const d = await aiChatApi.listSessions()
     if (seq !== railSessionsSeq || mode !== currentMode.value) return
+    codeRailHistory.value = null
     const sessions = d?.sessions || []
     aiSessions.value = sessions.filter(s => s.mode !== 'code')
   } catch {
     if (seq !== railSessionsSeq || mode !== currentMode.value) return
-    if (mode !== 'code') aiSessions.value = []
+    aiSessions.value = []
+    if (mode === 'code') codeRailHistory.value = { apps: [] }
   }
-}
-
-function syncSystemAssistantSessionPolling() {
-  if (systemAssistantSessionsTimer) {
-    clearInterval(systemAssistantSessionsTimer)
-    systemAssistantSessionsTimer = null
-  }
-  if (currentMode.value !== 'code') return
-  systemAssistantSessionsTimer = setInterval(() => {
-    if (document.visibilityState === 'visible') void loadRailSessions()
-  }, 6000)
 }
 
 function refreshCodeRail() {
@@ -224,7 +128,7 @@ function refreshCodeRail() {
 const RAIL_GROUPBY_KEY = 'apaas-rail-sess-groupby-v1'
 const RAIL_GROUPBY_CODE_KEY = 'apaas-rail-sess-groupby-code-v1'
 function defaultGroupByForMode(mode: AppMode): 'date' | 'app' {
-  return mode === 'builder' || mode === 'code' ? 'app' : 'date'
+  return mode === 'code' ? 'app' : 'date'
 }
 function groupByStorageKey(mode: AppMode): string {
   return mode === 'code' ? RAIL_GROUPBY_CODE_KEY : RAIL_GROUPBY_KEY
@@ -239,9 +143,7 @@ function loadGroupByForMode(mode: AppMode): 'date' | 'app' {
 const groupBy = ref<'date' | 'app'>(loadGroupByForMode(currentMode.value))
 const groupByMode = ref<AppMode>(currentMode.value)
 const effectiveGroupBy = computed<'date' | 'app'>(() =>
-  isSystemAssistantRoute.value
-    ? 'date'
-    : (groupByMode.value === currentMode.value ? groupBy.value : loadGroupByForMode(currentMode.value))
+  groupByMode.value === currentMode.value ? groupBy.value : loadGroupByForMode(currentMode.value)
 )
 function setGroupBy(g: 'date' | 'app') {
   groupByMode.value = currentMode.value
@@ -255,12 +157,6 @@ watch(currentMode, () => {
   groupBy.value = loadGroupByForMode(currentMode.value)
   void loadRailApps()
   void loadRailSessions()
-  syncSystemAssistantSessionPolling()
-})
-watch(isSystemAssistantRoute, () => {
-  void loadRailApps()
-  void loadRailSessions()
-  syncSystemAssistantSessionPolling()
 })
 const collapsedGroups = ref<Set<string>>(new Set())
 function toggleGroup(label: string) {
@@ -270,14 +166,20 @@ function toggleGroup(label: string) {
 }
 
 const creatingCodeAgentSession = ref(false)
-const creatingBuilderSession = ref(false)
-const railNavigationIntent = createLatestRailNavigationIntent()
-const sessionGroups = computed<(RailSessionGroup | CodeRailSessionGroup)[]>(() => {
-  if (effectiveGroupBy.value === 'app' && currentMode.value === 'code') {
-    return groupCodeRailHistoryByApplication(codeRailHistory.value)
-  }
+const sessionGroups = computed<{ label: string; items: RailSession[]; shellSessionId?: string }[]>(() => {
   if (effectiveGroupBy.value === 'app') {
-    return groupRailSessionsByApplication(railSessions.value, currentMode.value)
+    const map = new Map<string, RailSession[]>()
+    for (const s of railSessions.value) {
+      const key = s.appName || '未关联应用'
+      if (!map.has(key)) map.set(key, [])
+      map.get(key)!.push(s)
+    }
+    return [...map.entries()].map(([label, items]) => {
+      const shellSessionId = currentMode.value === 'code'
+        ? items.find(s => s.shellSessionId)?.shellSessionId
+        : undefined
+      return { label, items, ...(shellSessionId ? { shellSessionId } : {}) }
+    })
   }
   const now = new Date()
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
@@ -297,75 +199,14 @@ const sessionGroups = computed<(RailSessionGroup | CodeRailSessionGroup)[]>(() =
 })
 
 async function openSession(session: RailSession) {
-  const intent = railNavigationIntent.begin()
-  if (currentMode.value === 'code' && session.source !== 'code-agent' && session.source !== 'code-shell') {
-    if (railNavigationIntent.isCurrent(intent)) {
-      router.push({ path: '/code/system-assistant', query: { ...route.query, session: String(session.id) } })
-    }
-    return
+  if (currentMode.value === 'code' && session.source === 'code-agent' && session.shellSessionId && session.runtimeSessionId) {
+    try {
+      await codeRuntimeApi.activateAgentSession(session.shellSessionId, session.runtimeSessionId)
+    } catch { /* iframe will surface runtime errors on open */ }
   }
-  if (!railNavigationIntent.isCurrent(intent)) return
   router.push(railSessionTarget(currentMode.value, session, route.query))
 }
-
-function sessionGroupKey(group: RailSessionGroup | CodeRailSessionGroup): string {
-  return 'logicalApplicationId' in group
-    ? `application:${group.logicalApplicationId}`
-    : group.label
-}
-
-function openCodeLocationSession(
-  group: RailSessionGroup | CodeRailSessionGroup,
-  location: CodeExecutionLocation,
-) {
-  if (!('locationSessions' in group)) return
-  const session = group.locationSessions[location]
-  if (session) void openSession(session)
-}
-
-function codeGroupStandardShellSessionId(
-  group: RailSessionGroup | CodeRailSessionGroup,
-): string | undefined {
-  return 'standardShellSessionId' in group ? group.standardShellSessionId : undefined
-}
-
-function createSystemAssistantSession() {
-  railNavigationIntent.begin()
-  const query = { ...route.query }
-  delete query.session
-  router.push({ path: '/code/system-assistant', query })
-}
-
-function sessionActive(s: RailSession) {
-  if (isSystemAssistantRoute.value) return String(route.query.session || '') === String(s.id)
-  return isRailSessionActive(currentMode.value, s, route)
-}
-
-function sessionRunning(session: RailSession): boolean {
-  return ['running', 'processing'].includes(String(session.status || '').toLowerCase())
-}
-
-async function renameSystemAssistantSession(session: RailSession) {
-  try {
-    const { value } = await ElMessageBox.prompt('输入新的会话名称', '重命名会话', {
-      inputValue: session.title || '',
-      inputPlaceholder: '会话名称',
-      confirmButtonText: '保存',
-      cancelButtonText: '取消',
-      inputValidator: value => Boolean(String(value || '').trim()) || '请输入会话名称',
-    })
-    const title = String(value || '').trim()
-    if (!title || title === session.title) return
-    await aiChatApi.updateSession(Number(session.id), { title })
-    await loadRailSessions()
-    window.dispatchEvent(new CustomEvent('system-assistant-session-renamed', {
-      detail: { id: Number(session.id), title },
-    }))
-  } catch (error: any) {
-    if (error === 'cancel' || error === 'close') return
-    ElMessage.error(error?.response?.data?.detail || error?.message || '重命名失败')
-  }
-}
+function sessionActive(s: RailSession) { return isRailSessionActive(currentMode.value, s, route) }
 
 function upsertOptimisticCodeAgentSession(
   shellSessionId: string,
@@ -404,66 +245,27 @@ function upsertOptimisticCodeAgentSession(
   }
 }
 
-async function createBuilderSession(appId?: number | null) {
-  if (creatingBuilderSession.value || currentMode.value !== 'builder' || !appId) return
-  creatingBuilderSession.value = true
-  try {
-    const session = await aiChatApi.createSession({ app_id: appId, mode: 'chat' })
-    router.push({
-      path: `/ai-chat/${session.id}`,
-      query: { ...route.query, app_id: String(appId) },
-    })
-    void loadRailSessions()
-  } catch (error: any) {
-    ElMessage.error(error?.response?.data?.detail || error?.message || '新建会话失败')
-  } finally {
-    creatingBuilderSession.value = false
-  }
-}
-
-async function createCodeAgentSession(
-  shellSessionId?: string | null,
-  group?: RailSessionGroup | CodeRailSessionGroup,
-) {
+async function createCodeAgentSession(shellSessionId?: string | null) {
   if (creatingCodeAgentSession.value) return
   const isCodeMode = currentMode.value === 'code'
   if (!isCodeMode) return
-  const intent = railNavigationIntent.begin()
+  if (!shellSessionId) {
+    ElMessage.warning('请先打开一个 Code 应用')
+    return
+  }
+
   creatingCodeAgentSession.value = true
   try {
-    let targetShellSessionId = shellSessionId || ''
-    if (!targetShellSessionId && group && 'locationSessions' in group) {
-      const representative = group.locationSessions.local || group.locationSessions.remote
-      if (representative) {
-        const standardShell = await codeRuntimeApi.createSessionFromExternalApp({
-          logical_application_id: representative.logicalApplicationId,
-          external_application_id: representative.externalApplicationId,
-          execution_location: representative.executionLocation,
-          session_policy: 'resume_recent',
-          session_purpose: 'standard',
-          app_name: representative.appName,
-        })
-        targetShellSessionId = String(
-          standardShell.route_id || standardShell.public_id || standardShell.id || '',
-        )
-      }
-    }
-    if (!targetShellSessionId) {
-      ElMessage.warning('请先打开一个 Code 应用')
-      return
-    }
-    if (!railNavigationIntent.isCurrent(intent)) return
-    const result = await codeRuntimeApi.createAgentSession(targetShellSessionId)
-    if (!railNavigationIntent.isCurrent(intent)) return
+    const result = await codeRuntimeApi.createAgentSession(shellSessionId)
     if (result.runtime_session_id) {
-      upsertOptimisticCodeAgentSession(targetShellSessionId, result.runtime_session_id, result.session)
+      upsertOptimisticCodeAgentSession(shellSessionId, result.runtime_session_id, result.session)
       router.push({
-        path: `/code/${result.shell_session_id || targetShellSessionId}`,
+        path: `/code/${result.shell_session_id || shellSessionId}`,
         query: nextAgentQuery(route.query, result.runtime_session_id),
       })
     } else {
       router.push({
-        path: `/code/${targetShellSessionId}`,
+        path: `/code/${shellSessionId}`,
         query: nextAgentQuery(route.query),
       })
     }
@@ -475,15 +277,7 @@ async function createCodeAgentSession(
   }
 }
 async function deleteRailSession(s: RailSession) {
-  try {
-    await ElMessageBox.confirm(
-      `删除会话「${s.title || '未命名会话'}」后无法恢复。`,
-      '删除会话',
-      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
-    )
-  } catch {
-    return
-  }
+  if (!window.confirm(`删除会话「${s.title || '未命名会话'}」?`)) return
   try {
     if (currentMode.value === 'code' && s.source === 'code-agent' && s.shellSessionId && s.runtimeSessionId) {
       await codeRuntimeApi.deleteAgentSession(s.shellSessionId, s.runtimeSessionId)
@@ -493,12 +287,6 @@ async function deleteRailSession(s: RailSession) {
   } catch { /* ignore */ }
   await loadRailSessions()
   if (sessionActive(s)) {
-    if (isSystemAssistantRoute.value) {
-      const query = { ...route.query }
-      delete query.session
-      router.push({ path: '/code/system-assistant', query })
-      return
-    }
     router.push({
       path: railSessionFallback(currentMode.value),
       query: nextAgentQuery(route.query),
@@ -524,21 +312,26 @@ function desktopHidden(path: string): boolean {
 
 // 导航 = 当前模式自带的左栏(参考设计: 每模式不同)。apps 项带应用计数 badge。
 const NAV = computed<NavItem[]>(() => {
-  const items = visibleModeNav(currentMode.value, __DESKTOP__).map<NavItem>(it => ({
+  const items = MODE_META[currentMode.value].nav.map<NavItem>(it => ({
     ...it,
     badge: it.key.endsWith('-apps') ? (appCount.value || undefined) : undefined,
   }))
   return items.filter(item => !desktopHidden(item.path))
 })
-const auditLogNavItem: NavItem = { key: 'audit-logs', label: '管理审计日志', icon: 'activity', path: '/audit-logs' }
+// 桌面包不含 admin-spa, /platform-admin 内嵌 iframe 会白屏; 桌面下直接进自渲染的配置页 /platform-envs。
+const platformNavItem: NavItem = __DESKTOP__
+  ? { key: 'platform', label: '平台配置', icon: 'shield', path: '/platform-envs' }
+  : { key: 'platform', label: '平台管理', icon: 'shield', path: '/platform-admin' }
+
+// 三模式共用的「能力中心」入口 → hub 页(技能/知识/MCP/AI网关 4 tab)
+const hubNavItem: NavItem = { key: 'hub', label: '能力中心', icon: 'spark', path: '/hub' }
 
 const userAccount = computed(() => user.user?.username || '')
 const userName = computed(() => user.user?.display_name || userAccount.value || '未登录')
 const userAvatarText = computed(() => Array.from(userName.value.trim())[0]?.toUpperCase() || 'U')
 const tenantOptions = computed(() => user.availableTenants || [])
-const isControlPlaneTenantAuthority = computed(() => user.user?.tenant_authority === 'control_plane')
-const currentTenantValue = computed(() => isControlPlaneTenantAuthority.value
-  ? (user.user?.control_plane_tenant_id || getControlPlaneCodeSession()?.tenantId || '')
+const currentTenantValue = computed(() => currentMode.value === 'code'
+  ? (getControlPlaneCodeSession()?.tenantId || '')
   : (user.tenantId ? String(user.tenantId) : ''))
 function looksLikeLongId(value?: string | null) {
   return /^\d{12,}$/.test(String(value || '').trim())
@@ -562,7 +355,7 @@ function tenantSubtitle(tenant?: { tenant_name?: string | null; tenant_code?: st
 }
 
 const currentTenantLabel = computed(() => {
-  if (isControlPlaneTenantAuthority.value && getControlPlaneCodeSession()?.tenantName) {
+  if (currentMode.value === 'code') {
     return getControlPlaneCodeSession()?.tenantName || '未选择组织'
   }
   if (__DESKTOP__) {
@@ -577,6 +370,13 @@ const currentTenantLabel = computed(() => {
     tenant_id: user.tenantId,
   })
 })
+const isDark = computed(() => theme.mode === 'dark')
+const platformActive = computed(() => route.path.startsWith(platformNavItem.path))
+const platformHref = computed(() => resolveHref(platformNavItem.path))
+// 桌面: 租户管理员就能进 /platform-envs 配自己的 LLM/aPaaS(每人独立租户)。
+// 在线版: 那条入口指向 admin-spa(仅平台管理员), 保持 isPlatformAdmin 避免租户管理员点进去被弹。
+const platformEntryVisible = computed(() => __DESKTOP__ ? user.isTenantAdmin : user.isPlatformAdmin)
+
 const userMenuOpen = ref(false)
 function toggleUserMenu(e: MouseEvent) {
   e.stopPropagation()
@@ -588,76 +388,20 @@ function closeTenantMenu() {
   userMenuOpen.value = false
 }
 
-function applyDesktopWorkspaceEntryScope(scope: unknown) {
-  if (scope === 'apaas' || scope === 'ai_platform' || scope === 'both') {
-    desktopWorkspaceEntryScope.value = scope
-  }
-}
-
-async function loadDesktopWorkspaceEntryScope() {
-  if (!__DESKTOP__) return
-  try {
-    const snapshot = await getDesktopState()
-    applyDesktopWorkspaceEntryScope(resolveDesktopProductScope(snapshot.config))
-  } catch { /* desktop bootstrap owns state errors */ }
-}
-
-async function loadWebProductAvailability() {
-  if (__DESKTOP__) return
-  productAvailability.value = await loadProductAvailability()
-}
-
-function onDesktopWorkspaceEntryScopeChanged(event: Event) {
-  applyDesktopWorkspaceEntryScope(
-    (event as CustomEvent<DesktopWorkspaceEntryScope | undefined>).detail,
-  )
-}
-
-function onCodeApplicationSourceChanged(event: Event) {
-  const source = (event as CustomEvent<CodeApplicationSource | undefined>).detail
-  if (source !== 'local' && source !== 'remote') return
-  codeApplicationSource.value = source
-  refreshCodeRail()
-}
-
 onMounted(() => {
   const startupTasks: Promise<unknown>[] = [
     loadRailApps(),
     loadRailSessions(),
   ]
   startupTasks.push(user.fetchAvailableTenants())
-  if (__DESKTOP__) startupTasks.push(loadDesktopWorkspaceEntryScope())
-  else startupTasks.push(loadWebProductAvailability())
   void Promise.allSettled(startupTasks)
-  syncSystemAssistantSessionPolling()
   window.addEventListener('click', closeTenantMenu)
   window.addEventListener('code-rail-refresh', refreshCodeRail)
-  if (__DESKTOP__) {
-    window.addEventListener(
-      CODE_APPLICATION_SOURCE_CHANGED_EVENT,
-      onCodeApplicationSourceChanged,
-    )
-    window.addEventListener(
-      'desktop-workspace-entry-scope-changed',
-      onDesktopWorkspaceEntryScopeChanged,
-    )
-  }
 })
 
 onBeforeUnmount(() => {
-  if (systemAssistantSessionsTimer) clearInterval(systemAssistantSessionsTimer)
   window.removeEventListener('click', closeTenantMenu)
   window.removeEventListener('code-rail-refresh', refreshCodeRail)
-  if (__DESKTOP__) {
-    window.removeEventListener(
-      CODE_APPLICATION_SOURCE_CHANGED_EVENT,
-      onCodeApplicationSourceChanged,
-    )
-    window.removeEventListener(
-      'desktop-workspace-entry-scope-changed',
-      onDesktopWorkspaceEntryScopeChanged,
-    )
-  }
 })
 
 function toggleCollapsed() {
@@ -694,28 +438,24 @@ async function selectTenant(value: string) {
   tenantMenuOpen.value = false
   const tenant = tenantOptions.value.find(item => String(item.tenant_id) === value)
   if (!tenant || value === currentTenantValue.value) return
-  if (isControlPlaneTenantAuthority.value && !__DESKTOP__) {
+  if (currentMode.value === 'code' && !__DESKTOP__) {
     const session = getControlPlaneCodeSession()
-    const authToken = session?.token || user.token
-    if (!authToken) return
-    const outcome = await user.switchControlPlaneCodeTenant(value, authToken)
-    if (outcome === 'committed') window.location.reload()
+    if (!session) return
+    const next = await authApi.switchControlPlaneCodeTenant(value, session.token)
+    setControlPlaneCodeSession(next.access_token)
+    window.location.reload()
+    return
+  }
+  if (__DESKTOP__) {
+    await user.switchTenant(value)
     return
   }
   const targetPublicId = tenant.tenant_public_id
   if (!targetPublicId) return
-  const localTenantId = Number(tenant.tenant_id)
-  if (!Number.isSafeInteger(localTenantId)) return
   const navigationEpoch = user.advanceTenantNavigationEpoch()
-  if (!__DESKTOP__) {
-    productAvailability.value = await loadProductAvailability()
-  }
-  const destination = withTenantId(
-    railTenantHome(__DESKTOP__, currentMode.value, productAvailability.value),
-    targetPublicId,
-  )
+  const destination = withTenantId(MODE_META[currentMode.value].home, targetPublicId)
   await user.switchTenantContext(
-    localTenantId,
+    tenant.tenant_id,
     targetPublicId,
     destination,
     navigationEpoch,
@@ -723,24 +463,25 @@ async function selectTenant(value: string) {
 }
 
 function go(path: string) {
-  railNavigationIntent.begin()
   tenantMenuOpen.value = false
-  userMenuOpen.value = false
   router.push(path)
 }
 
 function goNav(item: NavItem) {
-  railNavigationIntent.begin()
   tenantMenuOpen.value = false
   router.push(item.path)
 }
 
 function switchMode(mode: AppMode) {
   if (mode === currentMode.value) return
-  railNavigationIntent.begin()
   modeStore.setMode(mode)
   tenantMenuOpen.value = false
   router.push(MODE_META[mode].home)
+}
+
+function goPlatformAdmin() {
+  tenantMenuOpen.value = false
+  router.push(platformNavItem.path)
 }
 
 // 2026-05-23: rail nav 改 <a href> 让 Cmd+click / 中键 / 右键"在新标签中打开"
@@ -762,7 +503,24 @@ function onMenuClick(e: MouseEvent, item: NavItem) {
   goNav(item)
 }
 
+function onPlatformClick(e: MouseEvent) {
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
+    return
+  }
+  e.preventDefault()
+  goPlatformAdmin()
+}
+
+// __DESKTOP__/__APP_VERSION__ 是编译期常量, 但直接写进 <template> 会被 Vue 当成
+// 组件实例属性(_ctx.__DESKTOP__)而 Vite define 不替换点号后属性 → 永远 undefined。
+// 必须经脚本 const 暴露给模板。
 const isDesktop = __DESKTOP__
+const appVersion = __APP_VERSION__
+
+// 桌面端手动检查更新(在线版不渲染按钮)。silentIfNone=false → 已是最新也提示。
+function onCheckUpdate() {
+  void checkAndPromptUpdate({ silentIfNone: false })
+}
 
 function onLogout() {
   tenantMenuOpen.value = false
@@ -788,16 +546,12 @@ const ICONS: Record<string, string> = {
   shield: '<path d="M12 2 4 5v7c0 5 3.5 8.5 8 10 4.5-1.5 8-5 8-10V5z"/><path d="M9 12l2 2 4-4"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M6.3 6.3 4.9 4.9M19.1 19.1l-1.4-1.4M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4"/>',
   moon: '<path d="M21 13A9 9 0 0 1 11 3a9 9 0 1 0 10 10z"/>',
-  settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
   chevronLeft: '<polyline points="15 18 9 12 15 6"/>',
   chevronRight: '<polyline points="9 18 15 12 9 6"/>',
   chevronDown: '<polyline points="6 9 12 15 18 9"/>',
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
   refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4"/><polyline points="21 3 21 9 15 9"/>',
   plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
-  trash: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/>',
-  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
-  moreHorizontal: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
 }
 
 function renderIcon(name: string): string {
@@ -812,13 +566,13 @@ function renderIcon(name: string): string {
       <button
         class="rail-logo"
         type="button"
-        :aria-label="effectiveCollapsed ? '展开导航' : 'DolphinAI 首页'"
-        @click="effectiveCollapsed ? toggleCollapsed() : go(defaultProductHome(productAvailability))"
+        :aria-label="effectiveCollapsed ? '展开导航' : 'Dolphin Code 首页'"
+        @click="effectiveCollapsed ? toggleCollapsed() : go('/')"
       >
         <img class="rail-logo-mark" :src="ruijingWhaleMarkUrl" alt="" aria-hidden="true" />
       </button>
       <div v-if="!effectiveCollapsed" class="rail-brand-copy">
-        <div class="rail-title">DolphinAI</div>
+        <div class="rail-title">Dolphin Code</div>
       </div>
       <!-- 收起按钮放在 brand 区右侧 — 跟 SessionSidebar 的 « 按钮位置一致，
            比放底部更顺手。展开 / 收起两个状态用同一个 button，方向不一样。 -->
@@ -845,15 +599,9 @@ function renderIcon(name: string): string {
       <span v-html="renderIcon('chevronRight')" />
     </button>
 
-    <div
-      v-if="!effectiveCollapsed"
-      class="rail-mode-switch"
-      role="tablist"
-      aria-label="工作模式"
-      :style="{ gridTemplateColumns: `repeat(${visibleModeOrder.length}, minmax(0, 1fr))` }"
-    >
+    <div v-if="!effectiveCollapsed" class="rail-mode-switch" role="tablist" aria-label="工作模式">
       <button
-        v-for="mode in visibleModeOrder"
+        v-for="mode in MODE_ORDER"
         :key="mode"
         type="button"
         class="rail-mode-btn"
@@ -862,7 +610,7 @@ function renderIcon(name: string): string {
         :aria-selected="mode === currentMode"
         @click="switchMode(mode)"
       >
-        {{ isDesktop ? desktopModeLabel(mode) : MODE_META[mode].label }}
+        {{ MODE_META[mode].label }}
       </button>
     </div>
 
@@ -884,22 +632,8 @@ function renderIcon(name: string): string {
         <span v-if="it.badge" class="rail-item-badge">{{ it.badge }}</span>
       </a>
 
-      <SystemAssistantSessionSections
-        v-if="showRecent && currentMode === 'code'"
-        class="rail-sessions rail-system-assistant-sessions"
-        :system-sessions="systemAssistantSessions"
-        :application-groups="systemAssistantApplicationGroups"
-        :active-system-session-id="String(route.query.session || '')"
-        @new-system-session="createSystemAssistantSession"
-        @open-system-session="openSession"
-        @rename-system-session="renameSystemAssistantSession"
-        @delete-system-session="deleteRailSession"
-        @open-application-session="openSession"
-        @new-application-session="createCodeAgentSession"
-      />
-
-      <!-- 普通应用会话继续按日期或应用分组。 -->
-      <div v-else-if="showRecent" class="rail-sessions">
+      <!-- 会话历史(单一左栏, 参考 Claude Code): 日期/应用 分组 + 可折叠 + 删除。 -->
+      <div v-if="showRecent" class="rail-sessions">
         <div class="rail-sess-toolbar">
           <span class="rail-sess-cap">会话</span>
           <div class="rail-sess-groupby">
@@ -907,130 +641,141 @@ function renderIcon(name: string): string {
             <button type="button" :class="{ on: effectiveGroupBy === 'app' }" @click="setGroupBy('app')">应用</button>
           </div>
         </div>
-        <div class="rail-sess-list">
-          <div v-for="g in sessionGroups" :key="sessionGroupKey(g)" class="rail-sess-group">
-            <div class="rail-sess-label-row">
-              <button type="button" class="rail-sess-label" @click="toggleGroup(sessionGroupKey(g))">
-                <span class="rail-sess-chev" :class="{ collapsed: collapsedGroups.has(sessionGroupKey(g)) }" v-html="renderIcon('chevronDown')" />
-                <span class="rail-sess-glabel">{{ g.label }}</span>
-                <span
-                  v-if="currentMode === 'code' && effectiveGroupBy === 'app' && 'availableLocations' in g"
-                  class="rail-sess-locations"
-                >{{ g.availableLocations.map(location => location === 'local' ? '本机' : '远程').join('、') }}</span>
-                <span class="rail-sess-cnt">{{ g.items.length }}</span>
-              </button>
-              <button
-                v-if="currentMode === 'code' && effectiveGroupBy === 'app' && 'localShellSessionId' in g && g.localShellSessionId"
-                type="button"
-                class="rail-sess-location-open"
-                @click.stop="openCodeLocationSession(g, 'local')"
-              >本机打开</button>
-              <button
-                v-if="currentMode === 'code' && effectiveGroupBy === 'app' && 'remoteShellSessionId' in g && g.remoteShellSessionId"
-                type="button"
-                class="rail-sess-location-open"
-                @click.stop="openCodeLocationSession(g, 'remote')"
-              >远程打开</button>
-              <button
-                v-if="effectiveGroupBy === 'app' && ((currentMode === 'code' && ('locationSessions' in g)) || (currentMode === 'builder' && g.appId))"
-                type="button"
-                class="rail-sess-group-new"
-                title="新建对话"
-                aria-label="新建对话"
-                :disabled="currentMode === 'code' ? creatingCodeAgentSession : creatingBuilderSession"
-                @click.stop="currentMode === 'code' ? createCodeAgentSession(codeGroupStandardShellSessionId(g), g) : createBuilderSession(g.appId)"
-              >
-                <span v-html="renderIcon('plus')" />
-              </button>
-            </div>
-            <template v-if="!collapsedGroups.has(sessionGroupKey(g))">
-              <div
-                v-for="s in g.items"
-                :key="s.id"
-                class="rail-sess-item"
-                :class="{ active: sessionActive(s) }"
-                :title="s.title || '未命名会话'"
-                @click="openSession(s)"
-              >
-                <span
-                  class="rail-sess-state"
-                  :class="{ running: sessionRunning(s) }"
-                  :title="sessionRunning(s) ? '执行中' : ''"
-                />
-                <span class="rail-sess-title">{{ s.title || '未命名会话' }}</span>
-                <span v-if="currentMode === 'code' && 'locationSummary' in s" class="rail-sess-location">{{ s.locationSummary }}</span>
-                <button class="rail-sess-del" type="button" title="删除会话" aria-label="删除会话" @click.stop="deleteRailSession(s)">
-                  <span v-html="renderIcon('trash')" />
-                </button>
-              </div>
-            </template>
+        <div v-for="g in sessionGroups" :key="g.label" class="rail-sess-group">
+          <div class="rail-sess-label-row">
+            <button type="button" class="rail-sess-label" @click="toggleGroup(g.label)">
+              <span class="rail-sess-chev" :class="{ collapsed: collapsedGroups.has(g.label) }" v-html="renderIcon('chevronDown')" />
+              <span class="rail-sess-glabel">{{ g.label }}</span>
+              <span class="rail-sess-cnt">{{ g.items.length }}</span>
+            </button>
+            <button
+              v-if="currentMode === 'code' && effectiveGroupBy === 'app' && g.shellSessionId"
+              type="button"
+              class="rail-sess-group-new"
+              title="新建对话"
+              aria-label="新建对话"
+              :disabled="creatingCodeAgentSession"
+              @click.stop="createCodeAgentSession(g.shellSessionId)"
+            >
+              <span v-html="renderIcon('plus')" />
+            </button>
           </div>
-          <div v-if="!sessionGroups.length" class="rail-sess-empty">还没有会话</div>
+          <template v-if="!collapsedGroups.has(g.label)">
+            <div
+              v-for="s in g.items"
+              :key="s.id"
+              class="rail-sess-item"
+              :class="{ active: sessionActive(s) }"
+              :title="s.title || '未命名会话'"
+              @click="openSession(s)"
+            >
+              <span class="rail-sess-title">{{ s.title || '未命名会话' }}</span>
+              <button class="rail-sess-del" type="button" title="删除会话" @click.stop="deleteRailSession(s)">×</button>
+            </div>
+          </template>
         </div>
+        <div v-if="!sessionGroups.length" class="rail-sess-empty">还没有会话</div>
       </div>
     </nav>
+
+    <!-- 能力中心(三模式共用入口): 技能 / 知识库 / MCP / AI 网关。常驻所有模式 → 切模式不丢这些能力。 -->
+    <a
+      class="rail-item rail-hub"
+      :href="resolveHref('/hub')"
+      :class="{ active: isActive('/hub') }"
+      title="能力中心(技能 / 知识库 / MCP / AI 网关)"
+      @click="onMenuClick($event, hubNavItem)"
+      @auxclick="onMenuClick($event, hubNavItem)"
+    >
+      <span class="rail-item-icon" v-html="renderIcon('spark')" />
+      <span class="rail-item-label">能力中心</span>
+    </a>
 
     <div class="rail-foot">
       <!-- 老的 .rail-collapse-btn 已移到顶部 brand 区，这里删掉减少重复入口 -->
 
       <div v-if="!effectiveCollapsed" class="rail-console" @click.stop>
-        <!-- 组织切换和配置入口统一收进头像菜单。 -->
-        <div v-show="userMenuOpen" class="rail-user-menu">
-          <div class="user-menu-tenant" @click.stop>
-            <div class="user-menu-tenant-label">{{ isDesktop ? '当前组织' : '当前租户' }}</div>
-            <div class="tenant-switch-wrap">
-              <button
-                type="button"
-                class="tenant-switch"
-                :class="{ open: tenantMenuOpen }"
-                aria-haspopup="menu"
-                :aria-expanded="tenantMenuOpen"
-                @click="toggleTenantMenu"
-              >
-                <span class="tenant-icon" v-html="renderIcon('bldg')" />
-                <span class="tenant-name" :title="user.user?.tenant_name || currentTenantLabel">{{ currentTenantLabel }}</span>
-                <span class="tenant-arrow" v-html="renderIcon('chevronDown')" />
-              </button>
-              <div v-if="tenantMenuOpen" class="tenant-menu" role="menu">
-                <button
-                  v-for="tenant in tenantOptions"
-                  :key="tenant.tenant_id"
-                  type="button"
-                  class="tenant-option"
-                  :class="{ active: String(tenant.tenant_id) === currentTenantValue }"
-                  role="menuitem"
-                  @click="selectTenant(String(tenant.tenant_id))"
-                >
-                  <span class="tenant-option-name" :title="tenant.tenant_name">{{ tenantLabel(tenant) }}</span>
-                  <span v-if="tenantSubtitle(tenant)" class="tenant-option-code">{{ tenantSubtitle(tenant) }}</span>
-                </button>
-                <div v-if="!tenantOptions.length" class="tenant-empty">暂无可切换组织</div>
-              </div>
-            </div>
-          </div>
-
-          <a
-            v-if="user.isTenantAdmin"
-            class="console-row"
-            :class="{ active: isActive(auditLogNavItem.path) }"
-            :href="resolveHref(auditLogNavItem.path)"
-            title="管理审计日志"
-            @click="onMenuClick($event, auditLogNavItem)"
-            @auxclick="onMenuClick($event, auditLogNavItem)"
+        <div class="rail-console-label">{{ isDesktop ? '当前组织' : '当前租户' }}</div>
+        <div class="tenant-switch-wrap" @click.stop>
+          <button
+            type="button"
+            class="tenant-switch"
+            :class="{ open: tenantMenuOpen }"
+            aria-haspopup="menu"
+            :aria-expanded="tenantMenuOpen"
+            @click="toggleTenantMenu"
           >
-            <span class="console-row-icon" v-html="renderIcon('activity')" />
-            <span>管理审计日志</span>
-          </a>
-
-          <button type="button" class="console-row settings-entry-row" @click="go(isDesktop ? '/desktop-settings' : '/settings?section=ai')">
-            <span class="console-row-icon" v-html="renderIcon('settings')" />
-            <span>设置</span>
+            <span class="tenant-icon" v-html="renderIcon('bldg')" />
+            <span class="tenant-name" :title="user.user?.tenant_name || currentTenantLabel">{{ currentTenantLabel }}</span>
+            <span class="tenant-arrow" v-html="renderIcon('chevronDown')" />
           </button>
+          <div v-if="tenantMenuOpen" class="tenant-menu" role="menu">
+            <button
+              v-for="tenant in tenantOptions"
+              :key="tenant.tenant_id"
+              type="button"
+              class="tenant-option"
+              :class="{ active: String(tenant.tenant_id) === currentTenantValue }"
+              role="menuitem"
+              @click="selectTenant(String(tenant.tenant_id))"
+            >
+              <span class="tenant-option-name" :title="tenant.tenant_name">{{ tenantLabel(tenant) }}</span>
+              <span v-if="tenantSubtitle(tenant)" class="tenant-option-code">{{ tenantSubtitle(tenant) }}</span>
+            </button>
+            <div v-if="!tenantOptions.length" class="tenant-empty">暂无可切换租户</div>
+          </div>
+        </div>
 
-          <button type="button" class="console-row logout-row" title="退出登录" @click="onLogout">
-            <span class="console-row-icon" v-html="renderIcon('logout')" />
-            <span>退出登录</span>
-          </button>
+        <!-- 头像点开的菜单只保留账户操作，组织切换在左下角常驻。 -->
+        <div v-show="userMenuOpen" class="rail-user-menu">
+        <a
+          v-if="platformEntryVisible && !desktopHidden(platformNavItem.path)"
+          class="console-row platform-row"
+          :class="{ active: platformActive }"
+          :href="platformHref"
+          title="平台管理"
+          @click="onPlatformClick"
+          @auxclick="onPlatformClick"
+        >
+          <span class="console-row-icon" v-html="renderIcon('shield')" />
+          <span>平台管理</span>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left:auto;opacity:0.5">
+            <path d="M7 17 17 7" />
+            <path d="M7 7h10v10" />
+          </svg>
+        </a>
+
+        <!-- 知识库已并入「得小帆·共性能力」hub(/hub?tab=knowledge), 不再单列 footer 入口 -->
+
+        <!-- v3 2026-05-20: 删主题色 picker 让 admin/frontend brand 始终一致蓝；只保留浅深切换 -->
+        <!-- 2026-05-21 整 row 改成 button — 之前 label 跟太阳 icon 视觉分离体验割裂。
+             现在 icon + 文字 + 切换方向提示一体，跟 admin-spa AdminLayout 一致 -->
+        <button
+          type="button"
+          class="theme-row"
+          :aria-label="isDark ? '切换到浅色模式' : '切换到深色模式'"
+          @click="theme.toggle()"
+        >
+          <span class="theme-row-icon" v-html="renderIcon(isDark ? 'moon' : 'sun')" />
+          <span class="theme-row-label">{{ isDark ? '深色模式 · 切到浅色' : '浅色模式 · 切到深色' }}</span>
+        </button>
+
+        <!-- 桌面端: 版本号 + 手动检查更新(在线版不渲染) -->
+        <button
+          v-if="isDesktop"
+          type="button"
+          class="theme-row"
+          :title="`当前版本 v${appVersion} · 点击检查更新`"
+          @click="onCheckUpdate"
+        >
+          <span class="theme-row-icon" v-html="renderIcon('refresh')" />
+          <span class="theme-row-label">检查更新<span v-if="appVersion" class="rail-version">v{{ appVersion }}</span></span>
+        </button>
+
+        <button type="button" class="console-row logout-row" title="退出登录" @click="onLogout">
+          <span class="console-row-icon" v-html="renderIcon('logout')" />
+          <span>退出登录</span>
+        </button>
         </div><!-- /rail-user-menu -->
 
         <button
@@ -1546,7 +1291,7 @@ function renderIcon(name: string): string {
   font-weight: var(--fw-medium, 500);
   cursor: pointer;
   text-align: left;
-  /* v3 2026-05-20: 兼容历史链接行
+  /* v3 2026-05-20: 兼容 <a> 元素（平台管理行用 a 标签）
      去掉 <a> 默认下划线，跟其他 console-row（button）视觉一致 */
   text-decoration: none;
   transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
@@ -1824,246 +1569,6 @@ html[data-theme="dark"] .rail-expand-top {
   color: var(--text-3);
 }
 
-/* Sidebar refinement: quieter chrome, clearer hierarchy, and a stronger active state. */
-.rail {
-  width: 248px;
-  background: #f7f9fc;
-  border-right: 1px solid #e3e8f0;
-}
-
-.rail-brand {
-  min-height: 72px;
-  padding: 16px 16px 14px;
-  gap: 11px;
-  border-bottom: 1px solid #e8edf4;
-}
-
-.rail-logo {
-  width: 32px;
-  height: 32px;
-  border-radius: 9px;
-  box-shadow: 0 7px 16px rgba(31, 82, 177, 0.18);
-}
-
-.rail-title {
-  font-size: 15px;
-  letter-spacing: -0.02em;
-}
-
-.rail-brand-copy::after {
-  content: 'AI 应用工作台';
-  display: block;
-  margin-top: 4px;
-  color: #8a96a8;
-  font-size: 10.5px;
-  font-weight: 500;
-  letter-spacing: 0.03em;
-}
-
-.rail-collapse-top {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  color: #77859a;
-}
-
-.rail-mode-switch {
-  margin: 14px 14px 10px;
-  padding: 3px;
-  gap: 3px;
-  border: 1px solid #e1e7f0;
-  border-radius: 10px;
-  background: #eef2f7;
-}
-
-.rail-mode-btn {
-  height: 30px;
-  border-radius: 8px;
-  color: #7b8799;
-  font-size: 12px;
-}
-
-.rail-mode-btn.active {
-  color: #1f56c7;
-  background: #fff;
-  box-shadow: 0 2px 7px rgba(25, 52, 96, 0.09);
-}
-
-.rail-scroll {
-  gap: 3px;
-  padding: 9px 12px 12px;
-}
-
-.rail-scroll::before {
-  content: '工作区';
-  display: block;
-  padding: 4px 10px 7px;
-  color: #9aa6b7;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-}
-
-.rail-item {
-  min-height: 40px;
-  gap: 11px;
-  padding: 0 11px;
-  border-radius: 10px;
-  color: #56657a;
-  font-size: 13px;
-  transition: background .16s ease, color .16s ease, transform .16s ease;
-}
-
-.rail-item:hover {
-  color: #274d92;
-  background: #edf3ff;
-  transform: translateX(1px);
-}
-
-.rail-item.active {
-  color: #1f56c7;
-  background: #e9f1ff;
-  font-weight: 650;
-}
-
-.rail-item.active::before {
-  left: 0;
-  top: 8px;
-  bottom: 8px;
-  width: 3px;
-  border-radius: 0 4px 4px 0;
-}
-
-.rail-item-icon {
-  width: 20px;
-  height: 20px;
-  color: #7d8ca3;
-}
-
-.rail-item.active .rail-item-icon,
-.rail-item:hover .rail-item-icon {
-  color: #2f65d5;
-}
-
-.rail-item-badge {
-  min-width: 20px;
-  height: 20px;
-  background: #dce9ff;
-  color: #2860ca;
-}
-
-.rail-sessions {
-  margin-top: 13px;
-  padding: 13px 9px 0;
-  border-top: 1px solid #e7ecf3;
-}
-
-.rail-sess-cap {
-  color: #97a3b4;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: .1em;
-}
-
-.rail-sess-group {
-  margin-top: 5px;
-}
-
-.rail-sess-item {
-  min-height: 31px;
-  border-radius: 8px;
-  color: #68768a;
-}
-
-.rail-sess-item:hover,
-.rail-sess-item.active {
-  color: #2458bd;
-  background: #edf3ff;
-}
-
-.rail-hub {
-  margin: 5px 12px 8px;
-  padding: 11px 11px 0;
-  border-top: 1px solid #e5eaf2;
-}
-
-.rail-hub .rail-item-icon { color: #c88710; }
-
-.rail-foot {
-  padding: 12px 12px 14px;
-  border-top: 1px solid #e3e8f0;
-  background: #f4f7fb;
-}
-
-.rail-console {
-  gap: 8px;
-}
-
-.rail-console-label {
-  margin: 0 4px 1px;
-  color: #94a0b1;
-  font-size: 10px;
-  letter-spacing: .1em;
-}
-
-.tenant-switch {
-  min-height: 38px;
-  padding: 0 11px;
-  border-color: #e0e6ee;
-  border-radius: 10px;
-  background: #fff;
-  color: #34445b;
-}
-
-.tenant-switch:hover,
-.tenant-switch.open {
-  border-color: #b9cdf5;
-  background: #eef4ff;
-  color: #2458bd;
-}
-
-.account-row {
-  min-height: 48px;
-  margin-top: 2px;
-  padding: 10px 4px 0;
-  border-top-color: #e1e7f0;
-}
-
-.rail-avatar {
-  width: 30px;
-  height: 30px;
-  background: #285bd0;
-  box-shadow: 0 3px 8px rgba(40, 91, 208, .22);
-}
-
-.rail-user-name { color: #273952; }
-.rail-user-status { color: #8b98aa; }
-
-html[data-theme="dark"] .rail {
-  background: #151b25;
-  border-right-color: #273243;
-}
-
-html[data-theme="dark"] .rail-brand,
-html[data-theme="dark"] .rail-sessions,
-html[data-theme="dark"] .rail-hub,
-html[data-theme="dark"] .rail-foot,
-html[data-theme="dark"] .account-row {
-  border-color: #273243;
-}
-
-html[data-theme="dark"] .rail-foot { background: #121822; }
-html[data-theme="dark"] .rail-scroll::before,
-html[data-theme="dark"] .rail-console-label,
-html[data-theme="dark"] .rail-sess-cap { color: #748198; }
-html[data-theme="dark"] .tenant-switch { background: #1b2431; border-color: #2a374a; color: #d6deeb; }
-html[data-theme="dark"] .rail-item { color: #a8b5c8; }
-
-.rail-collapsed .rail-scroll::before,
-.rail-collapsed .rail-brand-copy { display: none; }
-.rail-collapsed .rail-brand { border-bottom: 0; }
-.rail-collapsed .rail-foot { background: transparent; }
-
 /* (deleted) html[data-theme="dark"] .accent-swatch.active — accent picker 死代码 */
 
 /* 得小帆·共性能力 共用入口(导航与页脚之间) */
@@ -2107,13 +1612,13 @@ html[data-theme="dark"] .rail-item { color: #a8b5c8; }
 .rail-sess-label {
   display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0;
   border: none; background: none; cursor: pointer;
-  font-size: 13px; font-weight: 600; color: var(--text-2, #aaa); padding: 5px 4px;
+  font-size: 11px; color: var(--text-3, #777); padding: 4px 4px;
 }
 .rail-sess-label:hover { color: var(--text-2, #aaa); }
 .rail-sess-chev { display: inline-flex; transition: transform .12s; }
 .rail-sess-chev.collapsed { transform: rotate(-90deg); }
 .rail-sess-chev :deep(svg) { width: 12px; height: 12px; }
-.rail-sess-glabel { flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.rail-sess-glabel { flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rail-sess-cnt { font-size: 10px; opacity: .7; }
 .rail-sess-item {
   display: flex; align-items: center; gap: 6px;
@@ -2133,20 +1638,6 @@ html[data-theme="dark"] .rail-item { color: #a8b5c8; }
   border: 1px solid var(--line-2, #333); border-radius: 10px;
   background: var(--surface-1, var(--surface, #161616)); padding: 8px; margin-bottom: 8px;
 }
-.user-menu-tenant {
-  padding: 2px 2px 8px;
-  margin-bottom: 6px;
-  border-bottom: 1px solid var(--line);
-}
-.user-menu-tenant-label {
-  margin: 0 8px 5px;
-  color: var(--text-3);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-}
-.settings-entry-row { margin-top: 2px; }
 .account-toggle {
   display: flex; align-items: center; gap: 10px; width: 100%;
   border: 1px solid transparent; background: none; cursor: pointer;
@@ -2158,107 +1649,4 @@ html[data-theme="dark"] .rail-item { color: #a8b5c8; }
 .account-chev.open { transform: rotate(180deg); }
 .logout-row { width: 100%; }
 .logout-row:hover { color: #d9685e; }
-
-/* Final visual pass (kept at the end so it wins over legacy compatibility rules). */
-.rail { width: 232px; background: #f7f9fc; border-right-color: #e3e8f0; }
-.rail-brand { min-height: 58px; padding: 11px 12px; border-bottom: 1px solid #e8edf4; }
-.rail-logo { width: 30px; height: 30px; border-radius: 8px; }
-.rail-brand-copy::after { content: 'AI 应用工作台'; display: block; margin-top: 2px; color: #8a96a8; font-size: 10px; font-weight: 500; letter-spacing: .03em; }
-.rail-mode-switch { margin: 8px 10px 6px; padding: 3px; gap: 3px; border-color: #e1e7f0; border-radius: 9px; background: #eef2f7; }
-.rail-mode-btn { height: 28px; border-radius: 7px; }
-.rail-mode-btn.active { color: #1f56c7; background: #fff; box-shadow: 0 2px 7px rgba(25,52,96,.09); }
-.rail-scroll { gap: 2px; padding: 5px 10px 0; overflow: hidden; }
-.rail-scroll::before { content: '工作区'; display: block; flex: 0 0 auto; padding: 3px 9px 5px; color: #9aa6b7; font-size: 10px; font-weight: 700; letter-spacing: .08em; }
-.rail-item { flex: 0 0 auto; min-height: 36px; gap: 10px; padding: 0 10px; border-radius: 8px; color: #56657a; font-size: 13px; transition: background .16s ease, color .16s ease, transform .16s ease; }
-.rail-item:hover { color: #274d92; background: #edf3ff; transform: translateX(1px); }
-.rail-item.active { color: #1f56c7; background: #e9f1ff; font-weight: 650; }
-.rail-item.active::before { left: 0; top: 7px; bottom: 7px; width: 3px; border-radius: 0 4px 4px 0; }
-.rail-item-icon { width: 18px; height: 18px; color: #7d8ca3; }
-.rail-item.active .rail-item-icon, .rail-item:hover .rail-item-icon { color: #2f65d5; }
-.rail-item-badge { min-width: 20px; height: 20px; background: #dce9ff; color: #2860ca; }
-.rail-sessions { flex: 1 1 auto; min-height: 112px; display: flex; flex-direction: column; margin-top: 7px; padding: 9px 2px 0; overflow: hidden; border-top: 1px solid #e7ecf3; }
-.rail-sessions.rail-system-assistant-sessions { overflow-y: auto; }
-.rail-sess-toolbar { flex: 0 0 auto; min-height: 28px; padding: 0 6px 5px; }
-.rail-sess-cap { color: #7f8b9d; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; }
-.rail-sess-new { width: 26px; height: 26px; display: grid; place-items: center; padding: 0; color: #637188; background: transparent; border: 1px solid transparent; border-radius: 7px; cursor: pointer; }
-.rail-sess-new:hover { color: #1f56c7; background: #e9f1ff; border-color: #d4e2fb; }
-.rail-sess-new:focus-visible { outline: 2px solid var(--line-focus, var(--brand-ring)); outline-offset: 1px; }
-.rail-sess-new :deep(svg) { width: 15px; height: 15px; }
-.rail-sess-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 2px 8px 0; scrollbar-width: thin; scrollbar-color: #cfd7e3 transparent; }
-.rail-sess-list::-webkit-scrollbar { width: 5px; }
-.rail-sess-list::-webkit-scrollbar-thumb { background: #cfd7e3; border-radius: 999px; }
-.rail-sess-group { margin: 0 0 5px; }
-.rail-sess-label { min-height: 28px; padding: 4px 5px; color: #68768a; font-size: 12px; }
-.rail-sess-cnt { min-width: 18px; text-align: right; }
-.rail-sess-locations, .rail-sess-location { flex: 0 0 auto; color: var(--text-3, #7f8b9d); font-size: 10px; font-weight: 500; }
-.rail-sess-location-open { flex: 0 0 auto; border: 0; border-radius: 5px; padding: 3px 5px; color: var(--brand); background: var(--brand-soft); font: inherit; font-size: 10px; cursor: pointer; }
-.rail-sess-location-open:hover { background: var(--surface-3, rgba(127,127,127,.12)); }
-.rail-sess-item { position: relative; min-height: 30px; padding: 4px 5px 4px 8px; border-radius: 7px; color: #68768a; }
-.rail-sess-state { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: #c2cad6; }
-.rail-sess-state.running { background: #2f65d5; box-shadow: 0 0 0 3px rgba(47, 101, 213, .12); animation: rail-session-pulse 1.6s ease-in-out infinite; }
-.rail-sess-item:hover { color: #2458bd; background: #edf3ff; }
-.rail-sess-item.active { color: #1f56c7; background: #e5efff; font-weight: 600; }
-.rail-sess-item.active .rail-sess-state { background: #2f65d5; }
-.rail-sess-manage { position: relative; flex: 0 0 auto; }
-.rail-sess-more,
-.rail-sess-del { width: 22px; height: 22px; display: grid; place-items: center; flex: 0 0 auto; padding: 0; border-radius: 6px; }
-.rail-sess-more { opacity: 0; color: #758298; background: transparent; border: 0; cursor: pointer; }
-.rail-sess-item:hover .rail-sess-more,
-.rail-sess-item.active .rail-sess-more,
-.rail-sess-more[aria-expanded="true"] { opacity: 1; }
-.rail-sess-more:hover { color: #1f56c7; background: #fff; }
-.rail-sess-more :deep(svg),
-.rail-sess-del :deep(svg) { width: 13px; height: 13px; }
-.rail-sess-del:hover { background: #fff; }
-.rail-sess-menu { position: absolute; right: 0; top: 26px; z-index: 30; width: 112px; padding: 4px; border: 1px solid #dfe5ee; border-radius: 8px; background: #fff; box-shadow: 0 8px 24px rgba(28, 43, 68, .14); }
-.rail-sess-menu button { width: 100%; min-height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 8px; color: #46556b; background: transparent; border: 0; border-radius: 6px; font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
-.rail-sess-menu button:hover { color: #1f56c7; background: #edf3ff; }
-.rail-sess-menu button.danger { color: #bb3f3f; }
-.rail-sess-menu button.danger:hover { color: #a82f2f; background: #fff0f0; }
-.rail-sess-menu button :deep(svg) { width: 14px; height: 14px; }
-.rail-sess-empty { padding: 18px 8px; text-align: center; }
-.rail-hub { min-height: 36px; margin: 5px 10px 6px; padding: 8px 10px 0; border-top: 1px solid #e5eaf2; }
-.rail-hub .rail-item-icon { color: #c88710; }
-.rail-foot { padding: 9px 10px 10px; border-top: 1px solid #e3e8f0; background: #f4f7fb; }
-.rail-console { gap: 6px; }
-.rail-console-label { margin: 0 4px 1px; color: #94a0b1; font-size: 10px; letter-spacing: .1em; }
-.tenant-switch { min-height: 34px; padding: 0 10px; border-color: #e0e6ee; border-radius: 8px; background: #fff; color: #34445b; }
-.tenant-switch:hover, .tenant-switch.open { border-color: #b9cdf5; background: #eef4ff; color: #2458bd; }
-.account-row { min-height: 42px; margin-top: 1px; padding: 8px 4px 0; border-top-color: #e1e7f0; }
-.rail-avatar { width: 28px; height: 28px; background: #285bd0; box-shadow: 0 3px 8px rgba(40,91,208,.22); }
-.rail-user-name { color: #273952; }
-.rail-user-status { color: #8b98aa; }
-.rail-collapsed .rail-scroll::before, .rail-collapsed .rail-brand-copy { display: none; }
-.rail-collapsed .rail-brand { border-bottom: 0; }
-.rail-collapsed .rail-foot { background: transparent; }
-html[data-theme="dark"] .rail { background: #151b25; border-right-color: #273243; }
-html[data-theme="dark"] .rail-brand, html[data-theme="dark"] .rail-sessions, html[data-theme="dark"] .rail-hub, html[data-theme="dark"] .rail-foot, html[data-theme="dark"] .account-row { border-color: #273243; }
-html[data-theme="dark"] .rail-foot { background: #121822; }
-html[data-theme="dark"] .rail-scroll::before, html[data-theme="dark"] .rail-console-label, html[data-theme="dark"] .rail-sess-cap { color: #748198; }
-html[data-theme="dark"] .tenant-switch { background: #1b2431; border-color: #2a374a; color: #d6deeb; }
-html[data-theme="dark"] .rail-item { color: #a8b5c8; }
-html[data-theme="dark"] .rail-sess-new { color: #94a3b8; }
-html[data-theme="dark"] .rail-sess-new:hover { color: #8fb4ff; background: #202d42; border-color: #334763; }
-html[data-theme="dark"] .rail-sess-list { scrollbar-color: #3b485a transparent; }
-html[data-theme="dark"] .rail-sess-list::-webkit-scrollbar-thumb { background: #3b485a; }
-html[data-theme="dark"] .rail-sess-label,
-html[data-theme="dark"] .rail-sess-item { color: #9eacc0; }
-html[data-theme="dark"] .rail-sess-state { background: #526177; }
-html[data-theme="dark"] .rail-sess-item:hover { color: #cbd8eb; background: #1d2838; }
-html[data-theme="dark"] .rail-sess-item.active { color: #a9c5ff; background: #22304a; }
-html[data-theme="dark"] .rail-sess-item.active .rail-sess-state,
-html[data-theme="dark"] .rail-sess-state.running { background: #7da5f8; box-shadow: 0 0 0 3px rgba(125, 165, 248, .14); }
-html[data-theme="dark"] .rail-sess-more { color: #94a3b8; }
-html[data-theme="dark"] .rail-sess-more:hover { color: #a9c5ff; background: #151b25; }
-html[data-theme="dark"] .rail-sess-menu { background: #1b2431; border-color: #334155; box-shadow: 0 10px 28px rgba(0, 0, 0, .32); }
-html[data-theme="dark"] .rail-sess-menu button { color: #c2cede; }
-html[data-theme="dark"] .rail-sess-menu button:hover { color: #a9c5ff; background: #26344a; }
-html[data-theme="dark"] .rail-sess-menu button.danger { color: #f09a9a; }
-html[data-theme="dark"] .rail-sess-menu button.danger:hover { color: #ffb0b0; background: #3a2428; }
-html[data-theme="dark"] .rail-sess-del:hover { background: #151b25; }
-
-@keyframes rail-session-pulse {
-  0%, 100% { opacity: .65; }
-  50% { opacity: 1; }
-}
 </style>
