@@ -8,6 +8,7 @@
 # mvn wrapper 按 pom.xml 自动 JDK 8/17 切换。
 
 ARG NODE_IMAGE=node:20-bookworm-slim
+ARG BUILDPLATFORM
 ARG JDK8_IMAGE=eclipse-temurin:8-jdk-jammy
 ARG JDK17_IMAGE=eclipse-temurin:17-jdk-jammy
 ARG MAVEN_IMAGE=maven:3.9.9-eclipse-temurin-17
@@ -19,7 +20,7 @@ ARG PIP_INDEX_URL=https://pypi.org/simple
 # ------------------------------------------------------------
 # stage 1: 构建前端（Vite）
 # ------------------------------------------------------------
-FROM ${NODE_IMAGE} AS frontend-builder
+FROM --platform=${BUILDPLATFORM} ${NODE_IMAGE} AS frontend-builder
 
 ARG NPM_REGISTRY
 # URL 前缀：
@@ -48,7 +49,7 @@ RUN printf '%s\n' "${VITE_BUILD_SHA}" | grep -Eq '^[0-9a-f]{40}$' \
 # ------------------------------------------------------------
 # stage 1b: 构建平台管理前端（admin-spa）
 # ------------------------------------------------------------
-FROM ${NODE_IMAGE} AS admin-builder
+FROM --platform=${BUILDPLATFORM} ${NODE_IMAGE} AS admin-builder
 
 ARG NPM_REGISTRY
 ARG VITE_ADMIN_BASE=/ai-builder/admin/
