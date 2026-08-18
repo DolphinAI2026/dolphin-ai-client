@@ -31,11 +31,6 @@ async def _provision(
     )).scalar_one_or_none()
     if existing:
         raise AccountExistsError(username)
-    code = await _unique_tenant_code(db, f"desktop-{username}")
-    tenant = Tenant(tenant_name=f"{username} 的工作空间", tenant_code=code, status=1, max_applications=100)
-    db.add(tenant)
-    await db.flush()
-    await seed_default_roles(db, tenant.id, commit=False)
     user = User(
         username=username, display_name=username,
         hashed_password=get_password_hash(password),
@@ -43,6 +38,41 @@ async def _provision(
     )
     db.add(user)
     await db.flush()
+    await ensure_desktop_workspace(db, user)
+    return user
+
+
+async def ensure_desktop_workspace(db: AsyncSession, user: User) -> int:
+    """Ensure an account owns one private local workspace.
+
+    A Control Plane account has a remote organization identity, but its custom
+    desktop resources must be stored in an isolated local SQLite tenant.
+    """
+    existing_tenant_id = (await db.execute(
+        select(UserTenant.tenant_id)
+        .join(Tenant, Tenant.id == UserTenant.tenant_id)
+        .where(
+            UserTenant.user_id == user.id,
+            UserTenant.status == 1,
+            Tenant.status == 1,
+        )
+        .order_by(UserTenant.is_default.desc(), UserTenant.joined_at.asc())
+        .limit(1)
+    )).scalar_one_or_none()
+    if existing_tenant_id:
+        return int(existing_tenant_id)
+
+    username = user.username or f"user-{user.id}"
+    code = await _unique_tenant_code(db, f"desktop-{username}")
+    tenant = Tenant(
+        tenant_name=f"{username} 的本机工作空间",
+        tenant_code=code,
+        status=1,
+        max_applications=100,
+    )
+    db.add(tenant)
+    await db.flush()
+    await seed_default_roles(db, tenant.id, commit=False)
     admin_role = (await db.execute(
         select(Role).where(Role.tenant_id == tenant.id, Role.role_code == "R_tenant_admin")
     )).scalar_one_or_none()
@@ -55,7 +85,7 @@ async def _provision(
         is_default=True, status=1,
     ))
     await db.flush()
-    return user
+    return int(tenant.id)
 
 
 async def provision_desktop_account(db: AsyncSession, username: str, password: str) -> User:

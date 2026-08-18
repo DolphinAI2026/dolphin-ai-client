@@ -527,6 +527,25 @@ async def test_opening_existing_non_git_workspace_initializes_git_metadata(
 
 
 @pytest.mark.asyncio
+async def test_desktop_resolves_legacy_local_session_in_device_workspace_scope(
+    db,
+    ctx,
+    git_repo,
+    monkeypatch,
+):
+    """A Control Plane login must not move existing local workspaces to its tenant."""
+    monkeypatch.setattr(local_runtime_module.runtime, "is_desktop", lambda: True)
+    workspace = await _create_workspace(db, git_repo, tenant_id=0)
+    code_session = await _create_code_session(db, workspace_id=workspace.ws_id)
+    code_session.tenant_id = 0
+    await db.flush()
+
+    resolved = await resolve_registered_workspace(db, code_session, ctx)
+
+    assert resolved.ws_id == workspace.ws_id
+
+
+@pytest.mark.asyncio
 async def test_register_new_directory_non_git_only_creates_directory(
     db,
     ctx,
@@ -935,6 +954,34 @@ async def test_explicit_local_model_precedes_opt_in_host_codex(db, ctx, monkeypa
 
     assert document["defaultProviderId"] == "local.provider"
     assert identity == local_identity
+
+
+@pytest.mark.asyncio
+async def test_local_chat_compatible_model_emits_chat_wire_api(db, ctx, monkeypatch):
+    async def resolve_model(_db, _tenant_id, *, purpose, selected_config_id=None):
+        assert purpose == "coding"
+        return ResolvedLLMConfig(
+            model="deepseek-chat",
+            base_url="https://models.example.invalid/v1",
+            api_key="chat-only-token",
+            config_id=selected_config_id,
+            config_name="Chat-only model",
+            provider="deepseek",
+            codex_wire_api="chat",
+        )
+
+    monkeypatch.setattr("app.harness.llm_resolver.resolve_llm_config", resolve_model)
+    async def no_candidates(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr("app.routes.llm_configs.list_llm_configs_for_purpose", no_candidates)
+
+    document, identity = await model_provider_module.provider_document(db, ctx, 91)
+
+    provider = document["providers"][0]
+    assert provider["wireApi"] == "chat"
+    assert provider["providerId"].startswith("local.")
+    assert identity == ("deepseek", "https://models.example.invalid/v1", "chat-only-token")
 
 
 @pytest.mark.asyncio
@@ -1407,10 +1454,11 @@ async def test_open_starts_missing_instance_with_runtime_context_path_and_enviro
                     "defaultProviderId"
                 ],
                 "providerType": "openai-compatible",
-                "runtimeProviderKind": "openai",
-                "apiBaseUrl": "https://models.example.invalid/v1",
-                "token": "unit-test-model-token",
-                "defaultModel": "gpt-local-test",
+                    "runtimeProviderKind": "openai",
+                    "apiBaseUrl": "https://models.example.invalid/v1",
+                    "token": "unit-test-model-token",
+                    "wireApi": "responses",
+                    "defaultModel": "gpt-local-test",
                 "models": [
                     {
                         "id": "gpt-local-test",

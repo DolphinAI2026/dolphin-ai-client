@@ -21,8 +21,10 @@ from starlette.responses import RedirectResponse, Response, StreamingResponse
 
 from app.code_runtime.service import (
     CodeSessionRef,
+    _control_plane_headers,
     code_session_route_id,
     code_runtime_proxy_prefix,
+    control_plane_base_url,
     create_code_application,
     create_proxy_cookie_token,
     default_local_code_application_workspace,
@@ -35,6 +37,7 @@ from app.code_runtime.service import (
     open_code_session,
     resolve_code_session,
     validate_embed_token,
+    validate_local_model_proxy_token,
     validate_proxy_cookie_token,
 )
 from app.code_runtime.auth import (
@@ -60,6 +63,7 @@ from app.code_runtime.sandbox_auth import (
 )
 from app.code_runtime.sandbox_metrics import sandbox_auth_metrics
 from app.code_runtime.execution_target import is_desktop_agent_runtime_target
+from app.code_runtime.session_location import normalize_code_session_location_request
 from app.data_source import DataDomain, DataExecution, DataAuthority, resolve_data_route
 from app.code_runtime.local_runtime import (
     LocalRuntimeClient,
@@ -99,7 +103,6 @@ class CreateExternalCodeSessionRequest(BaseModel):
 class CreateCodeApplicationRequest(BaseModel):
     app_name: str
     app_code: str
-    seed_project_id: Optional[str] = None
     local_application: bool = False
     local_workspace_path: Optional[str] = None
     directory_mode: Literal["new_directory", "existing_directory"] = "new_directory"
@@ -658,7 +661,6 @@ async def create_code_runtime_application(
     return await create_code_application(
         app_name=body.app_name,
         app_code=body.app_code,
-        seed_project_id=body.seed_project_id,
         local_application=body.local_application,
         local_workspace_path=body.local_workspace_path,
         directory_mode=body.directory_mode,
@@ -825,6 +827,122 @@ async def open_code_runtime_session(
             **result,
             **_resolved_code_sandbox_cache_config(),
         }
+
+
+def _local_model_proxy_token(request: Request) -> str:
+    authorization = str(request.headers.get("authorization") or "").strip()
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        raise HTTPException(status_code=401, detail="本地模型代理鉴权失败")
+    return token.strip()
+
+
+async def _local_model_proxy_context(
+    db: AsyncSession,
+    *,
+    external_application_id: str,
+    token: str,
+) -> tuple[AIChatSession, AuthContext]:
+    sessions = (
+        await db.execute(
+            select(AIChatSession)
+            .where(
+                AIChatSession.mode == "code",
+                AIChatSession.status != "archived",
+                AIChatSession.external_application_id == external_application_id,
+            )
+            .order_by(AIChatSession.updated_at.desc(), AIChatSession.id.desc())
+        )
+    ).scalars().all()
+    for session in sessions:
+        if not validate_local_model_proxy_token(
+            token,
+            application_id=external_application_id,
+            user_id=int(session.user_id),
+            tenant_id=int(session.tenant_id),
+            control_plane_tenant_id=session.control_plane_tenant_id,
+        ):
+            continue
+        user = await db.get(User, int(session.user_id))
+        if user is None:
+            continue
+        return session, AuthContext(
+            user=user,
+            tenant_id=int(session.tenant_id),
+            tenant_role="member",
+            org_permissions={},
+            control_plane_tenant_id=session.control_plane_tenant_id,
+        )
+    raise HTTPException(status_code=401, detail="本地模型代理鉴权失败")
+
+
+@router.api_route(
+    "/model-proxy/{external_application_id}/v1/{model_path:path}",
+    methods=["GET", "POST"],
+)
+async def proxy_desktop_runtime_model(
+    external_application_id: str,
+    model_path: str,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Forward a desktop Runtime request without exposing provider credentials."""
+    path = str(model_path or "").strip("/")
+    if (request.method == "GET" and path != "models") or (
+        request.method == "POST" and path != "responses"
+    ):
+        raise HTTPException(status_code=404, detail="模型代理路径不存在")
+
+    session, ctx = await _local_model_proxy_context(
+        db,
+        external_application_id=str(external_application_id or "").strip(),
+        token=_local_model_proxy_token(request),
+    )
+    authorization, _auth_provider = await _control_plane_request_auth(
+        type("LocalModelProxyRequest", (), {"headers": {}})(),
+        ctx,
+        db,
+    )
+    if not authorization:
+        raise HTTPException(status_code=403, detail="线上模型服务未登录")
+
+    try:
+        body = b"" if request.method == "GET" else await request.body()
+    except ClientDisconnect:
+        return Response(status_code=499)
+    headers = _control_plane_headers(
+        authorization,
+        delegated_context=ctx,
+        shell_session_id=session.id,
+    )
+    if request.headers.get("content-type"):
+        headers["Content-Type"] = request.headers["content-type"]
+    if request.headers.get("accept"):
+        headers["Accept"] = request.headers["accept"]
+    target = f"{control_plane_base_url()}/api/code/model-gateway/v1/{path}"
+    client = httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=10, read=None, write=30, pool=10)
+    )
+    try:
+        upstream = await client.send(
+            client.build_request(request.method, target, headers=headers, content=body),
+            stream=True,
+        )
+    except httpx.RequestError as exc:
+        await client.aclose()
+        raise HTTPException(status_code=503, detail="线上模型服务暂时不可用") from exc
+
+    response_headers: dict[str, str] = {"Cache-Control": "no-cache"}
+    if content_type := upstream.headers.get("content-type"):
+        response_headers["Content-Type"] = content_type
+    if upstream.headers.get("x-accel-buffering"):
+        response_headers["X-Accel-Buffering"] = upstream.headers["x-accel-buffering"]
+    return StreamingResponse(
+        upstream.aiter_raw(),
+        status_code=upstream.status_code,
+        headers=response_headers,
+        background=BackgroundTask(_close_upstream, upstream, client),
+    )
 
 
 @router.get("/sessions/{session_ref}/open-status")
@@ -1551,10 +1669,24 @@ async def list_code_runtime_rail_history(
                 or session.external_application_id
                 or ""
             ).strip()
+            # Rails must label a legacy local shell as local even when its
+            # execution_location column predates the location contract.  The
+            # binding can be the authoritative application id, so normalize
+            # against the resolved id rather than only the session column.
+            location = normalize_code_session_location_request(
+                logical_application_id=session.logical_application_id,
+                external_application_id=external_id,
+                execution_location=session.execution_location,
+                session_policy=None,
+                session_purpose=session.session_purpose,
+            )
 
             app: dict[str, Any] = {
                 "shell_session_id": ensure_code_session_public_id(session),
                 "external_application_id": external_id,
+                "logical_application_id": location["logical_application_id"],
+                "execution_location": location["execution_location"],
+                "session_purpose": location["session_purpose"],
                 "app_name": session.external_app_name or session.title,
                 "app_code": session.external_app_code,
                 "runtime_session_id": binding.runtime_session_id if binding else None,

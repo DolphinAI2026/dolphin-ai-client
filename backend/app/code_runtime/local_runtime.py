@@ -278,8 +278,16 @@ async def _application_for_session(
     ).scalar_one_or_none()
     if application is None:
         raise _error(409, _WORKSPACE_REQUIRED, "应用未绑定本地 Git 工作区")
+    # Desktop local applications and their workspaces are owned by this device
+    # (tenant 0), not by the Control Plane tenant carried by the signed-in user.
+    # Keep the user check: a different local account must still never open it.
+    workspace_tenant_id = (
+        local_workspace_scope_tenant_id(ctx)
+        if _is_local_session(session)
+        else int(ctx.tenant_id)
+    )
     if (
-        application.tenant_id != int(ctx.tenant_id)
+        application.tenant_id != workspace_tenant_id
         or application.user_id != int(ctx.user.id)
     ):
         raise _error(403, _WORKSPACE_FORBIDDEN, "无权访问应用的本地 Git 工作区")
@@ -291,11 +299,12 @@ async def _workspace_for_id(
     ws_id: str,
     ctx: Any,
 ) -> RegisteredWorkspace:
+    workspace_tenant_id = local_workspace_scope_tenant_id(ctx)
     owned = (
         await db.execute(
             select(RegisteredWorkspace).where(
                 RegisteredWorkspace.ws_id == ws_id,
-                RegisteredWorkspace.tenant_id == int(ctx.tenant_id),
+                RegisteredWorkspace.tenant_id == workspace_tenant_id,
                 RegisteredWorkspace.user_id == int(ctx.user.id),
             )
         )
@@ -322,9 +331,13 @@ async def resolve_registered_workspace(
     """Resolve one owned registered workspace without falling back to local paths."""
     session_tenant_id = getattr(session, "tenant_id", None)
     session_user_id = getattr(session, "user_id", None)
+    workspace_tenant_id = local_workspace_scope_tenant_id(ctx)
+    expected_session_tenant_id = (
+        workspace_tenant_id if _is_local_session(session) else int(ctx.tenant_id)
+    )
     if (
         session_tenant_id is not None
-        and int(session_tenant_id) != int(ctx.tenant_id)
+        and int(session_tenant_id) != expected_session_tenant_id
     ) or (
         session_user_id is not None
         and int(session_user_id) != int(ctx.user.id)
@@ -344,7 +357,7 @@ async def resolve_registered_workspace(
                     select(RegisteredWorkspace)
                     .where(
                         RegisteredWorkspace.apaas_app_id == external_application_id,
-                        RegisteredWorkspace.tenant_id == int(ctx.tenant_id),
+                        RegisteredWorkspace.tenant_id == workspace_tenant_id,
                         RegisteredWorkspace.user_id == int(ctx.user.id),
                     )
                     .limit(2)

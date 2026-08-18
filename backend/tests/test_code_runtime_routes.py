@@ -217,6 +217,93 @@ async def test_remember_runtime_agent_session_persists_rail_snapshot(db_session)
     assert row.codex_session_resumable is True
 
 
+@pytest.mark.asyncio
+async def test_desktop_model_proxy_forwards_scoped_request_to_control_plane(
+    db_session,
+    monkeypatch,
+):
+    import httpx
+
+    import app.routes.code_runtime as code_runtime_routes
+    from app.auth import get_password_hash
+    from app.code_runtime.service import create_local_model_proxy_token
+    from app.models import User
+
+    user = User(
+        username="model-proxy-user",
+        hashed_password=get_password_hash("unused"),
+        account_source="control_plane",
+        is_active=True,
+    )
+    db_session.add(user)
+    await db_session.flush()
+    session = AIChatSession(
+        tenant_id=7,
+        control_plane_tenant_id="cp-7",
+        user_id=user.id,
+        title="Local Model Proxy",
+        mode="code",
+        status="active",
+        external_application_id="local-model-app",
+    )
+    db_session.add(session)
+    await db_session.commit()
+    token = create_local_model_proxy_token(
+        application_id="local-model-app",
+        user_id=user.id,
+        tenant_id=7,
+        control_plane_tenant_id="cp-7",
+    )
+    forwarded: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        forwarded.append(request)
+        return httpx.Response(
+            200,
+            stream=httpx.ByteStream(b'data: {"ok":true}\n\n'),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        code_runtime_routes.httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(transport=transport, **kwargs),
+    )
+    monkeypatch.setattr(code_runtime_routes, "control_plane_base_url", lambda: "https://control.example")
+
+    async def fake_control_plane_auth(_request, ctx, _db):
+        assert ctx.user.id == user.id
+        assert ctx.control_plane_tenant_id == "cp-7"
+        return "Bearer cp-user-token", None
+
+    monkeypatch.setattr(code_runtime_routes, "_control_plane_request_auth", fake_control_plane_auth)
+    request = _proxy_request(
+        "unused",
+        authorization=f"Bearer {token}",
+        method="POST",
+        body=b'{"model":"gpt-code","input":"hello"}',
+    )
+
+    response = await code_runtime_routes.proxy_desktop_runtime_model(
+        "local-model-app",
+        "responses",
+        request,
+        db_session,
+    )
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    await response.background()
+
+    assert response.status_code == 200
+    assert body == b'data: {"ok":true}\n\n'
+    assert len(forwarded) == 1
+    assert str(forwarded[0].url) == "https://control.example/api/code/model-gateway/v1/responses"
+    assert forwarded[0].headers["authorization"] == "Bearer cp-user-token"
+    assert forwarded[0].headers["x-tenant-id"] == "cp-7"
+    assert forwarded[0].content == b'{"model":"gpt-code","input":"hello"}'
+
+
 def test_runtime_snapshot_time_converts_offset_to_utc():
     from datetime import datetime
 
@@ -1891,7 +1978,6 @@ async def test_create_code_runtime_application_delegates_to_control_plane(
         CreateCodeApplicationRequest(
             app_name="销售线索评分助手",
             app_code="sales-lead-helper",
-            seed_project_id="90001",
             directory_mode="existing_directory",
             initialize_project=True,
             linked_remote_application_id="remote-app-1",
@@ -1906,7 +1992,6 @@ async def test_create_code_runtime_application_delegates_to_control_plane(
     assert calls == [{
         "app_name": "销售线索评分助手",
         "app_code": "sales-lead-helper",
-        "seed_project_id": "90001",
         "local_application": False,
         "local_workspace_path": None,
         "directory_mode": "existing_directory",
@@ -2536,6 +2621,9 @@ async def test_list_code_runtime_rail_history_accepts_all_source_and_includes_sh
     assert app == {
         "shell_session_id": app["shell_session_id"],
         "external_application_id": "crm",
+        "logical_application_id": "legacy:crm",
+        "execution_location": "remote",
+        "session_purpose": "standard",
         "app_name": "CRM",
         "app_code": "crm",
         "runtime_session_id": None,
@@ -2812,6 +2900,9 @@ async def test_list_code_runtime_rail_history_returns_opened_app_agent_sessions(
     assert apps_by_external_id["never-opened"] == {
         "shell_session_id": unopened_shell_id,
         "external_application_id": "never-opened",
+        "logical_application_id": "legacy:never-opened",
+        "execution_location": "remote",
+        "session_purpose": "standard",
         "app_name": "未打开",
         "app_code": None,
         "runtime_session_id": None,
@@ -2830,6 +2921,28 @@ async def test_list_code_runtime_rail_history_returns_opened_app_agent_sessions(
         ("runtime-2", "修复登录问题", False),
         ("runtime-1", "需求梳理", True),
     ]
+
+
+@pytest.mark.asyncio
+async def test_list_code_runtime_rail_history_derives_legacy_local_location(db_session):
+    from app.routes.code_runtime import list_code_runtime_rail_history
+
+    db_session.add(AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        title="本地 CRM Code",
+        mode="code",
+        status="active",
+        external_application_id="local-crm",
+        external_app_name="本地 CRM",
+    ))
+    await db_session.commit()
+
+    result = await list_code_runtime_rail_history(_request(), _ctx(), db_session, source="all")
+
+    assert result["apps"][0]["execution_location"] == "local"
+    assert result["apps"][0]["logical_application_id"] == "legacy:local-crm"
+    assert result["apps"][0]["session_purpose"] == "standard"
 
 
 @pytest.mark.asyncio

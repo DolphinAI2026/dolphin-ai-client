@@ -49,7 +49,6 @@ WorkspaceOpen = Callable[[str, str | None], Awaitable[dict[str, Any]]]
 _EMBED_TOKEN_TYPE = "code_runtime_embed"
 _PROXY_COOKIE_TOKEN_TYPE = "code_runtime_proxy"
 _EMBED_TOKEN_ISSUER = "ai-builder"
-_DEFAULT_SEED_PROJECT_ID = "1781233861147"
 _LOCAL_APPLICATION_PREFIX = "local-"
 _LEGACY_BROWSER_SESSION_ID = "legacy-browser-session"
 _DESKTOP_RUNTIME_ENVIRONMENT_KEYS = (
@@ -326,6 +325,24 @@ def create_local_model_proxy_token(
     ).hexdigest()
 
 
+def validate_local_model_proxy_token(
+    token: str,
+    *,
+    application_id: str,
+    user_id: int,
+    tenant_id: int,
+    control_plane_tenant_id: str | None,
+) -> bool:
+    """Validate the opaque desktop Runtime-to-sidecar model proxy token."""
+    expected = create_local_model_proxy_token(
+        application_id=application_id,
+        user_id=user_id,
+        tenant_id=tenant_id,
+        control_plane_tenant_id=control_plane_tenant_id,
+    )
+    return hmac.compare_digest(str(token or ""), expected)
+
+
 def _validate_runtime_token(
     token: str,
     *,
@@ -492,14 +509,6 @@ def local_builder_url() -> str:
 def local_code_applications_enabled() -> bool:
     raw = os.getenv("DOLPHIN_CODE_LOCAL_CODE_APPLICATIONS", "").strip().lower()
     return raw in {"1", "true", "yes", "on"}
-
-
-def default_seed_project_id() -> str:
-    return (
-        os.getenv("DOLPHIN_CODE_DEFAULT_SEED_PROJECT_ID", "").strip()
-        or (settings.dolphin_code_default_seed_project_id or "").strip()
-        or _DEFAULT_SEED_PROJECT_ID
-    )
 
 
 def _desktop_runtime_environment_present() -> bool:
@@ -717,22 +726,25 @@ def _control_plane_error_detail(response: httpx.Response) -> str:
     text = (response.text or "").strip()
     if response.status_code in (401, 403):
         return text[:500] or "Code Control Plane 认证失败，请配置 DOLPHIN_CODE_CONTROL_PLANE_TOKEN 或使用统一登录认证"
-    return text[:500] or "Code Control Plane request failed"
-
-
-def _control_plane_error_code(response: httpx.Response) -> str:
+    # Control Plane 的标准错误包含内部 traceId；桌面端只需要稳定的、可行动的说明。
     try:
         payload = response.json()
     except ValueError:
-        return ""
-    if not isinstance(payload, dict):
-        return ""
-    return str(payload.get("code") or payload.get("errorCode") or "").strip().upper()
-
-
-def _is_loopback_builder_url(builder_url: str) -> bool:
-    hostname = (urlsplit(str(builder_url or "").strip()).hostname or "").lower()
-    return hostname in {"127.0.0.1", "localhost", "::1"}
+        payload = None
+    if isinstance(payload, dict):
+        error_code = str(payload.get("code") or payload.get("errorCode") or "").strip().upper()
+        if error_code == "APPLICATION_NOT_FOUND":
+            return "远端应用不存在或已被删除，请返回应用列表后重新打开"
+    # 反向代理故障页通常是 HTML。它既不能帮助用户恢复，也不应该被透传到
+    # 桌面端 toast（此前会直接显示整段 nginx 503 页面）。
+    is_html = (
+        "text/html" in response.headers.get("content-type", "").lower()
+        or text.lower().startswith("<html")
+        or "<title>" in text.lower()
+    )
+    if response.status_code in (502, 503, 504) or is_html:
+        return "Control Plane 服务暂时不可用，请稍后重试"
+    return text[:500] or "Code Control Plane request failed"
 
 
 def _local_application_data(*, app_name: str, app_code: str) -> dict[str, Any]:
@@ -933,7 +945,6 @@ async def create_code_application(
     *,
     app_name: str,
     app_code: str,
-    seed_project_id: str | None = None,
     local_application: bool = False,
     local_workspace_path: str | None = None,
     directory_mode: Literal["new_directory", "existing_directory"] = "new_directory",
@@ -948,13 +959,10 @@ async def create_code_application(
 ) -> dict[str, Any]:
     name = str(app_name or "").strip()
     code = str(app_code or "").strip()
-    seed_id = str(seed_project_id or default_seed_project_id()).strip()
     if not name:
         raise HTTPException(status_code=400, detail="app_name 不能为空")
     if not code:
         raise HTTPException(status_code=400, detail="app_code 不能为空")
-    if not seed_id:
-        raise HTTPException(status_code=400, detail="seed_project_id 不能为空")
 
     if local_application or str(local_workspace_path or "").strip():
         if db is None or ctx is None:
@@ -993,7 +1001,6 @@ async def create_code_application(
     body = {
         "appCode": code,
         "appName": name,
-        "seedProjectId": seed_id,
     }
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=60, write=10, pool=10)) as client:
@@ -1010,13 +1017,6 @@ async def create_code_application(
     except httpx.RequestError as exc:
         raise HTTPException(status_code=503, detail=f"无法连接 Code Control Plane: {base_url}") from exc
     if response.status_code >= 400:
-        builder_url = local_builder_url()
-        if (
-            response.status_code == 404
-            and _control_plane_error_code(response) == "SEED_PROJECT_NOT_FOUND"
-            and _is_loopback_builder_url(builder_url)
-        ):
-            return _normalize_code_application(_local_application_data(app_name=name, app_code=code))
         raise HTTPException(status_code=response.status_code, detail=_control_plane_error_detail(response))
     data = response.json()
     if not isinstance(data, dict):
@@ -1210,13 +1210,17 @@ async def open_code_session(
 
     if not desktop_runtime:
         set_remote_phase("provisioning")
+    # `local-*` is a desktop-owned workspace identifier, not a Control Plane
+    # application id.  Verifying it remotely makes every local app fail with
+    # APPLICATION_NOT_FOUND before the local runtime has a chance to open it.
     if desktop_runtime:
-        await verify_control_plane_application_access(
-            external_app_id,
-            authorization_header=authorization_header,
-            delegated_context=ctx,
-            auth_provider=auth_provider,
-        )
+        if not local_application:
+            await verify_control_plane_application_access(
+                external_app_id,
+                authorization_header=authorization_header,
+                delegated_context=ctx,
+                auth_provider=auth_provider,
+            )
         local_runtime = LocalRuntimeClient.from_environment()
         proxy_token = create_local_model_proxy_token(
             application_id=external_app_id,

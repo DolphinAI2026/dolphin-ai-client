@@ -1014,7 +1014,7 @@ async def test_list_code_applications_rejects_non_json_success_response(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_create_code_application_posts_to_control_plane_with_default_seed(monkeypatch):
+async def test_create_code_application_posts_only_supported_fields_to_control_plane(monkeypatch):
     from app.code_runtime import service
 
     calls: list[dict] = []
@@ -1030,7 +1030,6 @@ async def test_create_code_application_posts_to_control_plane_with_default_seed(
                 "appName": "销售线索评分助手",
                 "description": None,
                 "provisionStatus": "READY",
-                "seedProjectId": "1781233861147",
                 "repository": {"repositoryUrl": "https://git.example.com/sales.git"},
                 "createdAt": "2026-07-02T07:00:00Z",
                 "updatedAt": "2026-07-02T07:00:01Z",
@@ -1052,7 +1051,6 @@ async def test_create_code_application_posts_to_control_plane_with_default_seed(
 
     monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_URL", "https://code.example.com/control-plane")
     monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", "cp-token")
-    monkeypatch.delenv("DOLPHIN_CODE_DEFAULT_SEED_PROJECT_ID", raising=False)
     monkeypatch.setattr(service.httpx, "AsyncClient", FakeClient)
 
     result = await service.create_code_application(
@@ -1066,7 +1064,6 @@ async def test_create_code_application_posts_to_control_plane_with_default_seed(
         "json": {
             "appCode": "sales-lead-helper",
             "appName": "销售线索评分助手",
-            "seedProjectId": "1781233861147",
         },
     }]
     assert result["external_application_id"] == "code-app-new"
@@ -1076,97 +1073,6 @@ async def test_create_code_application_posts_to_control_plane_with_default_seed(
 
 
 @pytest.mark.asyncio
-async def test_create_code_application_uses_seed_project_override(monkeypatch):
-    from app.code_runtime import service
-    from app.config import settings
-
-    calls: list[dict] = []
-
-    class FakeResponse:
-        status_code = 201
-        text = ""
-
-        def json(self):
-            return {
-                "applicationId": "code-app-new",
-                "appCode": "inventory-copilot",
-                "appName": "库存助手",
-                "provisionStatus": "PENDING",
-            }
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_args):
-            return False
-
-        async def post(self, url: str, **kwargs):
-            calls.append({"url": url, **kwargs})
-            return FakeResponse()
-
-    monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_URL", "https://code.example.com/control-plane")
-    monkeypatch.setenv("DOLPHIN_CODE_DEFAULT_SEED_PROJECT_ID", "90001")
-    monkeypatch.delenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", raising=False)
-    monkeypatch.setattr(settings, "dolphin_code_control_plane_token", "", raising=False)
-    monkeypatch.setattr(service.httpx, "AsyncClient", FakeClient)
-
-    await service.create_code_application(
-        app_name="库存助手",
-        app_code="inventory-copilot",
-        seed_project_id="90002",
-        authorization_header="Bearer user-token",
-    )
-
-    assert calls[0]["headers"]["Authorization"] == "Bearer user-token"
-    assert calls[0]["json"]["seedProjectId"] == "90002"
-
-
-@pytest.mark.asyncio
-async def test_create_code_application_falls_back_to_local_builder_when_seed_is_missing(monkeypatch):
-    from app.code_runtime import service
-
-    class FakeResponse:
-        status_code = 404
-        text = '{"code":"SEED_PROJECT_NOT_FOUND","message":"seed project not found"}'
-
-        def json(self):
-            return {
-                "code": "SEED_PROJECT_NOT_FOUND",
-                "message": "seed project not found",
-            }
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_args):
-            return False
-
-        async def post(self, _url: str, **_kwargs):
-            return FakeResponse()
-
-    monkeypatch.setenv("DOLPHIN_CODE_BUILDER_URL", "http://127.0.0.1:5175/builder/")
-    monkeypatch.setattr(service.httpx, "AsyncClient", FakeClient)
-
-    result = await service.create_code_application(
-        app_name="本地 Code 应用",
-        app_code="local-code-app",
-    )
-
-    assert result["external_application_id"].startswith("local-")
-    assert result["app_name"] == "本地 Code 应用"
-    assert result["app_code"] == "local-code-app"
-    assert result["status"] == "READY"
-    assert result["local_status"] == "completed"
-
-
 @pytest.mark.asyncio
 async def test_default_workspace_open_uses_local_builder_for_local_application(monkeypatch):
     from app.code_runtime import service
@@ -1899,6 +1805,53 @@ async def test_desktop_runtime_does_not_start_when_control_plane_application_che
         )
 
     assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_desktop_runtime_does_not_verify_local_application_with_control_plane(
+    db_session,
+    monkeypatch,
+):
+    from app.code_runtime import service
+    from app.code_runtime.service import open_code_session
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="local-desktop-code-app",
+        title="Local Desktop Code",
+        mode="code",
+        status="active",
+    )
+    db_session.add(session)
+    await db_session.commit()
+
+    class LocalRuntimeReached:
+        @classmethod
+        def from_environment(cls):
+            return cls()
+
+        async def open_application_with_entry_token(self, *_args, **_kwargs):
+            raise HTTPException(status_code=503, detail="LOCAL_RUNTIME_REACHED")
+
+    async def unexpected_control_plane_check(*_args, **_kwargs):
+        raise AssertionError("local application must not be verified by Control Plane")
+
+    monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_URL", "http://127.0.0.1:9988")
+    monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_TOKEN", "manager-token")
+    monkeypatch.setenv("DOLPHIN_DESKTOP_DATA_DIR", "/tmp/desktop-data")
+    monkeypatch.setenv("DOLPHIN_AGENT_RUNTIME_PATH", "/tmp/agent-runtime")
+    monkeypatch.setattr(service, "LocalRuntimeClient", LocalRuntimeReached)
+    monkeypatch.setattr(service, "verify_control_plane_application_access", unexpected_control_plane_check)
+
+    with pytest.raises(HTTPException, match="LOCAL_RUNTIME_REACHED") as exc:
+        await open_code_session(
+            db=db_session,
+            session_id=session.id,
+            ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
+        )
+
+    assert exc.value.status_code == 503
 
 
 @pytest.mark.asyncio

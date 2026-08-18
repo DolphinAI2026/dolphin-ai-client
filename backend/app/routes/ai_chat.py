@@ -32,6 +32,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from app.database import get_db, AsyncSessionLocal
+from app import runtime
+from app.code_runtime.auth import control_plane_access_token
+from app.code_runtime.control_plane_models import list_control_plane_model_options
 from app.deps import get_auth_context, auth_from_header_or_query, AuthContext
 from app.models import (
     AIChatSession,
@@ -68,15 +71,57 @@ def _control_plane_code_tenant_id(
     mode: str | None,
     assistant_profile: str | None = None,
 ) -> str | None:
+    if str(getattr(ctx.user, "account_source", "") or "").strip().lower() != "control_plane":
+        return None
+    # Desktop Builder is backed by the signed-in Control Plane account too.
+    # Record that tenant on every desktop session so its default model can come
+    # from the online catalog. Web keeps the previous code/system-assistant-only
+    # behavior.
     if (
-        str(mode or "").strip().lower() != "code"
+        not runtime.is_desktop()
+        and str(mode or "").strip().lower() != "code"
         and assistant_profile != "system_assistant"
     ):
         return None
-    if str(getattr(ctx.user, "account_source", "") or "").strip().lower() != "control_plane":
-        return None
     value = str(getattr(ctx, "control_plane_tenant_id", "") or "").strip()
     return value or None
+
+
+async def _validated_selected_llm_config_id(
+    db: AsyncSession,
+    ctx: AuthContext,
+    selected_llm_config_id: int | None,
+    purpose: str,
+) -> int | None:
+    """Validate local IDs and synthesized Control Plane catalogue IDs alike."""
+    if selected_llm_config_id is None or selected_llm_config_id == 0:
+        return None
+    if selected_llm_config_id > 0:
+        from app.routes.llm_configs import get_active_llm_config_by_id_for_purpose
+
+        cfg = await get_active_llm_config_by_id_for_purpose(
+            db, ctx.tenant_id, selected_llm_config_id, purpose
+        )
+        if not cfg:
+            raise HTTPException(status_code=400, detail="所选模型不可用或不支持当前助手")
+        return cfg.id
+
+    if (
+        not runtime.is_desktop()
+        or str(getattr(ctx.user, "account_source", "") or "").lower() != "control_plane"
+    ):
+        raise HTTPException(status_code=400, detail="所选模型不可用或不支持当前助手")
+    access_token = control_plane_access_token(ctx.user)
+    if not access_token:
+        raise HTTPException(status_code=400, detail="线上模型登录凭据已失效，请重新登录")
+    options = await list_control_plane_model_options(
+        purpose=purpose,
+        authorization_header=f"Bearer {access_token}",
+        delegated_context=ctx,
+    )
+    if not any(option.get("id") == selected_llm_config_id for option in options):
+        raise HTTPException(status_code=400, detail="所选模型不可用或不支持当前助手")
+    return selected_llm_config_id
 
 
 # ─────────────────────────── 请求 / 响应 schemas ───────────────────────────
@@ -542,16 +587,10 @@ async def create_session(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    selected_llm_config_id: Optional[int] = None
-    if body.selected_llm_config_id is not None and body.selected_llm_config_id > 0:
-        from app.routes.llm_configs import get_active_llm_config_by_id_for_purpose
-        purpose = assistant_model_purpose(body.assistant_profile)
-        cfg = await get_active_llm_config_by_id_for_purpose(
-            db, ctx.tenant_id, body.selected_llm_config_id, purpose
-        )
-        if not cfg:
-            raise HTTPException(status_code=400, detail="所选模型不可用或不支持当前助手")
-        selected_llm_config_id = cfg.id
+    purpose = assistant_model_purpose(body.assistant_profile)
+    selected_llm_config_id = await _validated_selected_llm_config_id(
+        db, ctx, body.selected_llm_config_id, purpose
+    )
     title = body.title or "新会话"
     is_system_assistant = body.assistant_profile == "system_assistant"
     app_id = None if is_system_assistant else body.app_id
@@ -704,17 +743,10 @@ async def update_session(
     if body.title is not None:
         s.title = body.title
     if body.selected_llm_config_id is not None:
-        if body.selected_llm_config_id > 0:
-            from app.routes.llm_configs import get_active_llm_config_by_id_for_purpose
-            purpose = assistant_model_purpose(getattr(s, "assistant_profile", None))
-            cfg = await get_active_llm_config_by_id_for_purpose(
-                db, ctx.tenant_id, body.selected_llm_config_id, purpose
-            )
-            if not cfg:
-                raise HTTPException(status_code=400, detail="所选模型不可用或不支持当前助手")
-            s.selected_llm_config_id = cfg.id
-        else:
-            s.selected_llm_config_id = None
+        purpose = assistant_model_purpose(getattr(s, "assistant_profile", None))
+        s.selected_llm_config_id = await _validated_selected_llm_config_id(
+            db, ctx, body.selected_llm_config_id, purpose
+        )
     if body.status is not None:
         s.status = body.status
     await db.commit()

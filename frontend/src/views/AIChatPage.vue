@@ -290,9 +290,13 @@
             <BuilderModelPicker
               v-model="selectedLlmId"
               :options="llmOptions"
-              title="切换模型"
+              :disabled="llmOptions.length === 0"
+              :title="llmOptionsLoadError || '切换模型'"
               @change="onChangeLlm"
             />
+            <span v-if="llmOptionsLoadError" class="model-options-error" role="status">
+              {{ llmOptionsLoadError }}
+            </span>
           </template>
           <template #footer-right>
             <span class="hint">{{ isSending ? 'Enter 排队发送 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行' }}</span>
@@ -728,6 +732,7 @@ const selectedIntroExample = ref<IntroExample | null>(null)
 
 const llmOptions = ref<BuilderModelOption[]>([])
 const selectedLlmId = ref<number | null>(null)
+const llmOptionsLoadError = ref('')
 const defaultLlmId = computed(() =>
   llmOptions.value.find(option => option.is_default)?.id
   ?? llmOptions.value[0]?.id
@@ -2052,6 +2057,7 @@ async function loadLlmOptions() {
     // 拉所有 purpose=builder 的可用模型；'all' 不是合法 purpose
     const opts = await llmConfigApi.listOptions('builder')
     llmOptions.value = (opts || []) as any
+    llmOptionsLoadError.value = ''
     selectedLlmId.value = normalizeLlmId(currentSession.value?.selected_llm_config_id ?? selectedLlmId.value)
     if (
       currentSession.value &&
@@ -2067,7 +2073,8 @@ async function loadLlmOptions() {
     console.error('拉模型列表失败', e)
     llmOptions.value = []
     selectedLlmId.value = null
-    ElMessage.warning(`模型列表加载失败：${e?.response?.data?.detail || e?.message || e}`)
+    // 页面初始化时静默失败，避免远端网关错误打断用户；原因留在模型选择处。
+    llmOptionsLoadError.value = '模型服务暂时不可用，请稍后重试'
   }
 }
 
@@ -4329,6 +4336,16 @@ onMounted(async () => {
   color: var(--ac-text, #1f2937);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   text-overflow: ellipsis;
+}
+
+.model-options-error {
+  max-width: min(260px, 38vw);
+  overflow: hidden;
+  color: #b45309;
+  font-size: 12px;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 对话界面风格队列提示卡 */

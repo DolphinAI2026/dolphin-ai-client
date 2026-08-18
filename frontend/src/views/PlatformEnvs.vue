@@ -27,8 +27,8 @@
       </div>
       <div v-else class="scope-banner">
         <div>
-          <strong>{{ activeTab === 'llm' ? '模型配置' : 'aPaaS 平台环境' }}</strong>
-          <span>{{ activeTab === 'llm' ? '维护当前远程 Builder 租户可用的模型连接。' : '维护当前组织使用的 aPaaS 平台地址、租户和认证。' }}</span>
+          <strong>{{ activeTab === 'llm' ? (isLocalModelSettings ? '本地模型配置' : '模型配置') : 'aPaaS 平台环境' }}</strong>
+          <span>{{ activeTab === 'llm' ? (isLocalModelSettings ? '模型密钥仅加密保存在这台电脑的 SQLite 工作空间，可与 Builder 和 Code 一起使用。' : '维护当前远程 Builder 租户可用的模型连接。') : '维护当前组织使用的 aPaaS 平台地址、租户和认证。' }}</span>
         </div>
         <button type="button" @click="router.push('/settings')">返回设置</button>
       </div>
@@ -364,6 +364,7 @@ function normalizeTab(value: unknown): SettingsTab {
 }
 
 const activeTab = ref<SettingsTab>(props.only ?? normalizeTab(route.query.tab))
+const isLocalModelSettings = computed(() => route.query.source === 'local')
 const activeTabLabel = computed(() => {
   if (activeTab.value === 'envs') return '平台环境'
   return '模型配置'

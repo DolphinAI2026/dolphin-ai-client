@@ -1213,6 +1213,21 @@ fn trusted_appliance_root(
 
 fn appliance_environment(appliance_root: &Path) -> Vec<(String, String)> {
     let paths = appliance_paths(appliance_root);
+    let bundled_tool_path = [
+        appliance_root.join("agentic-coding/bin"),
+        appliance_root.join("node/bin"),
+    ]
+    .into_iter()
+    .map(|path| path.display().to_string())
+    .collect::<Vec<_>>()
+    .join(if cfg!(target_os = "windows") { ";" } else { ":" });
+    let host_path = std::env::var("PATH").unwrap_or_default();
+    let path_separator = if cfg!(target_os = "windows") { ";" } else { ":" };
+    let runtime_path = if host_path.is_empty() {
+        bundled_tool_path
+    } else {
+        format!("{bundled_tool_path}{path_separator}{host_path}")
+    };
     vec![
         (
             "DOLPHIN_CODE_CODEX_APP_SERVER_BINARY".to_string(),
@@ -1240,6 +1255,14 @@ fn appliance_environment(appliance_root: &Path) -> Vec<(String, String)> {
             "AGENTIC_PACK_PYTHON".to_string(),
             paths.python.display().to_string(),
         ),
+        (
+            "DOLPHIN_CODE_KNOWLEDGE_MCP_PROXY_PATH".to_string(),
+            appliance_root
+                .join("bin/knowledge-mcp-proxy")
+                .display()
+                .to_string(),
+        ),
+        ("PATH".to_string(), runtime_path),
     ]
 }
 
@@ -1923,6 +1946,17 @@ mod tests {
         );
         assert_eq!(value(&environment, "APAAS_CODEX_APP_SERVER_BINARY"), None);
         assert_eq!(value(&environment, "APAAS_AGENTIC_PACK_DIR"), None);
+        assert_eq!(
+            value(&environment, "DOLPHIN_CODE_KNOWLEDGE_MCP_PROXY_PATH"),
+            Some(
+                appliance_root
+                    .join("bin/knowledge-mcp-proxy")
+                    .display()
+                    .to_string()
+            )
+        );
+        assert!(value(&environment, "PATH")
+            .is_some_and(|path| path.starts_with("/opt/dolphin-code/agentic-coding/bin:/opt/dolphin-code/node/bin:")));
     }
 
     #[test]

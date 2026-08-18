@@ -17,6 +17,8 @@ from app.routes.ai_chat import (
     get_session,
     list_sessions,
 )
+from app import runtime
+from app.routes import ai_chat as ai_chat_routes
 
 
 def _ctx(
@@ -113,6 +115,37 @@ async def test_system_assistant_session_accepts_only_coding_model_selection(db_s
             ctx,
             db_session,
         )
+
+
+@pytest.mark.asyncio
+async def test_desktop_builder_can_persist_a_selected_control_plane_model(
+    db_session,
+    monkeypatch,
+):
+    tenant = Tenant(tenant_name="desktop_cp_models", tenant_code="desktop_cp_models")
+    user = User(
+        username="desktop_cp_models_user",
+        hashed_password="x",
+        account_source="control_plane",
+    )
+    db_session.add_all([tenant, user])
+    await db_session.flush()
+    ctx = _ctx(user, tenant.id, control_plane_tenant_id="cp-tenant-models")
+
+    async def fake_catalog(**_kwargs):
+        return [{"id": -1001, "model": "online-model", "is_default": True}]
+
+    monkeypatch.setattr(runtime, "is_desktop", lambda: True)
+    monkeypatch.setattr(ai_chat_routes, "control_plane_access_token", lambda _user: "token")
+    monkeypatch.setattr(ai_chat_routes, "list_control_plane_model_options", fake_catalog)
+
+    created = await create_session(
+        CreateSessionRequest(selected_llm_config_id=-1001),
+        ctx,
+        db_session,
+    )
+
+    assert created["selected_llm_config_id"] == -1001
 
 
 @pytest.mark.asyncio

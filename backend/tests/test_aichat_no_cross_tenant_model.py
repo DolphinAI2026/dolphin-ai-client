@@ -4,9 +4,10 @@ LLM 配置已改为平台级共享，Builder 允许任一租户会话解析平�
 """
 import pytest
 
-from app.ai_chat.agent import _resolve_llm_config
+from app.ai_chat import agent as agent_module
+from app.ai_chat.agent import _resolve_llm_config, _responses_input, _responses_message, _responses_tools
 from app.crypto import encrypt_password
-from app.models import LLMConfig
+from app.models import LLMConfig, User
 from app.models.tenant import Tenant
 from app.models.ai_chat import AIChatSession
 
@@ -117,3 +118,110 @@ async def test_system_assistant_resolves_coding_model(db_session):
 
     assert snapshot.model == "coding-model"
     assert snapshot.base_url == "https://coding.example/v1"
+
+
+@pytest.mark.asyncio
+async def test_desktop_builder_defaults_to_control_plane_model_not_empty_local_tenant(
+    db_session,
+    monkeypatch,
+):
+    user = User(
+        username="desktop-control-plane-user",
+        display_name="Desktop user",
+        hashed_password="not-used",
+        account_source="control_plane",
+        coding_tenant_id="cp-tenant-42",
+    )
+    db_session.add(user)
+    await db_session.flush()
+    session = AIChatSession(
+        tenant_id=999,
+        user_id=user.id,
+        title="Builder",
+        control_plane_tenant_id="cp-tenant-42",
+    )
+    db_session.add(session)
+    await db_session.flush()
+
+    async def fake_catalog(**_kwargs):
+        return [
+            {"id": -101, "model": "online-default", "is_default": True},
+            {"id": -102, "model": "online-other", "is_default": False},
+        ]
+
+    monkeypatch.setattr(agent_module.runtime, "is_desktop", lambda: True)
+    monkeypatch.setattr(agent_module, "control_plane_access_token", lambda _user: "cp-token")
+    monkeypatch.setattr(agent_module, "control_plane_base_url", lambda: "https://control.example")
+    monkeypatch.setattr(agent_module, "list_control_plane_model_options", fake_catalog)
+
+    snapshot = await _resolve_llm_config(db_session, session)
+
+    assert snapshot.model == "online-default"
+    assert snapshot.base_url == "https://control.example/api/code/model-gateway/v1"
+    assert snapshot.api_format == "responses"
+    assert snapshot.extra_headers["Authorization"] == "Bearer cp-token"
+    assert snapshot.extra_headers["X-Tenant-Id"] == "cp-tenant-42"
+
+
+def test_control_plane_responses_adapter_preserves_tool_turns():
+    input_items = _responses_input([
+        {"role": "system", "content": "You are helpful."},
+        {"role": "assistant", "content": "", "tool_calls": [{
+            "id": "call-1",
+            "function": {"name": "read_file", "arguments": "{\"path\":\"a.txt\"}"},
+        }]},
+        {"role": "tool", "tool_call_id": "call-1", "content": "file contents"},
+    ])
+
+    assert input_items[0]["role"] == "developer"
+    assert input_items[1]["type"] == "function_call"
+    assert input_items[2] == {
+        "type": "function_call_output",
+        "call_id": "call-1",
+        "output": "file contents",
+    }
+    assert _responses_tools([{
+        "type": "function",
+        "function": {"name": "read_file", "parameters": {"type": "object"}},
+    }]) == [{
+        "type": "function",
+        "name": "read_file",
+        "description": "",
+        "parameters": {"type": "object"},
+    }]
+    assert _responses_message({"output": [
+        {"type": "message", "content": [{"type": "output_text", "text": "done"}]},
+        {"type": "function_call", "call_id": "call-2", "name": "save", "arguments": "{}"},
+    ]}) == {
+        "content": "done",
+        "tool_calls": [{
+            "id": "call-2",
+            "type": "function",
+            "function": {"name": "save", "arguments": "{}"},
+        }],
+    }
+
+
+@pytest.mark.asyncio
+async def test_desktop_builder_reports_control_plane_catalog_failure(db_session, monkeypatch):
+    user = User(
+        username="desktop_catalog_failure_user",
+        hashed_password="not-used",
+        account_source="control_plane",
+        coding_tenant_id="cp-tenant-failure",
+    )
+    db_session.add(user)
+    await db_session.flush()
+    session = AIChatSession(tenant_id=998, user_id=user.id, title="Builder")
+    db_session.add(session)
+    await db_session.flush()
+
+    async def unavailable_catalog(**_kwargs):
+        raise RuntimeError("503 Service Temporarily Unavailable")
+
+    monkeypatch.setattr(agent_module.runtime, "is_desktop", lambda: True)
+    monkeypatch.setattr(agent_module, "control_plane_access_token", lambda _user: "cp-token")
+    monkeypatch.setattr(agent_module, "list_control_plane_model_options", unavailable_catalog)
+
+    with pytest.raises(RuntimeError, match="线上模型目录加载失败.*503"):
+        await _resolve_llm_config(db_session, session)

@@ -29,8 +29,11 @@ function text(value: unknown): string {
   return String(value || '').trim()
 }
 
-function executionLocation(value: unknown): CodeExecutionLocation {
-  return value === 'local' ? 'local' : 'remote'
+function executionLocation(value: unknown, externalApplicationId: unknown): CodeExecutionLocation {
+  if (value === 'local' || value === 'remote') return value
+  // Old desktop records were created before execution_location existed.  Their
+  // local application id is still authoritative and must not render as remote.
+  return text(externalApplicationId).startsWith('local-') ? 'local' : 'remote'
 }
 
 function sessionPurpose(value: unknown): CodeSessionPurpose {
@@ -64,7 +67,7 @@ export function formatCodeRailLocationSummary(
 function appSessions(app: CodeRailHistoryApp): CodeRailSession[] {
   const shellSessionId = text(app.shell_session_id)
   if (!shellSessionId) return []
-  const location = executionLocation(app.execution_location)
+  const location = executionLocation(app.execution_location, app.external_application_id)
   const purpose = sessionPurpose(app.session_purpose)
   const logicalId = logicalApplicationId(app)
   const name = applicationName(app)

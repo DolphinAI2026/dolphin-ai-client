@@ -2,7 +2,7 @@
 from __future__ import annotations
 import logging
 from types import SimpleNamespace
-from typing import Annotated, Optional
+from typing import Annotated, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select, update
@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import httpx
 
 from app.database import get_db
+from app import runtime
 from app.code_runtime.control_plane_models import list_control_plane_model_options
 from app.deps import (
     AuthContext,
@@ -28,7 +29,7 @@ router = APIRouter(prefix="/llm-configs", tags=["llm-configs"])
 
 
 def _reject_control_plane_model_management(ctx: AuthContext) -> None:
-    if is_control_plane_context(ctx):
+    if is_control_plane_context(ctx) and not runtime.is_desktop():
         raise HTTPException(
             status_code=409,
             detail={
@@ -64,6 +65,7 @@ class LLMConfigCreate(BaseModel):
     is_default: bool = False
     max_tokens: int = 8192
     temperature: float = 0.3
+    codex_wire_api: Literal["responses", "chat"] = "responses"
     tenant_id: Optional[int] = None  # 仅平台管理员可指定;租户管理员忽略,强制自己租户
 
 
@@ -77,6 +79,7 @@ class LLMConfigUpdate(BaseModel):
     is_default: Optional[bool] = None
     max_tokens: Optional[int] = None
     temperature: Optional[float] = None
+    codex_wire_api: Optional[Literal["responses", "chat"]] = None
     status: Optional[str] = None
 
 
@@ -100,6 +103,7 @@ class LLMConfigResponse(BaseModel):
     is_default: bool
     max_tokens: int
     temperature: float
+    codex_wire_api: str
     status: str
     created_at: str
     updated_at: str
@@ -116,6 +120,7 @@ class LLMConfigResponse(BaseModel):
             is_default=row.is_default,
             max_tokens=row.max_tokens,
             temperature=row.temperature,
+            codex_wire_api=getattr(row, "codex_wire_api", "responses") or "responses",
             status=row.status,
             created_at=row.created_at.isoformat(),
             updated_at=row.updated_at.isoformat(),
@@ -165,6 +170,93 @@ def build_llm_responses_url(base_url: str) -> str:
     if not base.endswith("/v1"):
         base = f"{base}/v1"
     return f"{base}/responses"
+
+
+def _test_reply_from_response(data: object, *, is_codex: bool, is_anthropic_compat: bool) -> str:
+    """Extract a short test reply without assuming a gateway response is complete.
+
+    Some OpenAI-compatible gateways return `choices: [null]` when upstream
+    rejects a request. That must be reported as a useful model error instead
+    of leaking a Python ``NoneType is not subscriptable`` exception.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("模型服务返回的 JSON 不是对象")
+    if is_codex:
+        output = data.get("output")
+        if not isinstance(output, list):
+            raise ValueError("模型服务返回的 Responses 响应缺少 output")
+        parts: list[str] = []
+        for item in output:
+            if not isinstance(item, dict) or item.get("type") != "message":
+                continue
+            for content in item.get("content") or []:
+                if isinstance(content, dict) and isinstance(content.get("text"), str):
+                    parts.append(content["text"])
+        return "".join(parts)
+    if is_anthropic_compat:
+        content_blocks = data.get("content")
+        if not isinstance(content_blocks, list):
+            raise ValueError("模型服务返回的 Messages 响应缺少 content")
+        return "".join(
+            block["text"]
+            for block in content_blocks
+            if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str)
+        )
+
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        raise ValueError("模型服务返回的 Chat Completions 响应缺少 choices[0]")
+    message = choices[0].get("message")
+    if not isinstance(message, dict):
+        raise ValueError("模型服务返回的 Chat Completions 响应缺少 message")
+    content = message.get("content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict) and isinstance(block.get("text"), str)
+        )
+    raise ValueError("模型服务返回的 Chat Completions 响应内容无效")
+
+
+def _model_test_http_error(response: httpx.Response) -> str:
+    """Preserve a gateway's actual failure message in the model test result."""
+    message = ""
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        raw_error = payload.get("error") or payload.get("message") or payload.get("detail")
+        if isinstance(raw_error, dict):
+            raw_error = raw_error.get("message") or raw_error.get("detail") or raw_error.get("code")
+        if raw_error is not None:
+            message = str(raw_error).strip()
+    if not message:
+        message = response.text.strip()[:300]
+    if response.status_code == 404 and "not found instance" in message.lower():
+        return (
+            "模型服务找不到对应实例（HTTP 404: Not found instance）。"
+            "当前 API 地址缺少该账号的实例/推理端点，请向服务提供方确认完整 Base URL。"
+        )
+    return f"模型服务返回 HTTP {response.status_code}: {message[:300]}"
+
+
+def _chat_model_test_body(provider: str, model: str) -> dict:
+    """Build the smallest Chat Completions probe accepted by gateways.
+
+    Do not add optional generation controls here: some compatible gateways
+    route a request to a missing instance when an unsupported control is sent.
+    """
+    body: dict = {
+        "model": model,
+        "messages": [{"role": "user", "content": "回复OK"}],
+    }
+    if provider == "qwen" or "qwen3" in model.lower():
+        body["enable_thinking"] = False
+    return body
 
 
 def _extract_model_names(data: object) -> list[str]:
@@ -240,7 +332,7 @@ async def list_llm_config_options(
 
     本租户有配就列本租户;本租户没配则回落全平台共享(picker 才不至于空)。
     """
-    if is_control_plane_context(ctx):
+    if is_control_plane_context(ctx) and not runtime.is_desktop():
         from app.routes.code_runtime import _control_plane_request_auth
 
         authorization, _auth_provider = await _control_plane_request_auth(
@@ -259,6 +351,20 @@ async def list_llm_config_options(
 
     tenant_id = await resolve_effective_tenant_id(db, ctx)
     rows = await list_llm_configs_for_purpose(db, tenant_id, purpose)
+    if runtime.is_desktop() and is_control_plane_context(ctx):
+        from app.routes.code_runtime import _control_plane_request_auth
+
+        authorization, _auth_provider = await _control_plane_request_auth(
+            SimpleNamespace(headers={}), ctx, db,
+        )
+        if authorization:
+            remote_options = await list_control_plane_model_options(
+                purpose=purpose,
+                authorization_header=authorization,
+                delegated_context=ctx,
+            )
+            local_options = [LLMConfigOptionResponse.from_db(row) for row in rows]
+            return local_options + [LLMConfigOptionResponse(**option) for option in remote_options]
     if not rows:
         rows = await list_llm_configs_for_purpose(db, None, purpose)
     return [LLMConfigOptionResponse.from_db(row) for row in rows]
@@ -348,6 +454,7 @@ async def create_llm_config(
         is_default=req.is_default,
         max_tokens=req.max_tokens,
         temperature=req.temperature,
+        codex_wire_api=req.codex_wire_api,
     )
     db.add(config)
     await db.commit()
@@ -388,6 +495,8 @@ async def update_llm_config(
         config.max_tokens = req.max_tokens
     if req.temperature is not None:
         config.temperature = req.temperature
+    if req.codex_wire_api is not None:
+        config.codex_wire_api = req.codex_wire_api
     if req.status is not None:
         if req.status not in {"active", "inactive", "error"}:
             raise HTTPException(status_code=400, detail="不支持的模型状态")
@@ -487,41 +596,22 @@ async def test_llm_config(
                     },
                 )
             else:
-                test_body: dict = {
-                    "model": config.model,
-                    "messages": [{"role": "user", "content": "回复OK"}],
-                    "max_tokens": 50,
-                }
-                # 思考模型（如 Qwen3.x）禁用思考以加快测试速度
-                if config.provider == "qwen" or "qwen3" in (config.model or "").lower():
-                    test_body["enable_thinking"] = False
                 resp = await client.post(
                     build_llm_chat_completions_url(config.base_url),
                     headers={
                         "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
                     },
-                    json=test_body,
+                    json=_chat_model_test_body(config.provider, config.model),
                 )
             if resp.status_code == 200:
                 data = resp.json()
-                if is_codex:
-                    reply = ""
-                    for item in data.get("output", []):
-                        if item.get("type") != "message":
-                            continue
-                        for content in item.get("content", []):
-                            reply += content.get("text", "")
-                elif is_anthropic_compat:
-                    reply = ""
-                    for block in data.get("content", []):
-                        if block.get("type") == "text":
-                            reply += block.get("text", "")
-                else:
-                    reply = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                reply = _test_reply_from_response(
+                    data, is_codex=is_codex, is_anthropic_compat=is_anthropic_compat
+                )
                 return {"success": True, "reply": reply[:100]}
             else:
-                return {"success": False, "error": f"HTTP {resp.status_code}: {resp.text[:300]}"}
+                return {"success": False, "error": _model_test_http_error(resp)}
     except Exception as e:
         return {"success": False, "error": str(e)[:300]}
 

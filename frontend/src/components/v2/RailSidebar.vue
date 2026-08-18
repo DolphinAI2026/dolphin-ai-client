@@ -892,6 +892,7 @@ function renderIcon(name: string): string {
         :system-sessions="systemAssistantSessions"
         :application-groups="systemAssistantApplicationGroups"
         :active-system-session-id="String(route.query.session || '')"
+        :is-application-session-active="sessionActive"
         @new-system-session="createSystemAssistantSession"
         @open-system-session="openSession"
         @rename-system-session="renameSystemAssistantSession"
@@ -2178,8 +2179,9 @@ html[data-theme="dark"] .rail-item { color: #a8b5c8; }
 .rail-item-icon { width: 18px; height: 18px; color: #7d8ca3; }
 .rail-item.active .rail-item-icon, .rail-item:hover .rail-item-icon { color: #2f65d5; }
 .rail-item-badge { min-width: 20px; height: 20px; background: #dce9ff; color: #2860ca; }
-.rail-sessions { flex: 1 1 auto; min-height: 112px; display: flex; flex-direction: column; margin-top: 7px; padding: 9px 2px 0; overflow: hidden; border-top: 1px solid #e7ecf3; }
-.rail-sessions.rail-system-assistant-sessions { overflow-y: auto; }
+.rail-sessions { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; margin-top: 7px; padding: 9px 2px 0; overflow: hidden; border-top: 1px solid #e7ecf3; }
+.rail-sessions.rail-system-assistant-sessions { overflow: hidden; }
+.rail-sessions.rail-system-assistant-sessions :deep(.sas-sections) { flex: 1 1 auto; min-height: 0; }
 .rail-sess-toolbar { flex: 0 0 auto; min-height: 28px; padding: 0 6px 5px; }
 .rail-sess-cap { color: #7f8b9d; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; }
 .rail-sess-new { width: 26px; height: 26px; display: grid; place-items: center; padding: 0; color: #637188; background: transparent; border: 1px solid transparent; border-radius: 7px; cursor: pointer; }
@@ -2199,8 +2201,9 @@ html[data-theme="dark"] .rail-item { color: #a8b5c8; }
 .rail-sess-state { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: #c2cad6; }
 .rail-sess-state.running { background: #2f65d5; box-shadow: 0 0 0 3px rgba(47, 101, 213, .12); animation: rail-session-pulse 1.6s ease-in-out infinite; }
 .rail-sess-item:hover { color: #2458bd; background: #edf3ff; }
-.rail-sess-item.active { color: #1f56c7; background: #e5efff; font-weight: 600; }
+.rail-sess-item.active { color: #1f56c7; background: #dceaff; box-shadow: inset 3px 0 0 #2f65d5; font-weight: 600; }
 .rail-sess-item.active .rail-sess-state { background: #2f65d5; }
+.rail-sess-item:focus-visible { outline: 2px solid #7ea5ee; outline-offset: -1px; }
 .rail-sess-manage { position: relative; flex: 0 0 auto; }
 .rail-sess-more,
 .rail-sess-del { width: 22px; height: 22px; display: grid; place-items: center; flex: 0 0 auto; padding: 0; border-radius: 6px; }
@@ -2247,7 +2250,7 @@ html[data-theme="dark"] .rail-sess-label,
 html[data-theme="dark"] .rail-sess-item { color: #9eacc0; }
 html[data-theme="dark"] .rail-sess-state { background: #526177; }
 html[data-theme="dark"] .rail-sess-item:hover { color: #cbd8eb; background: #1d2838; }
-html[data-theme="dark"] .rail-sess-item.active { color: #a9c5ff; background: #22304a; }
+html[data-theme="dark"] .rail-sess-item.active { color: #d5e4ff; background: #283b5c; box-shadow: inset 3px 0 0 #7da5f8; }
 html[data-theme="dark"] .rail-sess-item.active .rail-sess-state,
 html[data-theme="dark"] .rail-sess-state.running { background: #7da5f8; box-shadow: 0 0 0 3px rgba(125, 165, 248, .14); }
 html[data-theme="dark"] .rail-sess-more { color: #94a3b8; }

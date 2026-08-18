@@ -357,6 +357,11 @@ class LLMConfig(Base):
     max_tokens: Mapped[int] = mapped_column(Integer, default=8192, nullable=False)
     temperature: Mapped[float] = mapped_column(default=0.3, nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
+    # Code Runtime uses Codex underneath. Most OpenAI-compatible gateways accept
+    # Responses, while some only expose Chat Completions.
+    codex_wire_api: Mapped[str] = mapped_column(
+        String(20), default="responses", server_default="responses", nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

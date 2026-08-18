@@ -25,6 +25,7 @@ class ResolvedLLMConfig:
     config_id: Optional[int] = None
     config_name: Optional[str] = None
     provider: Optional[str] = None
+    codex_wire_api: str = "responses"
 
 
 async def resolve_llm_config(
@@ -58,6 +59,7 @@ async def resolve_llm_config(
         config_id=config.id,
         config_name=config.config_name,
         provider=config.provider,
+        codex_wire_api=getattr(config, "codex_wire_api", "responses") or "responses",
     )
 
 

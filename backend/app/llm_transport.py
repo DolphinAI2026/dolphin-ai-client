@@ -176,13 +176,20 @@ def build_chat_payload(
     return payload
 
 
-def _headers(api_key: str, *, stream: bool = False) -> dict:
+def _headers(
+    api_key: str,
+    *,
+    stream: bool = False,
+    extra_headers: Optional[dict[str, str]] = None,
+) -> dict:
     h = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
     if stream:
         h["Accept"] = "text/event-stream"
+    if extra_headers:
+        h.update(extra_headers)
     return h
 
 
@@ -196,6 +203,7 @@ async def stream_raw_sse_lines(
     payload: dict,
     timeout: httpx.Timeout | float,
     url: Optional[str] = None,
+    extra_headers: Optional[dict[str, str]] = None,
 ) -> AsyncIterator[str]:
     """打开 chat/completions 流,逐行 yield 原始 SSE 行(含 ``data:`` 前缀)。
 
@@ -208,7 +216,7 @@ async def stream_raw_sse_lines(
         async with client.stream(
             "POST",
             target,
-            headers=_headers(api_key, stream=True),
+            headers=_headers(api_key, stream=True, extra_headers=extra_headers),
             json=payload,
         ) as resp:
             if resp.status_code >= 400:
@@ -231,6 +239,7 @@ async def _stream_chunks_once(
     timeout: httpx.Timeout | float,
     abort_event: Optional[asyncio.Event],
     url: Optional[str] = None,
+    extra_headers: Optional[dict[str, str]] = None,
 ) -> AsyncIterator[dict]:
     """单次(不含重试)流式调用,yield 归一化事件。
 
@@ -251,7 +260,7 @@ async def _stream_chunks_once(
         async with client.stream(
             "POST",
             target,
-            headers=_headers(api_key, stream=True),
+            headers=_headers(api_key, stream=True, extra_headers=extra_headers),
             json=payload,
         ) as resp:
             if resp.status_code >= 400:
@@ -339,6 +348,7 @@ async def stream_chunks(
     abort_event: Optional[asyncio.Event] = None,
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     url: Optional[str] = None,
+    extra_headers: Optional[dict[str, str]] = None,
 ) -> AsyncIterator[dict]:
     """带瞬态错误重试的归一化流式调用。
 
@@ -356,6 +366,7 @@ async def stream_chunks(
                 timeout=timeout,
                 abort_event=abort_event,
                 url=url,
+                extra_headers=extra_headers,
             ):
                 if chunk["type"] != "done":
                     emitted_anything = True
@@ -388,6 +399,7 @@ async def complete(
     timeout: httpx.Timeout | float,
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     url: Optional[str] = None,
+    extra_headers: Optional[dict[str, str]] = None,
 ) -> dict:
     """非流式 chat/completions。返回 OpenAI ``choices[0].message`` dict。"""
     target = url or f"{base_url.rstrip('/')}/chat/completions"
@@ -397,7 +409,7 @@ async def complete(
             async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.post(
                     target,
-                    headers=_headers(api_key),
+                    headers=_headers(api_key, extra_headers=extra_headers),
                     json=payload,
                 )
                 resp.raise_for_status()

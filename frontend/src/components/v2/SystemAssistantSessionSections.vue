@@ -2,12 +2,13 @@
 import { computed, ref } from 'vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import type { RailSession } from '@/composables/railSessions'
-import type { CodeRailSessionGroup } from './codeRailHistory'
+import type { CodeRailSession, CodeRailSessionGroup } from './codeRailHistory'
 
 const props = defineProps<{
   systemSessions: RailSession[]
   applicationGroups: CodeRailSessionGroup[]
   activeSystemSessionId?: string
+  isApplicationSessionActive?: (session: RailSession) => boolean
 }>()
 
 const emit = defineEmits<{
@@ -22,6 +23,8 @@ const emit = defineEmits<{
 const collapsed = ref(new Set<string>())
 const sessionMenuOpenId = ref<string | null>(null)
 const showAllSystemSessions = ref(false)
+const expandedApplicationGroups = ref(new Set<string>())
+const APPLICATION_VISIBLE_SESSION_LIMIT = 3
 
 const visibleSystemSessions = computed(() => {
   if (showAllSystemSessions.value || props.systemSessions.length <= 3) return props.systemSessions
@@ -43,6 +46,32 @@ function toggle(key: string) {
 
 function applicationGroupKey(group: CodeRailSessionGroup): string {
   return `application:${group.logicalApplicationId}`
+}
+
+function applicationCode(group: CodeRailSessionGroup): string {
+  const code = group.items
+    .map(session => String(session.externalApplicationId || '').trim())
+    .find(Boolean)
+  return code?.replace(/^code-app-/, '') || ''
+}
+
+function visibleApplicationSessions(group: CodeRailSessionGroup): CodeRailSession[] {
+  if (expandedApplicationGroups.value.has(applicationGroupKey(group))) return group.items
+  const recent = group.items.slice(0, APPLICATION_VISIBLE_SESSION_LIMIT)
+  const active = group.items.find(session => props.isApplicationSessionActive?.(session))
+  if (!active || recent.some(session => String(session.id) === String(active.id))) return recent
+  return [...recent, active]
+}
+
+function hiddenApplicationSessionCount(group: CodeRailSessionGroup): number {
+  return Math.max(0, group.items.length - visibleApplicationSessions(group).length)
+}
+
+function toggleApplicationSessions(group: CodeRailSessionGroup) {
+  const key = applicationGroupKey(group)
+  const next = new Set(expandedApplicationGroups.value)
+  next.has(key) ? next.delete(key) : next.add(key)
+  expandedApplicationGroups.value = next
 }
 
 function sessionRunning(session: RailSession): boolean {
@@ -152,7 +181,16 @@ function deleteSession(session: RailSession) {
                 :size="11"
                 :class="{ expanded: !collapsed.has(applicationGroupKey(group)) }"
               />
-              <span>{{ group.label }}</span>
+              <span class="sas-app-identity">
+                <span class="sas-app-name">{{ group.label }}</span>
+                <span
+                  v-if="applicationCode(group)"
+                  class="sas-app-code"
+                  :title="group.items.find(session => session.externalApplicationId)?.externalApplicationId"
+                >
+                  {{ applicationCode(group) }}
+                </span>
+              </span>
               <span class="sas-location-tags">{{ group.availableLocations.map(location => location === 'local' ? '本机' : '远程').join('、') }}</span>
               <span class="sas-count">{{ group.items.length }}</span>
             </button>
@@ -169,10 +207,11 @@ function deleteSession(session: RailSession) {
           </div>
           <div v-if="!collapsed.has(applicationGroupKey(group))" class="sas-items app-items">
             <button
-              v-for="session in group.items"
+              v-for="session in visibleApplicationSessions(group)"
               :key="session.id"
               type="button"
               class="sas-item app-item"
+              :class="{ active: isApplicationSessionActive?.(session) }"
               :title="session.title || '未命名会话'"
               @click="emit('open-application-session', session)"
             >
@@ -180,6 +219,20 @@ function deleteSession(session: RailSession) {
               <span class="sas-title">{{ session.title || '未命名会话' }}</span>
               <span class="sas-location">{{ session.locationSummary }}</span>
             </button>
+            <div v-if="hiddenApplicationSessionCount(group)" class="sas-more-row">
+              <button type="button" class="sas-more-sessions" @click="toggleApplicationSessions(group)">
+                展开更多
+                <span>（{{ hiddenApplicationSessionCount(group) }}）</span>
+              </button>
+            </div>
+            <div
+              v-else-if="expandedApplicationGroups.has(applicationGroupKey(group)) && group.items.length > APPLICATION_VISIBLE_SESSION_LIMIT"
+              class="sas-more-row"
+            >
+              <button type="button" class="sas-more-sessions" @click="toggleApplicationSessions(group)">
+                收起较早会话
+              </button>
+            </div>
           </div>
         </div>
         <div v-if="!applicationGroups.length" class="sas-empty">暂无应用会话</div>
@@ -189,7 +242,7 @@ function deleteSession(session: RailSession) {
 </template>
 
 <style scoped>
-.sas-sections { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #cfd7e3 transparent; }
+.sas-sections { min-height: 0; display: flex; flex: 1 1 auto; flex-direction: column; gap: 8px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #cfd7e3 transparent; }
 .sas-sections::-webkit-scrollbar { width: 5px; }
 .sas-sections::-webkit-scrollbar-thumb { background: #cfd7e3; border-radius: 999px; }
 .sas-section + .sas-section { padding-top: 8px; border-top: 1px solid #e7ecf3; }
@@ -206,7 +259,7 @@ function deleteSession(session: RailSession) {
 .sas-items { display: flex; flex-direction: column; gap: 1px; }
 .sas-item { width: 100%; min-width: 0; min-height: 30px; display: flex; align-items: center; gap: 8px; padding: 4px 5px 4px 8px; color: #68768a; background: transparent; border: 0; border-radius: 7px; font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
 .sas-item:hover { color: #2458bd; background: #edf3ff; }
-.sas-item.active { color: #1f56c7; background: #e5efff; font-weight: 600; }
+.sas-item.active { color: #1f56c7; background: #dceaff; box-shadow: inset 3px 0 0 #2f65d5; font-weight: 600; }
 .sas-state { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: #c2cad6; }
 .sas-state.running { background: #2f65d5; box-shadow: 0 0 0 3px rgba(47, 101, 213, .12); animation: sas-pulse 1.6s ease-in-out infinite; }
 .sas-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -222,7 +275,10 @@ function deleteSession(session: RailSession) {
 .sas-app-groups { display: flex; flex-direction: column; gap: 4px; }
 .sas-app-header { min-height: 27px; }
 .sas-app-toggle { flex: 1; gap: 5px; padding: 4px 6px; overflow: hidden; color: #758297; font: inherit; font-size: 11px; text-align: left; }
-.sas-app-toggle > span:not(.app-icon):not(.sas-count) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sas-app-identity { min-width: 0; flex: 1 1 auto; display: flex; align-items: baseline; gap: 4px; overflow: hidden; }
+.sas-app-name, .sas-app-code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sas-app-name { flex: 1 1 auto; }
+.sas-app-code { flex: 0 1 72px; color: #a0abba; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 9px; }
 .sas-location-tags, .sas-location { flex: 0 0 auto; color: #9aa5b5; font-size: 10px; }
 .sas-location { max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sas-app-new { width: 23px; height: 23px; margin-right: 3px; }
@@ -237,7 +293,7 @@ html[data-theme="dark"] .sas-section-toggle, html[data-theme="dark"] .sas-app-to
 html[data-theme="dark"] .sas-sections { scrollbar-color: #3b485a transparent; }
 html[data-theme="dark"] .sas-sections::-webkit-scrollbar-thumb { background: #3b485a; }
 html[data-theme="dark"] .sas-item:hover { color: #cbd8eb; background: #1d2838; }
-html[data-theme="dark"] .sas-item.active { color: #a9c5ff; background: #22304a; }
+html[data-theme="dark"] .sas-item.active { color: #d5e4ff; background: #283b5c; box-shadow: inset 3px 0 0 #7da5f8; }
 html[data-theme="dark"] .sas-menu { background: #1b2431; border-color: #334155; }
 html[data-theme="dark"] .sas-more-sessions { color: #9eacc0; }
 html[data-theme="dark"] .sas-more-sessions:hover { color: #a9c5ff; background: #26344a; }

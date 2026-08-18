@@ -106,6 +106,21 @@ describe('RailSidebar unified session source (SP2b)', () => {
     expect(secondary?.locationSessions.local).toBeUndefined()
   })
 
+  it('treats legacy local application ids as local when a stale API response lacks the location', () => {
+    const [group] = groupCodeRailHistoryByApplication({
+      apps: [{
+        shell_session_id: 'legacy-local-shell',
+        external_application_id: 'local-crm',
+        app_name: 'CRM',
+        workspace_path: '/Users/example/workspaces/crm',
+        sessions: [],
+      }],
+    } as unknown as CodeRailHistoryResponse)
+
+    expect(group.availableLocations).toEqual(['local'])
+    expect(group.items[0].locationSummary).toBe('本机 · crm')
+  })
+
   it('groups Code history by logical application identity and renders fixed location labels', () => {
     expect(railSidebarSource).toContain("from './codeRailHistory'")
     expect(railSidebarSource).toContain('groupCodeRailHistoryByApplication')
@@ -224,6 +239,13 @@ describe('RailSidebar unified session source (SP2b)', () => {
   it('shows the recent-session list in every mode', () => {
     expect(railSidebarSource).toContain('v-if="showRecent && currentMode === \'code\'"')
     expect(railSidebarSource).toContain('v-else-if="showRecent" class="rail-sessions"')
+  })
+
+  it('keeps the session history scrollable and passes the active-session matcher to Code history', () => {
+    expect(railSidebarSource).toContain(':is-application-session-active="sessionActive"')
+    expect(railSidebarSource).toContain('flex: 1 1 0; min-height: 0;')
+    expect(railSidebarSource).toContain(':deep(.sas-sections) { flex: 1 1 auto; min-height: 0; }')
+    expect(railSidebarSource).toContain('box-shadow: inset 3px 0 0 #2f65d5')
   })
 
   it('defaults Code sessions to application grouping', () => {

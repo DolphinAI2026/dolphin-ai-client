@@ -110,33 +110,15 @@ impl<D: RuntimeDriver> LocalRuntimeManager<D> {
             match self.driver.recover_identity(&expected)? {
                 Some(identity)
                     if identity.process_started_at == record.process_started_at
-                        && identity.ownership_nonce == record.ownership_nonce
-                        && record.sandbox_instance_id == request.sandbox_instance_id =>
-                {
-                    let starting = status_from_record(&request, &record, InstanceState::Starting);
-                    self.publish_status(starting)?;
-                    if let Err(error) = self.driver.wait_ready(record.pid, &request) {
-                        self.clear_status(&request.runtime_scope_id, &request.sandbox_instance_id);
-                        return Err(error);
-                    }
-                    let ready_record = JournalRecord {
-                        state: InstanceState::Ready,
-                        updated_at: Utc::now(),
-                        ..record
-                    };
-                    self.journal.write(&ready_record)?;
-                    let ready = status_from_record(&request, &ready_record, InstanceState::Ready);
-                    self.publish_status(ready.clone())?;
-                    return Ok(ready);
-                }
-                Some(identity)
-                    if identity.process_started_at == record.process_started_at
                         && identity.ownership_nonce == record.ownership_nonce =>
                 {
-                    return Err(LocalRuntimeError::new(
-                        LocalRuntimeErrorCode::InstanceConflict,
-                        "another local runtime instance is already active for this scope",
-                    ))
+                    // The in-memory registry belongs to the current desktop process. A
+                    // matching journal without an active entry therefore describes a
+                    // Runtime orphaned by a previous desktop process, not a competing
+                    // request. Stop it before creating the new generation so its stale
+                    // port, credentials and configuration cannot be reused accidentally.
+                    self.driver.stop(record.pid)?;
+                    self.journal.remove(&request.runtime_scope_id)?;
                 }
                 _ => self.journal.remove(&request.runtime_scope_id)?,
             }
@@ -1115,7 +1097,7 @@ mod tests {
     }
 
     #[test]
-    fn recovered_same_instance_is_idempotent_without_respawning() {
+    fn recovered_journaled_runtime_is_stopped_and_replaced() {
         let root = temp_root();
         let first_manager = LocalRuntimeManager::new(
             &root,
@@ -1142,7 +1124,38 @@ mod tests {
         let manager = LocalRuntimeManager::new(&root, recovered_driver);
         let status = manager.start(request).unwrap();
         assert_eq!(status.sandbox_instance_id, "instance-a");
-        assert_eq!(manager.driver.spawns.load(Ordering::SeqCst), 0);
+        assert_eq!(manager.driver.stops.load(Ordering::SeqCst), 1);
+        assert_eq!(manager.driver.spawns.load(Ordering::SeqCst), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovered_orphan_is_replaced_when_the_request_has_a_new_generation() {
+        let root = temp_root();
+        let first_manager = LocalRuntimeManager::new(
+            &root,
+            FakeDriver {
+                spawns: AtomicUsize::new(0),
+                stops: AtomicUsize::new(0),
+                identity: None,
+            },
+        );
+        first_manager.start(request(&root, "instance-a")).unwrap();
+        let record = first_manager.journal.load("scope-a").unwrap().unwrap();
+        drop(first_manager);
+
+        let manager = LocalRuntimeManager::new(
+            &root,
+            FakeDriver {
+                spawns: AtomicUsize::new(0),
+                stops: AtomicUsize::new(0),
+                identity: Some(process_identity_from_record(&record)),
+            },
+        );
+        let status = manager.start(request(&root, "instance-b")).unwrap();
+        assert_eq!(status.sandbox_instance_id, "instance-b");
+        assert_eq!(manager.driver.stops.load(Ordering::SeqCst), 1);
+        assert_eq!(manager.driver.spawns.load(Ordering::SeqCst), 1);
         fs::remove_dir_all(root).unwrap();
     }
 

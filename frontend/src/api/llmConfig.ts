@@ -9,6 +9,7 @@ export interface LlmConfig {
   purpose: string       // "all" | "builder" | "coding"
   max_tokens: number
   temperature: number
+  codex_wire_api: 'responses' | 'chat'
   is_default: boolean
   status: string        // "active" | "inactive" | "error"
   created_at?: string
@@ -55,6 +56,7 @@ export interface LlmConfigForm {
   purpose: string
   max_tokens: number
   temperature: number
+  codex_wire_api: 'responses' | 'chat'
   is_default: boolean
   status?: string
 }
@@ -96,4 +98,8 @@ export const llmConfigApi = {
 
   /** 获取供应商预设 */
   getPresets: () => request.get<any, ProviderPreset[]>('/llm-configs/presets'),
+
+  /** 使用填写的地址和 Key 从 OpenAI 兼容的 /models 接口拉取模型 */
+  fetchModels: (data: Pick<LlmConfigForm, 'provider' | 'base_url' | 'api_key'>) =>
+    request.post<any, { models: string[] }>('/llm-configs/models', data),
 }

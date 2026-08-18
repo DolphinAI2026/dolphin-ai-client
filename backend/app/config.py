@@ -194,7 +194,6 @@ class Settings(BaseSettings):
     # 开启后忽略该字段，回退到 specReviewUrl/builderUrl 推导的公网 Runtime 地址。
     dolphin_code_ignore_runtime_base_url: bool = False
     dolphin_code_builder_url: str = ""
-    dolphin_code_default_seed_project_id: str = "1781233861147"
     builder_sse_padding_bytes: int = Field(default=0, ge=0, le=65536)
     # 浏览器热 iframe 只影响切换缓存数量，不改变 Runtime Cookie、Secret
     # 轮换或失败恢复协议。Control Plane 租户覆盖接入前，这里作为部署级默认值。

@@ -55,6 +55,11 @@ def provider_identity(model: Any) -> tuple[str, str, str]:
     return provider, base_url, token
 
 
+def codex_wire_api(model: Any) -> str:
+    """Return the only non-default Codex protocol we intentionally support."""
+    return "chat" if _text(getattr(model, "codex_wire_api", None)).lower() == "chat" else "responses"
+
+
 def host_codex_provider_document() -> tuple[dict[str, Any], tuple[str, str, str]] | None:
     if not runtime.is_desktop():
         return None
@@ -91,13 +96,15 @@ def host_codex_provider_document() -> tuple[dict[str, Any], tuple[str, str, str]
         "base_url": _text(provider_config.get("base_url")),
         "api_key": (_text(os.getenv(env_key)) if env_key else "") or _text(auth.get("OPENAI_API_KEY")),
         "model": model_name,
+        "codex_wire_api": _text(provider_config.get("wire_api")),
     })()
     try:
         identity = provider_identity(provider_view)
     except HTTPException:
         return None
-    provider_id = "host." + hashlib.sha256("\x00".join(identity).encode()).hexdigest()[:20]
-    return _document(provider_id, identity, model_name, [model_name]), identity
+    wire_api = codex_wire_api(provider_view)
+    provider_id = "host." + hashlib.sha256("\x00".join((*identity, wire_api)).encode()).hexdigest()[:20]
+    return _document(provider_id, identity, model_name, [model_name], wire_api=wire_api), identity
 
 
 def _document(
@@ -105,6 +112,8 @@ def _document(
     identity: tuple[str, str, str],
     default_model: str,
     models: list[str],
+    *,
+    wire_api: str = "responses",
 ) -> dict[str, Any]:
     return {
         "defaultProviderId": provider_id,
@@ -114,6 +123,7 @@ def _document(
             "runtimeProviderKind": identity[0],
             "apiBaseUrl": identity[1],
             "token": identity[2],
+            "wireApi": wire_api,
             "defaultModel": default_model,
             "models": [{"id": model, "displayName": model} for model in models],
         }],
@@ -191,6 +201,7 @@ async def _local_provider(
     if selected is None:
         return None
     identity = provider_identity(selected)
+    wire_api = codex_wire_api(selected)
     compatible: set[str] = {_validated_model_config(selected)[3]}
     candidates = await list_llm_configs_for_purpose(db, tenant_id, "coding")
     if not candidates:
@@ -202,13 +213,16 @@ async def _local_provider(
                 "base_url": candidate.base_url,
                 "api_key": decrypt_password(candidate.api_key_enc),
                 "model": candidate.model,
+                "codex_wire_api": getattr(candidate, "codex_wire_api", "responses"),
             })()
-            if provider_identity(candidate_view) == identity:
+            if provider_identity(candidate_view) == identity and codex_wire_api(candidate_view) == wire_api:
                 compatible.add(_validated_model_config(candidate_view)[3])
         except Exception:
             continue
-    provider_id = "local." + hashlib.sha256("\x00".join(identity).encode()).hexdigest()[:20]
-    return _document(provider_id, identity, _validated_model_config(selected)[3], sorted(compatible)), identity
+    provider_id = "local." + hashlib.sha256("\x00".join((*identity, wire_api)).encode()).hexdigest()[:20]
+    return _document(
+        provider_id, identity, _validated_model_config(selected)[3], sorted(compatible), wire_api=wire_api
+    ), identity
 
 
 async def provider_document(

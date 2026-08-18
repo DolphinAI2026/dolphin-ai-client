@@ -218,7 +218,6 @@ JWT_SECRET_KEY=<generate-a-long-random-secret>
 # Dolphin Code integration
 DOLPHIN_CODE_CONTROL_PLANE_TOKEN=<optional-control-plane-token>
 DOLPHIN_CODE_BUILDER_URL=http://127.0.0.1:5173/builder/ # 可选，本地 runtime fallback
-DOLPHIN_CODE_DEFAULT_SEED_PROJECT_ID=<seed-project-id>
 ```
 
 每个客户实例只配置一种登录模式，登录页和管理端不提供运行时切换入口：

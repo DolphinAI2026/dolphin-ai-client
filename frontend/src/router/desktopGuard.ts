@@ -61,8 +61,14 @@ const DESKTOP_LEGACY_SETTINGS_PATHS = new Set([
 export function resolveDesktopSettingsRedirect(
   isDesktop: boolean,
   targetPath: string,
+  query: Record<string, unknown> = {},
 ): string | null {
   if (!isDesktop) return null
+  // The legacy screen is otherwise hidden in desktop builds, but this exact
+  // route is the complete local-model editor used by Desktop Settings.
+  const source = Array.isArray(query.source) ? query.source[0] : query.source
+  const tab = Array.isArray(query.tab) ? query.tab[0] : query.tab
+  if (targetPath === '/platform-envs' && source === 'local' && tab === 'llm') return null
   const isLegacyPath = DESKTOP_LEGACY_SETTINGS_PATHS.has(targetPath)
     || targetPath.startsWith('/skills/')
     || targetPath.startsWith('/knowledge/')

@@ -383,7 +383,7 @@ export function installRouterGuards(targetRouter: Router): void {
       }
     }
 
-    const settingsRedirect = resolveDesktopSettingsRedirect(true, to.path)
+    const settingsRedirect = resolveDesktopSettingsRedirect(true, to.path, to.query)
     if (settingsRedirect) {
       next({ path: settingsRedirect, replace: true })
       return

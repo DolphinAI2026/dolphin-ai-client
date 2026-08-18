@@ -419,4 +419,15 @@ describe('resolveDesktopSettingsRedirect', () => {
     expect(resolveDesktopSettingsRedirect(true, '/workspace-catalog')).toBeNull()
     expect(resolveDesktopSettingsRedirect(false, '/settings')).toBeNull()
   })
+
+  it('桌面端仅放行明确标注的本地模型配置页', () => {
+    expect(resolveDesktopSettingsRedirect(true, '/platform-envs', { tab: 'llm', source: 'local' })).toBeNull()
+    expect(resolveDesktopSettingsRedirect(true, '/platform-envs', { tab: 'llm' })).toBe('/desktop-settings')
+  })
+
+  it('keeps local model management inside the desktop settings page', () => {
+    expect(desktopSettingsSource).toContain("from '@/components/desktop/LocalModelSettings.vue'")
+    expect(desktopSettingsSource).toContain('<LocalModelSettings v-if="localAiEnabled" />')
+    expect(desktopSettingsSource).not.toContain("router.push({ path: '/platform-envs'")
+  })
 })

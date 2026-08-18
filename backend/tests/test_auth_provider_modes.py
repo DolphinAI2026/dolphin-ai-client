@@ -288,7 +288,7 @@ async def test_control_plane_auth_provider_allows_login_without_captcha_when_dis
 
 
 @pytest.mark.asyncio
-async def test_desktop_control_plane_login_keeps_identity_as_cache_only(
+async def test_desktop_control_plane_login_creates_private_local_workspace(
     db_session,
     monkeypatch,
 ):
@@ -327,14 +327,15 @@ async def test_desktop_control_plane_login_keeps_identity_as_cache_only(
     ).scalars().all()
 
     assert payload["iss"] == "desktop-sidecar"
-    assert "tid" not in payload
+    assert isinstance(payload["tid"], int)
     assert payload["cp_tid"] == "2077284540335579137"
     assert payload["cp_tname"] == "示例租户"
     assert payload["cp_trole"] == "platform_admin"
     assert response.entry_path == "/code/apps"
     assert user.coding_tenant_id == "2077284540335579137"
-    assert memberships == []
-    assert await db_session.scalar(select(func.count(Tenant.id))) == tenant_count_before
+    assert len(memberships) == 1
+    assert memberships[0].tenant_id == payload["tid"]
+    assert await db_session.scalar(select(func.count(Tenant.id))) == tenant_count_before + 1
 
 
 @pytest.mark.asyncio
@@ -383,7 +384,7 @@ async def test_control_plane_session_exchange_issues_builder_token_for_selected_
 
 
 @pytest.mark.asyncio
-async def test_desktop_control_plane_context_ignores_legacy_local_tenant_ticket(
+async def test_desktop_control_plane_context_uses_private_local_tenant_ticket(
     db_session,
     monkeypatch,
 ):
@@ -407,9 +408,42 @@ async def test_desktop_control_plane_context_ignores_legacy_local_tenant_ticket(
         db_session,
     )
 
-    assert ctx.tenant_id == 0
+    assert ctx.tenant_id == tenant.id
     assert ctx.control_plane_tenant_id == "2077284540335579137"
-    assert ctx.tenant_role == "member"
+    assert ctx.tenant_role == "tenant_admin"
+
+
+@pytest.mark.asyncio
+async def test_desktop_control_plane_context_migrates_existing_ticket_without_workspace(
+    db_session,
+    monkeypatch,
+):
+    """An installed client may retain a pre-upgrade Control Plane ticket."""
+    monkeypatch.setenv("DESKTOP_MODE", "1")
+    monkeypatch.setattr(settings, "accepted_token_issuers", "ai-builder,desktop-sidecar")
+    user = User(
+        username="desktop_existing",
+        hashed_password=get_password_hash("secret"),
+        account_source="control_plane",
+        coding_tenant_id="2077284540335579137",
+        is_active=True,
+    )
+    db_session.add(user)
+    await db_session.flush()
+    old_ticket = create_access_token(user, issuer="desktop-sidecar", control_plane_tenant_id=user.coding_tenant_id)
+
+    ctx = await get_auth_context(
+        SimpleNamespace(credentials=old_ticket),
+        db_session,
+    )
+
+    memberships = (
+        await db_session.execute(select(UserTenant).where(UserTenant.user_id == user.id))
+    ).scalars().all()
+    assert ctx.tenant_id > 0
+    assert ctx.tenant_access_scope == "tenant"
+    assert len(memberships) == 1
+    assert memberships[0].tenant_id == ctx.tenant_id
 
 
 @pytest.mark.asyncio

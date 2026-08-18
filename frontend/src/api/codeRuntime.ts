@@ -87,7 +87,6 @@ export interface CodeApplicationListResponse {
 export interface CreateCodeApplicationRequest {
   app_name: string
   app_code: string
-  seed_project_id?: string | null
   local_application?: boolean
   local_workspace_path?: string | null
   directory_mode?: LocalApplicationDirectoryMode

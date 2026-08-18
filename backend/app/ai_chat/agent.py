@@ -45,11 +45,19 @@ from app.models import (
     AIChatAttachment,
     AIChatArtifact,
     LLMConfig,
+    User,
 )
+from app import runtime
+from app.code_runtime.auth import control_plane_access_token
+from app.code_runtime.control_plane_models import list_control_plane_model_options
+from app.code_runtime.service import _control_plane_headers, control_plane_base_url
 from app.models.system_assistant_governance import ActionRun, ActionTicket
 from app.ai_chat.tools import TOOL_SCHEMAS, execute_tool, get_all_tool_schemas, split_core_deferred, build_deferred_manifest
 from app.observability import recorder
-from app.routes.llm_configs import build_llm_chat_completions_url
+from app.routes.llm_configs import (
+    build_llm_chat_completions_url,
+    build_llm_responses_url,
+)
 from app.system_assistant.contracts import assistant_model_purpose
 from app.system_assistant.result_envelope import (
     apply_tool_call_projection,
@@ -621,12 +629,28 @@ async def _resolve_unified_system_prompt(
 class LLMConfigSnapshot:
     """快照 LLMConfig 的解密信息，避免 db 异步调用穿透到 httpx。"""
 
-    def __init__(self, base_url: str, api_key: str, model: str, max_tokens: int, temperature: float):
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        model: str,
+        max_tokens: int,
+        temperature: float,
+        *,
+        extra_headers: dict[str, str] | None = None,
+        api_format: str = "chat_completions",
+    ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.extra_headers = dict(extra_headers or {})
+        self.api_format = api_format
+
+
+class ControlPlaneModelCatalogError(RuntimeError):
+    """The remote model catalogue failed; never disguise this as no model."""
 
 
 def _apply_provider_payload_compat(cfg: LLMConfigSnapshot, payload: dict) -> dict:
@@ -666,16 +690,45 @@ async def _resolve_llm_config(
     from app.routes.llm_configs import resolve_llm_config_for_purpose
 
     purpose = assistant_model_purpose(getattr(session, "assistant_profile", None))
+    selected_config_id = getattr(session, "selected_llm_config_id", None)
+    # Negative IDs are synthesized Control Plane catalogue IDs. Never pass one
+    # to the local resolver, otherwise it silently replaces a user-selected
+    # online model with an unrelated local default.
+    local_selected_config_id = (
+        selected_config_id
+        if isinstance(selected_config_id, int) and selected_config_id > 0
+        else None
+    )
     cfg: Optional[LLMConfig] = await resolve_llm_config_for_purpose(
         db,
         getattr(session, "tenant_id", None) or 0,
         purpose,
-        session.selected_llm_config_id,
+        local_selected_config_id,
     )
+    if local_selected_config_id and cfg and cfg.id == local_selected_config_id:
+        return _snapshot_from_local_llm_config(cfg)
+
+    try:
+        remote_cfg = await _resolve_control_plane_llm_config(db, session, purpose)
+    except ControlPlaneModelCatalogError:
+        # A local default is a usable offline fallback, but never replace an
+        # explicitly selected online model with it without telling the user.
+        if cfg is not None and not (
+            isinstance(selected_config_id, int) and selected_config_id < 0
+        ):
+            return _snapshot_from_local_llm_config(cfg)
+        raise
+    if remote_cfg is not None:
+        return remote_cfg
+
     if not cfg:
         raise RuntimeError(
             "平台还没有配置可用的大模型,请到「平台管理 → 模型配置」添加一个模型后再使用。"
         )
+    return _snapshot_from_local_llm_config(cfg)
+
+
+def _snapshot_from_local_llm_config(cfg: LLMConfig) -> LLMConfigSnapshot:
     try:
         api_key = decrypt_password(cfg.api_key_enc)
     except InvalidToken as exc:
@@ -689,6 +742,80 @@ async def _resolve_llm_config(
         model=cfg.model,
         max_tokens=cfg.max_tokens,
         temperature=cfg.temperature,
+    )
+
+
+async def _resolve_control_plane_llm_config(
+    db: AsyncSession,
+    session: AIChatSession,
+    purpose: str,
+) -> LLMConfigSnapshot | None:
+    """Use the signed-in desktop account's online model as Builder's default.
+
+    Local model configurations remain selectable supplements. They must not be
+    required merely because a desktop user has a private local database tenant.
+    """
+    if not runtime.is_desktop():
+        return None
+    user = await db.get(User, session.user_id)
+    if (
+        user is None
+        or str(getattr(user, "account_source", "") or "").lower() != "control_plane"
+    ):
+        return None
+    access_token = control_plane_access_token(user)
+    control_plane_tenant_id = str(
+        getattr(session, "control_plane_tenant_id", None)
+        or getattr(user, "coding_tenant_id", None)
+        or ""
+    ).strip()
+    if not access_token or not control_plane_tenant_id:
+        return None
+
+    delegated_context = type(
+        "ControlPlaneModelContext",
+        (),
+        {"user": user, "control_plane_tenant_id": control_plane_tenant_id},
+    )()
+    authorization = f"Bearer {access_token}"
+    try:
+        options = await list_control_plane_model_options(
+            purpose=purpose,
+            authorization_header=authorization,
+            delegated_context=delegated_context,
+        )
+    except Exception as exc:
+        detail = str(getattr(exc, "detail", None) or exc).strip()
+        logger.warning("desktop Control Plane model catalogue unavailable: %s", detail)
+        raise ControlPlaneModelCatalogError(
+            f"线上模型目录加载失败：{detail[:500] or '未知错误'}"
+        ) from exc
+    if not options:
+        return None
+
+    selected_config_id = getattr(session, "selected_llm_config_id", None)
+    selected = next(
+        (option for option in options if option.get("id") == selected_config_id),
+        None,
+    )
+    option = selected or next(
+        (candidate for candidate in options if candidate.get("is_default")),
+        options[0],
+    )
+    return LLMConfigSnapshot(
+        base_url=f"{control_plane_base_url().rstrip('/')}/api/code/model-gateway/v1",
+        api_key=access_token,
+        model=str(option["model"]),
+        max_tokens=8192,
+        temperature=0.3,
+        extra_headers=_control_plane_headers(
+            authorization,
+            delegated_context=delegated_context,
+        ),
+        # The Control Plane intentionally exposes only /v1/responses. Keep the
+        # protocol adaptation here rather than pretending its gateway is a
+        # chat/completions endpoint (which returns 405).
+        api_format="responses",
     )
 
 
@@ -708,25 +835,17 @@ async def generate_title(
         f"用户消息：{user_message[:300]}"
     )
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=20, write=10, pool=10)) as client:
-            resp = await client.post(
-                _llm_chat_completions_url(cfg),
-                headers={
-                    "Authorization": f"Bearer {cfg.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=_apply_provider_payload_compat(cfg, {
-                    "model": cfg.model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.3,
-                    # MiniMax 等 reasoning 模型会先吐 <think>… 思考再给标题, 60 token 会被思考吃光
-                    # → 标题变成截断的思考文本。给足额度让思考闭合后还能产出真标题, 再剥离 <think>。
-                    "max_tokens": 512,
-                }),
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        raw_title = (data["choices"][0]["message"].get("content") or "")
+        # Reuse the transport adapter: desktop Control Plane uses Responses,
+        # while a locally selected model still uses Chat Completions.
+        message = await _call_llm(
+            cfg,
+            [{"role": "user", "content": prompt}],
+            [],
+            timeout=20,
+            max_tokens=512,
+            temperature=0.3,
+        )
+        raw_title = message.get("content") or ""
         # 剥离内联 <think>…</think>(MiniMax), 只取可见标题文本。
         title, _reasoning = strip_think_blocks(raw_title)
         title = title.strip()
@@ -745,6 +864,8 @@ async def _call_llm(
     messages: list[dict],
     tools: list[dict],
     timeout: int = 120,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
 ) -> dict:
     """non-streaming chat completion + tool calling。返回 OpenAI 格式 response.choices[0].message"""
     payload = {
@@ -752,10 +873,12 @@ async def _call_llm(
         "messages": messages,
         "tools": tools,
         "tool_choice": "auto",
-        "temperature": cfg.temperature,
-        "max_tokens": cfg.max_tokens,
+        "temperature": cfg.temperature if temperature is None else temperature,
+        "max_tokens": cfg.max_tokens if max_tokens is None else max_tokens,
     }
     _apply_provider_payload_compat(cfg, payload)
+    if getattr(cfg, "api_format", "chat_completions") == "responses":
+        return await _complete_responses(cfg, payload, timeout=timeout)
     return await llm_transport.complete(
         base_url=cfg.base_url,
         api_key=cfg.api_key,
@@ -763,7 +886,124 @@ async def _call_llm(
         timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10),
         retry_attempts=LLM_RETRY_ATTEMPTS,
         url=_llm_chat_completions_url(cfg),
+        extra_headers=getattr(cfg, "extra_headers", {}) or {},
     )
+
+
+def _responses_input(messages: list[dict]) -> list[dict]:
+    """Translate our Chat Completions history into OpenAI Responses input."""
+    items: list[dict] = []
+    for message in messages:
+        role = str(message.get("role") or "user")
+        content = message.get("content")
+        if role == "tool":
+            call_id = str(message.get("tool_call_id") or "").strip()
+            if call_id:
+                items.append({
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": content or "",
+                })
+            continue
+        normalized_role = "developer" if role == "system" else role
+        if normalized_role not in {"developer", "user", "assistant"}:
+            normalized_role = "user"
+        if content:
+            items.append({
+                "role": normalized_role,
+                "content": str(content),
+            })
+        for call in message.get("tool_calls") or []:
+            function = call.get("function") or {}
+            call_id = str(call.get("id") or "").strip()
+            name = str(function.get("name") or "").strip()
+            if call_id and name:
+                items.append({
+                    "type": "function_call",
+                    "call_id": call_id,
+                    "name": name,
+                    "arguments": str(function.get("arguments") or "{}"),
+                })
+    return items
+
+
+def _responses_tools(tools: list[dict]) -> list[dict]:
+    translated: list[dict] = []
+    for tool in tools:
+        function = tool.get("function") if isinstance(tool, dict) else None
+        if not isinstance(function, dict):
+            continue
+        name = str(function.get("name") or "").strip()
+        if not name:
+            continue
+        translated.append({
+            "type": "function",
+            "name": name,
+            "description": str(function.get("description") or ""),
+            "parameters": function.get("parameters") or {"type": "object", "properties": {}},
+        })
+    return translated
+
+
+def _responses_message(response: dict) -> dict:
+    content_parts: list[str] = []
+    tool_calls: list[dict] = []
+    for item in response.get("output") or []:
+        if item.get("type") == "function_call":
+            name = str(item.get("name") or "").strip()
+            call_id = str(item.get("call_id") or item.get("id") or "").strip()
+            if name and call_id:
+                tool_calls.append({
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": str(item.get("arguments") or "{}"),
+                    },
+                })
+            continue
+        for part in item.get("content") or []:
+            if part.get("type") in {"output_text", "text"}:
+                text = part.get("text")
+                if text:
+                    content_parts.append(str(text))
+    return {
+        "content": "".join(content_parts),
+        "tool_calls": tool_calls or None,
+    }
+
+
+async def _complete_responses(
+    cfg: LLMConfigSnapshot,
+    chat_payload: dict,
+    *,
+    timeout: int,
+) -> dict:
+    request_payload: dict[str, Any] = {
+        "model": cfg.model,
+        "input": _responses_input(chat_payload["messages"]),
+        "temperature": chat_payload["temperature"],
+        "max_output_tokens": chat_payload["max_tokens"],
+        "tool_choice": chat_payload.get("tool_choice", "auto"),
+    }
+    tools = _responses_tools(chat_payload.get("tools") or [])
+    if tools:
+        request_payload["tools"] = tools
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10)
+    ) as client:
+        response = await client.post(
+            build_llm_responses_url(cfg.base_url),
+            headers={
+                "Authorization": f"Bearer {cfg.api_key}",
+                "Content-Type": "application/json",
+                **(getattr(cfg, "extra_headers", {}) or {}),
+            },
+            json=request_payload,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    return _responses_message(payload)
 
 
 async def _call_llm_stream(
@@ -797,6 +1037,22 @@ async def _call_llm_stream(
         "stream_options": {"include_usage": True},
     }
     _apply_provider_payload_compat(cfg, payload)
+    if getattr(cfg, "api_format", "chat_completions") == "responses":
+        message = await _call_llm(cfg, messages, tools, timeout=timeout)
+        content = message.get("content") or ""
+        if content:
+            yield {"type": "content_delta", "text": content}
+        for index, tool_call in enumerate(message.get("tool_calls") or []):
+            function = tool_call.get("function") or {}
+            yield {
+                "type": "tool_call_delta",
+                "index": index,
+                "id": tool_call.get("id"),
+                "name": function.get("name"),
+                "arguments_so_far": function.get("arguments") or "",
+            }
+        yield {"type": "done", "message": message, "usage": None}
+        return
     async for chunk in llm_transport.stream_chunks(
         base_url=cfg.base_url,
         api_key=cfg.api_key,
@@ -805,6 +1061,7 @@ async def _call_llm_stream(
         abort_event=abort_event,
         retry_attempts=LLM_RETRY_ATTEMPTS,
         url=_llm_chat_completions_url(cfg),
+        extra_headers=getattr(cfg, "extra_headers", {}) or {},
     ):
         yield chunk
 

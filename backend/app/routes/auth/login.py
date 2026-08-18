@@ -24,6 +24,7 @@ from app.auth import (
     create_selection_token,
     get_password_hash,
 )
+from app.desktop_accounts import ensure_desktop_workspace
 from app.code_runtime.auth import (
     ControlPlaneAuthResult,
     control_plane_access_token,
@@ -1295,6 +1296,7 @@ async def _control_plane_login_response(user_data: UserLogin, db: AsyncSession) 
     )
     user = await _ensure_control_plane_user(db, identity)
     if runtime.is_desktop():
+        local_tenant_id = await ensure_desktop_workspace(db, user)
         tenant_role = (
             "platform_admin"
             if _control_plane_identity_is_platform_admin(identity)
@@ -1305,6 +1307,7 @@ async def _control_plane_login_response(user_data: UserLogin, db: AsyncSession) 
         response = LoginResponse(
             access_token=create_access_token(
                 user,
+                tenant_id=local_tenant_id,
                 issuer=_DESKTOP_ISSUER,
                 control_plane_tenant_id=identity.tenant_id,
                 control_plane_tenant_name=getattr(identity, "tenant_name", None),

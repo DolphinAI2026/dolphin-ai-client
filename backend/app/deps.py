@@ -37,7 +37,10 @@ class AuthContext:
 
 def is_control_plane_context(ctx: AuthContext) -> bool:
     """Return whether the request is scoped to a Control Plane tenant."""
-    return bool(str(ctx.control_plane_tenant_id or "").strip())
+    # Lightweight callers and legacy tests may only provide the fields they
+    # need for a local route.  A missing Control Plane identity is equivalent
+    # to an empty one, not an attribute error.
+    return bool(str(getattr(ctx, "control_plane_tenant_id", None) or "").strip())
 
 
 async def resolve_default_tenant_id_for_user(db: AsyncSession, user_id: int) -> int | None:
@@ -255,7 +258,7 @@ async def _get_auth_context_allow_platform_only(
             if desktop_control_plane_ticket:
                 if not user or not user.is_active:
                     raise credentials_exception
-                return _desktop_control_plane_context(user, payload)
+                return await _desktop_control_plane_context(db, user, payload)
             if not user or not user.is_active or not user.is_platform_admin:
                 logger.warning(
                     "auth_context forbidden: token has no tenant_id but user is not platform admin user_id=%s",
@@ -295,7 +298,7 @@ async def _get_auth_context_allow_platform_only(
     if not user or not user.is_active:
         raise credentials_exception
     if runtime.is_desktop() and user.account_source == "control_plane":
-        return _desktop_control_plane_context(user, payload)
+        return await _desktop_control_plane_context(db, user, payload)
 
     await _require_active_tenant(db, tenant_id)
 
@@ -368,14 +371,41 @@ async def _get_auth_context_allow_platform_only(
     )
 
 
-def _desktop_control_plane_context(user: User, payload: dict) -> AuthContext:
-    role = str(payload.get("cp_trole") or ("platform_admin" if user.is_platform_admin else "member"))
+async def _desktop_control_plane_context(
+    db: AsyncSession,
+    user: User,
+    payload: dict,
+) -> AuthContext:
+    """Keep remote organization and private desktop workspace identities separate."""
+    try:
+        local_tenant_id = int(payload.get("tid") or 0)
+    except (TypeError, ValueError):
+        local_tenant_id = 0
+    if local_tenant_id <= 0:
+        # Old desktop tickets predate a local tenant id.  Recover the workspace
+        # created during Control Plane login so an upgraded client keeps working.
+        local_tenant_id = await resolve_default_tenant_id_for_user(db, user.id) or 0
+    if local_tenant_id <= 0 and runtime.is_desktop():
+        # A user can keep an older signed session while upgrading the desktop
+        # app.  Provision the private workspace lazily as well as at login;
+        # otherwise the first local Code catalog request fails with
+        # “需要租户上下文” before the user ever has a chance to log in again.
+        from app.desktop_accounts import ensure_desktop_workspace
+
+        local_tenant_id = await ensure_desktop_workspace(db, user)
+        await db.commit()
+    remote_role = str(payload.get("cp_trole") or ("platform_admin" if user.is_platform_admin else "member"))
     permissions = payload.get("cp_perms")
     return AuthContext(
         user=user,
-        tenant_id=0,
-        tenant_role=role,
-        org_permissions=permissions if isinstance(permissions, dict) else ({"*": True} if role == "platform_admin" else {}),
+        tenant_id=local_tenant_id,
+        # The local tenant is private to this desktop user.  Remote Control
+        # Plane permissions continue to be represented by cp_tid/cp_perms.
+        tenant_role="tenant_admin" if local_tenant_id else remote_role,
+        org_permissions={"*": True} if local_tenant_id else (
+            permissions if isinstance(permissions, dict) else ({"*": True} if remote_role == "platform_admin" else {})
+        ),
+        tenant_access_scope="tenant" if local_tenant_id else "platform_only",
         control_plane_tenant_id=str(payload.get("cp_tid") or user.coding_tenant_id or "").strip() or None,
         control_plane_tenant_name=str(payload.get("cp_tname") or "").strip() or None,
     )

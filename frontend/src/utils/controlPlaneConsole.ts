@@ -3,9 +3,11 @@
  *
  * Desktop uses the discovery URL as the console origin; Web deployments can
  * override it with VITE_CONTROL_PLANE_CONSOLE_URL or use the same-origin
- * /web-console mount. Authentication is handed over with a one-time message,
- * never in the URL.
+ * /web-console mount. In the desktop client the console is intentionally
+ * opened in the system browser; browser authentication stays with the console
+ * instead of being copied into an embedded WebView or URL.
  */
+import { openExternal } from '@/utils/desktop/openExternal'
 export function controlPlaneConsoleUrl(path = '/capabilities', baseUrl = ''): string {
   const configured = String(import.meta.env.VITE_CONTROL_PLANE_CONSOLE_URL || '').trim()
   const base = configured || baseUrl.trim() || '/web-console/'
@@ -47,6 +49,15 @@ export function openControlPlaneConsole(
 ): void {
   if (typeof window === 'undefined') return
   const resolved = new URL(controlPlaneConsoleUrl(path, baseUrl), window.location.href)
+
+  // Shared configuration belongs to the Control Plane.  It must not be shown
+  // in a Tauri child WebView: that window has a separate cookie store and used
+  // to make users appear logged out.  Do not put the access token in the URL.
+  if (__DESKTOP__) {
+    void openExternal(resolved.toString())
+    return
+  }
+
   const sameOrigin = resolved.origin === window.location.origin
 
   if (sameOrigin) {

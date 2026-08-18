@@ -104,24 +104,23 @@
               </div>
             </template>
 
+            <template v-else-if="activeSection === 'local-model'">
+              <div class="local-ai-banner">
+                <div class="local-ai-banner-icon"><AppIcon name="laptop" :size="18" /></div>
+                <div><strong>本机资源</strong><span>只在这台桌面客户端和本地工程中使用，不会覆盖远程配置。</span></div>
+                <el-switch v-model="localAiEnabled" :disabled="saving" />
+              </div>
+              <LocalModelSettings v-if="localAiEnabled" />
+              <div v-else class="settings-card resource-card"><div class="resource-empty"><div class="resource-empty-icon"><AppIcon name="bot" :size="24" /></div><strong>本机配置已关闭</strong><p>打开上方开关后即可维护本地模型。</p></div></div>
+            </template>
+
             <template v-else-if="activeLocalAiKind">
               <div class="local-ai-banner">
                 <div class="local-ai-banner-icon"><AppIcon name="laptop" :size="18" /></div>
                 <div><strong>本机资源</strong><span>只在这台桌面客户端和本地工程中使用，不会覆盖远程配置。</span></div>
                 <el-switch v-model="localAiEnabled" :disabled="saving" />
               </div>
-              <div class="settings-card resource-card">
-                <div class="card-heading">
-                  <div class="card-heading-icon"><AppIcon :name="activeMeta.icon" :size="18" /></div>
-                  <div><strong>{{ activeMeta.resourceTitle }}</strong><span>{{ activeMeta.resourceHint }}</span></div>
-                  <el-tag type="info" effect="plain">本地 SQLite</el-tag>
-                </div>
-                <div class="resource-empty">
-                  <div class="resource-empty-icon"><AppIcon :name="activeMeta.icon" :size="24" /></div>
-                  <strong>{{ localAiEnabled ? '本机配置已启用' : '本机配置已关闭' }}</strong>
-                  <p>{{ localAiEnabled ? '该资源会与 Builder、Code 共用，后续可在这里维护。' : '打开上方开关后，本机工程才能使用这类资源。' }}</p>
-                </div>
-              </div>
+              <div class="settings-card resource-card"><div class="resource-empty"><div class="resource-empty-icon"><AppIcon :name="activeMeta.icon" :size="24" /></div><strong>{{ localAiEnabled ? '本机配置已启用' : '本机配置已关闭' }}</strong><p>{{ localAiEnabled ? '该资源会与 Builder、Code 共用，后续可在这里维护。' : '打开上方开关后，本机工程才能使用这类资源。' }}</p></div></div>
             </template>
 
             <template v-else-if="activeSection === 'apaas'">
@@ -201,6 +200,7 @@ import BuilderFrame from '@/components/BuilderFrame.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import DesktopAboutDialog from '@/components/desktop/DesktopAboutDialog.vue'
 import DesktopServiceExamples from '@/components/desktop/DesktopServiceExamples.vue'
+import LocalModelSettings from '@/components/desktop/LocalModelSettings.vue'
 import { useUserStore } from '@/stores/user'
 import { openControlPlaneConsole } from '@/utils/controlPlaneConsole'
 import {

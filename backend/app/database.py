@@ -188,6 +188,8 @@ async def init_db():
             "ALTER TABLE applications ADD COLUMN generation_state TEXT",
             "ALTER TABLE conversations ADD COLUMN workspace_id VARCHAR(50)",
             "ALTER TABLE conversations ADD COLUMN selected_llm_config_id INTEGER",
+            # Code Runtime protocol selection for OpenAI-compatible local models.
+            "ALTER TABLE llm_configs ADD COLUMN codex_wire_api VARCHAR(20) NOT NULL DEFAULT 'responses'",
             "ALTER TABLE conversations ADD COLUMN project_id INTEGER",
             "ALTER TABLE users ADD COLUMN display_name VARCHAR(100)",
             "ALTER TABLE users ADD COLUMN apaas_base_url VARCHAR(255)",
