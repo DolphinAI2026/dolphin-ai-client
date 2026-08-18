@@ -157,6 +157,37 @@ async def test_missing_named_checks_keep_raw_sql_expressions_for_additive_ddl(mo
 
 
 @pytest.mark.asyncio
+async def test_postgresql_reflected_text_in_check_is_accepted(monkeypatch):
+    from app.models.system_assistant_governance import ActionTicket
+    from app.system_assistant import schema_migration
+
+    async def snapshot(_conn, _table_name):
+        return {
+            "check_constraints": [
+                {
+                    "name": "ck_system_assistant_action_tickets_status",
+                    "sqltext": (
+                        "status::text = ANY (ARRAY['issued'::character varying, "
+                        "'authorized'::character varying, 'reserved'::character varying, "
+                        "'consumed'::character varying, 'expired'::character varying, "
+                        "'revoked'::character varying]::text[])"
+                    ),
+                }
+            ]
+        }
+
+    class FakeConnection:
+        dialect = SimpleNamespace(name="postgresql")
+
+        async def execute(self, _statement):
+            raise AssertionError("an equivalent check constraint must not be added")
+
+    monkeypatch.setattr(schema_migration, "_table_snapshot", snapshot)
+
+    await schema_migration._ensure_check_constraints(FakeConnection(), ActionTicket.__table__)
+
+
+@pytest.mark.asyncio
 async def test_migration_blocks_same_name_index_with_wrong_definition(tmp_path):
     from app.models.system_assistant_governance import ActionTicket
 

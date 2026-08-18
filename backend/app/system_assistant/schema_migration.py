@@ -81,6 +81,40 @@ def _expected_check_constraints(table) -> dict[str, tuple[str, str]]:
     }
 
 
+def _postgresql_text_any_matches_in_expression(actual_sql: str, expected_sql: str) -> bool:
+    """Recognise PostgreSQL's reflected representation of a text ``IN`` check.
+
+    PostgreSQL stores ``status IN ('a', 'b')`` as a ``= ANY (ARRAY[...])``
+    expression, including implicit casts.  The two forms are equivalent, but a
+    byte-for-byte comparison makes a freshly-created PostgreSQL table fail its
+    own startup migration.
+    """
+    expected_match = re.fullmatch(
+        r"(?P<column>[a-z_][a-z0-9_]*)in\((?P<values>.+)\)",
+        expected_sql,
+    )
+    actual_match = re.fullmatch(
+        r"\(?(?P<column>[a-z_][a-z0-9_]*)\)?::text=any\(array\[(?P<values>.+)\]::text\[\]\)",
+        actual_sql,
+    )
+    if not expected_match or not actual_match:
+        return False
+    if expected_match.group("column") != actual_match.group("column"):
+        return False
+
+    literal_pattern = r"'((?:''|[^'])*)'"
+    expected_values = re.findall(literal_pattern, expected_match.group("values"))
+    actual_values = re.findall(literal_pattern, actual_match.group("values"))
+    return bool(expected_values) and expected_values == actual_values
+
+
+def _check_constraint_matches(actual_sql: str, expected_sql: str) -> bool:
+    return (
+        actual_sql == expected_sql
+        or _postgresql_text_any_matches_in_expression(actual_sql, expected_sql)
+    )
+
+
 def _expected_foreign_keys(table) -> list[dict[str, Any]]:
     return [
         {
@@ -168,7 +202,7 @@ async def _ensure_check_constraints(conn: AsyncConnection, table) -> None:
     for name, (expected_expression, expected_signature) in _expected_check_constraints(table).items():
         actual_sql = actual_by_name.get(name)
         if actual_sql is not None:
-            if actual_sql != expected_signature:
+            if not _check_constraint_matches(actual_sql, expected_signature):
                 raise GovernanceSchemaMigrationError(
                     f"{table.name} check constraint definition mismatch: {name}"
                 )
