@@ -24,4 +24,10 @@ describe('SystemAssistantSessionSections', () => {
     expect(sectionsSource).toContain("code?.replace(/^code-app-/, '') || ''")
     expect(sectionsSource).toContain('class="sas-app-code"')
   })
+
+  it('gives every system-assistant history row a subtle surface contrast', () => {
+    expect(sectionsSource).toContain('background: #f8fafc')
+    expect(sectionsSource).toContain('border: 1px solid #edf1f5')
+    expect(sectionsSource).toContain('html[data-theme="dark"] .sas-item { background: #182230')
+  })
 })

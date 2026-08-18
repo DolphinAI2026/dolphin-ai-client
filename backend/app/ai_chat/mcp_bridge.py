@@ -180,7 +180,12 @@ async def _fetch_mcp_tools() -> tuple[list[dict], dict[str, str], Optional[str]]
 
     if merged:
         present = set(tool_url_map)
-        missing_critical = _CRITICAL_BUILDER_TOOLS - present
+        # System-asset administration exists only in the Builder backend.  The
+        # external v2 MCP cluster deliberately does not get a user's Control
+        # Plane session, so always supplement those names from the in-process
+        # registry instead of silently making them disappear in desktop mode.
+        from app.mcp_tools.system_assets import SYSTEM_ASSET_TOOL_NAMES
+        missing_critical = (_CRITICAL_BUILDER_TOOLS | set(SYSTEM_ASSET_TOOL_NAMES)) - present
         if missing_critical:
             fallback_tools, fallback_map, fallback_error = await _fetch_inprocess_tools()
             by_name = {t.get("name"): t for t in fallback_tools}
@@ -292,7 +297,12 @@ def list_mcp_tool_names_cached() -> set[str]:
     }
 
 
-async def _call_inprocess_tool(tool_name: str, args: dict) -> str:
+async def _call_inprocess_tool(
+    tool_name: str,
+    args: dict,
+    *,
+    control_plane_tenant_id: str | None = None,
+) -> str:
     try:
         from app import mcp_server
 
@@ -308,7 +318,11 @@ async def _call_inprocess_tool(tool_name: str, args: dict) -> str:
         # 会话强制注入）。标记可信，让工具内 _resolve_identity 采信传入租户、不被进程内
         # current_app slot 覆盖（修 unified ai-chat 串租户 bug）。
         args = args or {}
-        with mcp_server.trusted_identity(args.get("tenant_id"), args.get("user_id")):
+        from app.mcp_tools.system_assets import trusted_control_plane_tenant
+        with (
+            mcp_server.trusted_identity(args.get("tenant_id"), args.get("user_id")),
+            trusted_control_plane_tenant(control_plane_tenant_id),
+        ):
             result = await tool.run(args, convert_result=False)
         if isinstance(result, str):
             return result
@@ -330,6 +344,7 @@ async def call_tool(
     user_id: int = 0,
     *,
     allow_zero_tenant: bool = False,
+    control_plane_tenant_id: str | None = None,
 ) -> str:
     """调本机 MCP server 的某个工具，自动塞 tenant_id/user_id 到 args。
 
@@ -357,7 +372,11 @@ async def call_tool(
     loaded = await ensure_loaded()
     tool_url = (loaded.get("tool_url_map") or {}).get(tool_name)
     if tool_url == _INPROCESS_TOOL_URL:
-        return await _call_inprocess_tool(tool_name, enriched)
+        return await _call_inprocess_tool(
+            tool_name,
+            enriched,
+            control_plane_tenant_id=control_plane_tenant_id,
+        )
 
     key = await _get_api_key()
     if not key:

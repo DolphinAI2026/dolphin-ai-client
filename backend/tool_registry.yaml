@@ -18,6 +18,180 @@
 # 2026-05-26 生成: 114 工具 (mcp_server.py 实测).
 version: 2
 tools:
+  change_system_asset_status:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "启用或禁用系统级种子工程、能力、环境或知识库。"
+    requires_confirmation: true
+  configure_system_git_remote:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "为明确指定的本地系统资产仓库配置远端 origin，首次调用只生成确认预览。"
+    requires_confirmation: true
+  create_system_capability_git_repository:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "在平台已配置的能力 Git 组创建空仓库、绑定明确指定的本地 capability 工程并推送当前分支。"
+    requires_confirmation: true
+  create_system_asset:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "创建系统级种子工程、能力、环境或知识库。"
+    requires_confirmation: true
+  create_system_skill:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "创建远程系统 Skill 及首个版本。"
+    requires_confirmation: true
+  delete_environment_capability_config:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "删除应用-环境能力配置绑定。"
+    requires_confirmation: true
+  delete_knowledge_document:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "删除知识库文档。"
+    requires_confirmation: true
+  delete_system_asset:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "删除系统级种子工程、能力、环境、知识库或 Skill。"
+    requires_confirmation: true
+  enable_system_skill_version:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "启用一个远程系统 Skill 版本。"
+    requires_confirmation: true
+  inspect_system_git_repository:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "检查明确指定的本地系统资产 Git 仓库、能力清单和远端状态。"
+    read_only: true
+  list_system_git_connections:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "列出当前租户可用于系统资产仓库远端校验和推送的 GitConnection。"
+    read_only: true
+  list_system_deployment_environments:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "列出当前部署环境及 Kubernetes 部署基础设施的安全摘要，不返回 kubeconfig 或凭据。"
+    read_only: true
+  list_environment_infrastructure_schemas:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "读取环境基础设施（含 Kubernetes）配置字段与敏感字段标记，不返回配置值。"
+    read_only: true
+  get_environment_capability_config:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "读取应用在环境中的能力配置与 readiness，敏感值不回显。"
+    read_only: true
+  get_system_asset:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "读取一项系统资产详情。"
+    read_only: true
+  get_system_asset_schema:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "读取系统资产创建和更新字段、枚举、字段依赖、完整示例；APP_RUNTIME 能力包含 yamlSchema 双段参数定义。"
+    read_only: true
+  get_system_assistant_mcp_contract:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "读取系统助手 MCP 的固定参数值、格式约束和上游选择来源。"
+    read_only: true
+  list_system_assets:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "列出系统级种子工程、能力、环境、知识库或 Skill。"
+    read_only: true
+  publish_knowledge_document:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "发布知识库文档到检索索引。"
+    requires_confirmation: true
+  push_system_git_repository:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "将明确指定的本地系统资产仓库分支推送到 origin，首次调用只生成确认预览。"
+    requires_confirmation: true
+  save_environment_capability_config:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "保存应用-环境能力配置；敏感值不回显。"
+    requires_confirmation: true
+  update_system_asset:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "修改系统级种子工程、能力、环境、知识库或 Skill。"
+    requires_confirmation: true
+  upload_knowledge_document:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "上传文本知识文档。"
+    requires_confirmation: true
+  disable_knowledge_document:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "下线知识库文档。"
+    requires_confirmation: true
+  get_knowledge_document:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "读取知识库文档元数据和索引状态。"
+    read_only: true
+  list_knowledge_documents:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "列出知识库文档。"
+    read_only: true
+  list_system_skill_versions:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "列出远程系统 Skill 版本。"
+    read_only: true
+  reindex_knowledge_document:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "重新索引知识库文档。"
+    requires_confirmation: true
+  create_system_skill_version:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "创建远程系统 Skill 新版本。"
+    requires_confirmation: true
   add_apaas_dict_option:
     sections: [data]
     agents: [builder, config]

@@ -52,7 +52,14 @@ from app.code_runtime.auth import control_plane_access_token
 from app.code_runtime.control_plane_models import list_control_plane_model_options
 from app.code_runtime.service import _control_plane_headers, control_plane_base_url
 from app.models.system_assistant_governance import ActionRun, ActionTicket
-from app.ai_chat.tools import TOOL_SCHEMAS, execute_tool, get_all_tool_schemas, split_core_deferred, build_deferred_manifest
+from app.ai_chat.tools import (
+    TOOL_SCHEMAS,
+    build_deferred_manifest,
+    execute_tool,
+    get_all_tool_schemas,
+    get_system_asset_tool_schemas,
+    split_core_deferred,
+)
 from app.observability import recorder
 from app.routes.llm_configs import (
     build_llm_chat_completions_url,
@@ -870,14 +877,23 @@ async def _call_llm(
     max_tokens: int | None = None,
     temperature: float | None = None,
     omit_generation_controls: bool = False,
+    omit_tool_choice: bool = False,
 ) -> dict:
     """non-streaming chat completion + tool calling。返回 OpenAI 格式 response.choices[0].message"""
     payload: dict[str, Any] = {
         "model": cfg.model,
         "messages": messages,
-        "tools": tools,
-        "tool_choice": "auto",
     }
+    # A few otherwise OpenAI-compatible gateways treat ``tools: []`` plus an
+    # explicit ``tool_choice: auto`` as an invalid tool request and, worse,
+    # answer it with HTTP 200 and an empty body.  Omit both when no tool is
+    # available; that is also the OpenAI default.  During the compatibility
+    # fallback we retain the actual tool definitions but omit tool_choice as
+    # well, since ``auto`` is the default there too.
+    if tools:
+        payload["tools"] = tools
+        if not omit_tool_choice:
+            payload["tool_choice"] = "auto"
     if not omit_generation_controls:
         payload["temperature"] = cfg.temperature if temperature is None else temperature
         payload["max_tokens"] = cfg.max_tokens if max_tokens is None else max_tokens
@@ -987,27 +1003,56 @@ async def _complete_responses(
     request_payload: dict[str, Any] = {
         "model": cfg.model,
         "input": _responses_input(chat_payload["messages"]),
-        "temperature": chat_payload["temperature"],
-        "max_output_tokens": chat_payload["max_tokens"],
-        "tool_choice": chat_payload.get("tool_choice", "auto"),
     }
+    if "temperature" in chat_payload:
+        request_payload["temperature"] = chat_payload["temperature"]
+    if "max_tokens" in chat_payload:
+        request_payload["max_output_tokens"] = chat_payload["max_tokens"]
+    if "tool_choice" in chat_payload:
+        request_payload["tool_choice"] = chat_payload["tool_choice"]
     tools = _responses_tools(chat_payload.get("tools") or [])
     if tools:
         request_payload["tools"] = tools
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10)
-    ) as client:
-        response = await client.post(
-            build_llm_responses_url(cfg.base_url),
-            headers={
-                "Authorization": f"Bearer {cfg.api_key}",
-                "Content-Type": "application/json",
-                **(getattr(cfg, "extra_headers", {}) or {}),
-            },
-            json=request_payload,
+    target = build_llm_responses_url(cfg.base_url)
+    response: httpx.Response | None = None
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10)
+        ) as client:
+            response = await client.post(
+                target,
+                headers={
+                    "Authorization": f"Bearer {cfg.api_key}",
+                    "Content-Type": "application/json",
+                    **(getattr(cfg, "extra_headers", {}) or {}),
+                },
+                json=request_payload,
+            )
+            response.raise_for_status()
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                preview = response.text.strip().replace("\n", " ")[:300] or "响应体为空"
+                raise llm_transport.LLMEmptyResponseError(
+                    f"模型服务返回 HTTP {response.status_code}，但响应不是有效 JSON：{preview}"
+                ) from exc
+    except Exception as exc:
+        llm_transport.log_llm_failure(
+            transport="responses",
+            target=target,
+            payload=request_payload,
+            exc=exc,
+            attempt=1,
+            response=response if response is not None else getattr(exc, "response", None),
         )
-        response.raise_for_status()
-        payload = response.json()
+        raise
+    if not isinstance(payload, dict):
+        exc = RuntimeError("模型服务返回的 Responses 响应不是 JSON 对象")
+        llm_transport.log_llm_failure(
+            transport="responses", target=target, payload=request_payload,
+            exc=exc, attempt=1, response=response,
+        )
+        raise exc
     return _responses_message(payload)
 
 
@@ -1033,14 +1078,15 @@ async def _call_llm_stream(
     payload = {
         "model": cfg.model,
         "messages": messages,
-        "tools": tools,
-        "tool_choice": "auto",
         "temperature": cfg.temperature,
         "max_tokens": cfg.max_tokens,
         "stream": True,
         # 让 OpenAI 兼容网关在 [DONE] 前回一个带 usage 的 chunk（token 必采）
         "stream_options": {"include_usage": True},
     }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
     _apply_provider_payload_compat(cfg, payload)
     if getattr(cfg, "api_format", "chat_completions") == "responses":
         message = await _call_llm(cfg, messages, tools, timeout=timeout)
@@ -1107,13 +1153,31 @@ async def _call_llm_stream_with_fallback(
     # Some OpenAI-compatible gateways accept ``max_tokens`` syntactically then
     # answer HTTP 200 with an empty body; the minimal Chat request is known to
     # work for those providers and still supports tool calls.
-    message = await _call_llm(
-        cfg,
-        messages,
-        tools,
-        timeout=timeout,
-        omit_generation_controls=True,
-    )
+    try:
+        message = await _call_llm(
+            cfg,
+            messages,
+            tools,
+            timeout=timeout,
+            omit_generation_controls=True,
+        )
+    except llm_transport.LLMEmptyResponseError:
+        # This branch is deliberately narrower than a general retry: the
+        # transport already retried the same request.  The next attempt changes
+        # only an optional OpenAI field, keeps real tool schemas intact, and is
+        # tailored for gateways that return a misleading 200-empty response for
+        # explicit ``tool_choice: auto`` after a clarification card.
+        logger.warning(
+            "LLM non-stream fallback returned an empty success body; retrying without tool_choice"
+        )
+        message = await _call_llm(
+            cfg,
+            messages,
+            tools,
+            timeout=timeout,
+            omit_generation_controls=True,
+            omit_tool_choice=True,
+        )
     content = message.get("content") or ""
     if content:
         yield {"type": "content_delta", "text": content}
@@ -1412,6 +1476,11 @@ async def _run_agent_inner(
     system_prompt_override, tool_names_override, _derived_vc = _apply_session_overrides(
         session, system_prompt_override, tool_names_override
     )
+    # Keep the profile decision local to this run.  The schema merge below and
+    # the local knowledge/Skill manifest gate must use the same value; referring
+    # to an outer helper's local here made every non-intro System Assistant turn
+    # crash before its first model call.
+    assistant_profile = getattr(session, "assistant_profile", None)
     # caller 未传 view_context 时,用推导出的 ws 绑定上下文 —— code 会话据此知道当前 ws_id,
     # 不再反问「请把 ws_id 发我」(2026-06-25 修复)。caller 显式传的 view_context 优先。
     view_context = view_context or _derived_vc
@@ -1467,6 +1536,19 @@ async def _run_agent_inner(
     # 每个 session 的第一轮拉一次合并 schemas（base 4 + MCP bridge 注入的 N 个）
     # 这是 lazy 设计 — backend 启动时 MCP 可能还没 ready，所以放在 turn loop 外的第一次调用
     all_schemas = await get_all_tool_schemas()
+    if getattr(session, "assistant_profile", None) == "system_assistant":
+        # 系统资产管理工具不属于普通 Builder/Code 的通用工具池；只在这里按
+        # profile 显式合并，随后仍会通过该 profile 的严格白名单。
+        system_asset_schemas = await get_system_asset_tool_schemas()
+        by_name = {
+            schema.get("function", {}).get("name"): schema
+            for schema in all_schemas
+        }
+        for schema in system_asset_schemas:
+            name = schema.get("function", {}).get("name")
+            if name and name not in by_name:
+                all_schemas.append(schema)
+                by_name[name] = schema
     # profile 工具白名单。旧 entry_agent/dev-apaas 继续恒保留 AIChat base tools；
     # system_assistant 则严格按白名单过滤，避免会话临时目录工具绕过 ws_id 工作区边界。
     if tool_names_override is not None:
@@ -1490,10 +1572,13 @@ async def _run_agent_inner(
         messages[0]["content"] = (messages[0].get("content") or "") + _manifest
     elif _manifest:
         logger.warning("deferred manifest skipped: messages[0] is not a system message")
-    # Skill 与知识是系统助手要治理和使用的系统级 Code 资产。目录只注入当前
-    # 平台真实可见内容，不会带入应用上下文或自动绑定历史工作区。
-    _append_skill_manifest(messages)
-    await _append_knowledge_manifest(messages, db)
+    # System Assistant must query the remote Builder AI Control Plane through
+    # system-asset MCP tools.  Its local desktop skill directory and local DB
+    # knowledge catalogue are implementation caches, not enterprise assets.
+    # Other assistant profiles keep the legacy local manifests unchanged.
+    if assistant_profile != "system_assistant":
+        _append_skill_manifest(messages)
+        await _append_knowledge_manifest(messages, db)
     active_tool_names: set[str] = await _reconstruct_active_tools(db, session)
 
     for turn in range(MAX_TURNS):

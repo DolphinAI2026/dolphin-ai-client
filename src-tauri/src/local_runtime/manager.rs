@@ -79,30 +79,67 @@ impl<D: RuntimeDriver> LocalRuntimeManager<D> {
     pub fn start(&self, request: StartRequest) -> Result<InstanceStatus, LocalRuntimeError> {
         validate_request(&self.data_root, &request)?;
         let _lock = ScopeLock::acquire(&self.data_root, &request.runtime_scope_id)?;
-        {
-            let mut active = self.active_instances()?;
-            if let Some(existing) = active.get(&request.runtime_scope_id).cloned() {
-                if existing.sandbox_instance_id == request.sandbox_instance_id {
-                    let record = self.journal.load(&request.runtime_scope_id)?;
-                    let identity = self.driver.identity(existing.pid)?;
-                    if record.as_ref().is_some_and(|record| {
-                        record.pid == existing.pid
-                            && record.sandbox_instance_id == existing.sandbox_instance_id
-                            && identity.as_ref().is_some_and(|identity| {
-                                identity.process_started_at == record.process_started_at
-                                    && identity.ownership_nonce == record.ownership_nonce
-                            })
-                    }) {
-                        return Ok(existing);
-                    }
-                    active.remove(&request.runtime_scope_id);
+        // Copy under the mutex and release it before any lifecycle work.  The
+        // replacement path below calls clear_status(), so retaining a temporary
+        // MutexGuard across the `if let` body would deadlock the manager.
+        let existing_active = {
+            let active = self.active_instances()?;
+            active.get(&request.runtime_scope_id).cloned()
+        };
+        if let Some(existing) = existing_active {
+            let record = self.journal.load(&request.runtime_scope_id)?;
+            let identity = self.driver.identity(existing.pid)?;
+            let owns_record = record.as_ref().is_some_and(|record| {
+                record.pid == existing.pid
+                    && record.application_id == existing.application_id
+                    && record.sandbox_instance_id == existing.sandbox_instance_id
+            });
+            let owns_process = record.as_ref().is_some_and(|record| {
+                identity.as_ref().is_some_and(|identity| {
+                    identity.process_started_at == record.process_started_at
+                        && identity.ownership_nonce == record.ownership_nonce
+                })
+            });
+
+            if existing.sandbox_instance_id == request.sandbox_instance_id {
+                if owns_record && owns_process {
+                    return Ok(existing);
+                }
+                // The in-memory entry no longer represents the recorded process.
+                // Retire it rather than accidentally reusing a stale port or token.
+                self.clear_status(&request.runtime_scope_id, &existing.sandbox_instance_id);
+                self.journal.remove(&request.runtime_scope_id)?;
+            } else if existing.application_id == request.application_id && owns_record {
+                // A new generation for the same local app replaces the previous one.
+                // This is safe only when the journal proves the manager owns that exact
+                // process.  It makes desktop restarts/reopens self-healing instead of
+                // surfacing LOCAL_RUNTIME_INSTANCE_CONFLICT to the user.
+                if owns_process {
+                    let stopping = JournalRecord {
+                        state: InstanceState::Stopping,
+                        updated_at: Utc::now(),
+                        ..record.expect("record checked above")
+                    };
+                    self.journal.write(&stopping)?;
+                    self.driver.stop(existing.pid)?;
                     self.journal.remove(&request.runtime_scope_id)?;
+                    self.clear_status(&request.runtime_scope_id, &existing.sandbox_instance_id);
+                } else if identity.is_none() {
+                    // The old process has already gone away; its active entry is only
+                    // stale bookkeeping and can be removed without sending a signal.
+                    self.journal.remove(&request.runtime_scope_id)?;
+                    self.clear_status(&request.runtime_scope_id, &existing.sandbox_instance_id);
                 } else {
                     return Err(LocalRuntimeError::new(
                         LocalRuntimeErrorCode::InstanceConflict,
-                        "another local runtime instance is already active for this scope",
+                        "another local runtime instance is active but its identity cannot be verified",
                     ));
                 }
+            } else {
+                return Err(LocalRuntimeError::new(
+                    LocalRuntimeErrorCode::InstanceConflict,
+                    "another local runtime instance is already active for this scope",
+                ));
             }
         }
         if let Some(record) = self.journal.load(&request.runtime_scope_id)? {
@@ -929,19 +966,14 @@ mod tests {
     }
 
     #[test]
-    fn another_instance_for_same_scope_conflicts() {
+    fn newer_generation_for_same_owned_scope_stops_previous_instance_and_starts() {
         let root = temp_root();
-        let manager = LocalRuntimeManager::new(
-            &root,
-            FakeDriver {
-                spawns: AtomicUsize::new(0),
-                stops: AtomicUsize::new(0),
-                identity: None,
-            },
-        );
+        let manager = LocalRuntimeManager::new(&root, CountingDriver::new(41001));
         manager.start(request(&root, "instance-a")).unwrap();
-        let error = manager.start(request(&root, "instance-b")).unwrap_err();
-        assert_eq!(error.code, LocalRuntimeErrorCode::InstanceConflict);
+        let replacement = manager.start(request(&root, "instance-b")).unwrap();
+        assert_eq!(replacement.sandbox_instance_id, "instance-b");
+        assert_eq!(manager.driver.stops.load(Ordering::SeqCst), 1);
+        assert_eq!(manager.driver.spawns.load(Ordering::SeqCst), 2);
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -256,10 +256,13 @@ function deleteSession(session: RailSession) {
 .sas-icon-button, .sas-app-new { display: grid; place-items: center; padding: 0; color: #637188; background: transparent; border: 1px solid transparent; border-radius: 6px; cursor: pointer; }
 .sas-icon-button { width: 26px; height: 26px; }
 .sas-icon-button:hover, .sas-app-new:hover { color: #1f56c7; background: #e9f1ff; border-color: #d4e2fb; }
-.sas-items { display: flex; flex-direction: column; gap: 1px; }
-.sas-item { width: 100%; min-width: 0; min-height: 30px; display: flex; align-items: center; gap: 8px; padding: 4px 5px 4px 8px; color: #68768a; background: transparent; border: 0; border-radius: 7px; font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
-.sas-item:hover { color: #2458bd; background: #edf3ff; }
-.sas-item.active { color: #1f56c7; background: #dceaff; box-shadow: inset 3px 0 0 #2f65d5; font-weight: 600; }
+.sas-items { display: flex; flex-direction: column; gap: 3px; }
+/* Give each history row a quiet surface of its own: the rail and conversation
+   canvas are both near-white, so a transparent row made the history hard to
+   scan until hover.  Keep the contrast intentionally light. */
+.sas-item { width: 100%; min-width: 0; min-height: 30px; display: flex; align-items: center; gap: 8px; padding: 4px 5px 4px 8px; color: #68768a; background: #f8fafc; border: 1px solid #edf1f5; border-radius: 7px; font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.sas-item:hover { color: #2458bd; background: #edf3ff; border-color: #dce8fb; }
+.sas-item.active { color: #1f56c7; background: #e5efff; border-color: #cbdcf7; box-shadow: inset 3px 0 0 #2f65d5; font-weight: 600; }
 .sas-state { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: #c2cad6; }
 .sas-state.running { background: #2f65d5; box-shadow: 0 0 0 3px rgba(47, 101, 213, .12); animation: sas-pulse 1.6s ease-in-out infinite; }
 .sas-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -292,8 +295,9 @@ html[data-theme="dark"] .sas-section + .sas-section { border-color: #273243; }
 html[data-theme="dark"] .sas-section-toggle, html[data-theme="dark"] .sas-app-toggle, html[data-theme="dark"] .sas-item { color: #9eacc0; }
 html[data-theme="dark"] .sas-sections { scrollbar-color: #3b485a transparent; }
 html[data-theme="dark"] .sas-sections::-webkit-scrollbar-thumb { background: #3b485a; }
-html[data-theme="dark"] .sas-item:hover { color: #cbd8eb; background: #1d2838; }
-html[data-theme="dark"] .sas-item.active { color: #d5e4ff; background: #283b5c; box-shadow: inset 3px 0 0 #7da5f8; }
+html[data-theme="dark"] .sas-item { background: #182230; border-color: #263448; }
+html[data-theme="dark"] .sas-item:hover { color: #cbd8eb; background: #1d2838; border-color: #344966; }
+html[data-theme="dark"] .sas-item.active { color: #d5e4ff; background: #283b5c; border-color: #3c5680; box-shadow: inset 3px 0 0 #7da5f8; }
 html[data-theme="dark"] .sas-menu { background: #1b2431; border-color: #334155; }
 html[data-theme="dark"] .sas-more-sessions { color: #9eacc0; }
 html[data-theme="dark"] .sas-more-sessions:hover { color: #a9c5ff; background: #26344a; }

@@ -54,13 +54,20 @@ class GitHubProvider:
         except RuntimeError:
             return None
 
-    async def create_repo(self, *, group_or_org: str, name: str, description: str) -> str:
+    async def create_repo(
+        self,
+        *,
+        group_or_org: str,
+        name: str,
+        description: str,
+        initialize_with_readme: bool = True,
+    ) -> str:
         """v1 简化：只支持 org-owned repo（user-owned 留 v2）。"""
         body = {
             "name": name,
             "description": description,
             "private": True,
-            "auto_init": True,
+            "auto_init": initialize_with_readme,
         }
         resp = await self._request("POST", f"/orgs/{group_or_org}/repos", json=body)
         data = resp.json()

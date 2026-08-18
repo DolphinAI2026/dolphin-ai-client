@@ -1424,6 +1424,19 @@ async def _handle_search_tools(args: dict, session, db) -> str:
     handler 签名与其他 TOOL_HANDLERS 一致: (args, session, db) -> str (JSON)
     """
     universe = _LAST_TOOL_SCHEMAS or []
+    # The system assistant owns a deliberately narrow, remote-control-plane
+    # tool set.  ``_LAST_TOOL_SCHEMAS`` is process-global and may contain
+    # schemas from another chat profile, so searching it unfiltered could
+    # advertise a local cache tool (notably ``list_skills``) to the system
+    # assistant.  That makes bundled demo skills look like tenant assets.
+    if getattr(session, "assistant_profile", None) == "system_assistant":
+        from app.agents.profile import resolve_profile
+
+        allowed_names = set(resolve_profile("system_assistant").tool_names)
+        universe = [
+            schema for schema in universe
+            if schema.get("function", {}).get("name") in allowed_names
+        ]
     _core, deferred = split_core_deferred(universe)
     names = search_deferred_tools(args.get("query", ""), deferred)
     if not names:
@@ -1660,6 +1673,28 @@ async def get_all_tool_schemas() -> list[dict]:
     return _LAST_TOOL_SCHEMAS
 
 
+async def get_system_asset_tool_schemas() -> list[dict]:
+    """Return the management MCP schemas reserved for the system assistant.
+
+    The normal Builder/Code pool intentionally never includes these tools.
+    Keeping this retrieval separate avoids accidentally widening a legacy
+    entry-agent session simply because the shared MCP server registered them.
+    """
+    from app.ai_chat.mcp_bridge import get_tool_schemas_openai
+    from app.mcp_tools.system_assets import SYSTEM_ASSET_TOOL_NAMES
+
+    try:
+        schemas = await get_tool_schemas_openai()
+    except Exception as exc:  # noqa: BLE001
+        import logging as _log
+        _log.getLogger(__name__).warning("系统资产 MCP schema 加载失败：%s", exc)
+        return []
+    return [
+        schema for schema in schemas
+        if schema.get("function", {}).get("name") in SYSTEM_ASSET_TOOL_NAMES
+    ]
+
+
 # 2026-05-28: 这几个 doc-pipeline 工具强依赖 artifact_id 指向"当前会话刚写的设计文档".
 # 但 LLM 经常传错/传旧的 artifact_id (跨会话残留 / 幻觉) → 拿错文档建错应用.
 # 实测: mega-erp(112 模型) 文档被建成无关的"人才管理系统"(14 HR 模型) — agent 传了别的 artifact_id.
@@ -1743,6 +1778,11 @@ async def execute_tool(
             "tenant_id": tenant_id,
             "user_id": int(getattr(session, "user_id", 0) or 0),
         }
+        control_plane_tenant_id = str(
+            getattr(session, "control_plane_tenant_id", "") or ""
+        ).strip()
+        if control_plane_tenant_id:
+            call_kwargs["control_plane_tenant_id"] = control_plane_tenant_id
         if allow_zero_tenant:
             call_kwargs["allow_zero_tenant"] = True
         result_text = await _mcp_call(tool_name, args, **call_kwargs)

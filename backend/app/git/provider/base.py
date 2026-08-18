@@ -28,7 +28,14 @@ class GitProvider(Protocol):
     """所有 git 平台必须实现的接口（最小集）"""
     name: str  # 'gitlab' | 'github'
 
-    async def create_repo(self, *, group_or_org: str, name: str, description: str) -> str:
+    async def create_repo(
+        self,
+        *,
+        group_or_org: str,
+        name: str,
+        description: str,
+        initialize_with_readme: bool = True,
+    ) -> str:
         """创建 repo，返回 repo full path（如 group/repo-name）"""
         ...
 

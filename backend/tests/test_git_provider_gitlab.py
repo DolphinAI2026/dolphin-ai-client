@@ -112,6 +112,21 @@ async def test_create_repo_calls_namespace_lookup(patched_httpx):
 
 
 @pytest.mark.asyncio
+async def test_create_repo_can_leave_project_empty_for_a_local_first_push(patched_httpx):
+    patched_httpx.responses = [
+        _FakeResponse(200, {"id": 7, "name": "acme"}),
+        _FakeResponse(201, {"path_with_namespace": "acme/widgets"}),
+    ]
+    provider = GitLabProvider(host="https://gitlab.com", access_token="t")
+
+    await provider.create_repo(
+        group_or_org="acme", name="widgets", description="hello", initialize_with_readme=False,
+    )
+
+    assert patched_httpx.calls[1]["json"]["initialize_with_readme"] is False
+
+
+@pytest.mark.asyncio
 async def test_commit_files_uses_commits_api(patched_httpx):
     # Sequence:
     # 1) GET branch (exists -> 200)

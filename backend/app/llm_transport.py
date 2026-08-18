@@ -26,6 +26,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import re
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
 from app.llm_reasoning import ReasoningSplitter, strip_think_blocks
@@ -36,10 +40,124 @@ logger = logging.getLogger(__name__)
 
 # ai_chat 历史默认:每次调用最多重试 2 次(含首发)。
 DEFAULT_RETRY_ATTEMPTS = 2
+_LLM_DIAGNOSTIC_MAX_VALUE_CHARS = 16_000
+_LLM_DIAGNOSTIC_MAX_BODY_CHARS = 4_000
+_LLM_DIAGNOSTIC_SENSITIVE_KEYS = (
+    "authorization", "api_key", "apikey", "token", "secret", "password",
+    "credential", "private_key", "kubeconfig",
+)
+_LLM_DIAGNOSTIC_SECRET_PATTERNS = (
+    (re.compile(r"(?i)(bearer\s+)[^\s,;]+"), r"\1<redacted>"),
+    (re.compile(r"(?i)(https?://)[^/@\s]+@"), r"\1<redacted>@"),
+    (re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b"), "<redacted-api-key>"),
+    (re.compile(r"(?im)^([ \t]*(?:token|password|client-key-data|client-certificate-data|certificate-authority-data)\s*:\s*).*$"), r"\1<redacted>"),
+    (re.compile(r"(?i)([\"']?(?:token|password|secret|api[_-]?key|kubeconfig|client[_-]?key[_-]?data)[\"']?\s*[:=]\s*[\"']?)[^\"',\n}\]]+"), r"\1<redacted>"),
+)
 
 
 class LLMEmptyResponseError(RuntimeError):
     """The gateway accepted a request but returned no usable response body."""
+
+
+def _redact_diagnostic_text(value: str, *, limit: int = _LLM_DIAGNOSTIC_MAX_VALUE_CHARS) -> str:
+    text = str(value or "")
+    for pattern, replacement in _LLM_DIAGNOSTIC_SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    if len(text) > limit:
+        return text[:limit] + f"… [truncated; original_chars={len(text)}]"
+    return text
+
+
+def _safe_diagnostic_value(value: Any, *, key: str = "") -> Any:
+    normalized = str(key).lower().replace("-", "_")
+    if any(part in normalized for part in _LLM_DIAGNOSTIC_SENSITIVE_KEYS):
+        return "<redacted>"
+    if isinstance(value, dict):
+        return {str(k): _safe_diagnostic_value(v, key=str(k)) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_safe_diagnostic_value(item) for item in value]
+    if isinstance(value, str):
+        return _redact_diagnostic_text(value)
+    return value
+
+
+def _diagnostic_log_path() -> Path | None:
+    """Return the durable local diagnostic log only where a data root exists."""
+    try:
+        from app import runtime
+        root = runtime.desktop_data_dir() if runtime.is_desktop() else runtime.server_data_dir()
+    except Exception:  # pragma: no cover - diagnostics must never break an LLM call
+        return None
+    return (root / "logs" / "llm-diagnostics.jsonl") if root else None
+
+
+def _write_llm_diagnostic(record: dict[str, Any]) -> None:
+    """Persist a bounded, redacted JSONL record without making logging a failure path."""
+    try:
+        encoded = json.dumps(record, ensure_ascii=False, separators=(",", ":"), default=str)
+        path = _diagnostic_log_path()
+        if path is not None:
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            # Keep one previous file for comparison while preventing a broken
+            # gateway from filling the desktop data directory indefinitely.
+            if path.exists() and path.stat().st_size > 5 * 1024 * 1024:
+                previous = path.with_suffix(".previous.jsonl")
+                os.replace(path, previous)
+            fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            try:
+                os.write(fd, (encoded + "\n").encode("utf-8"))
+            finally:
+                os.close(fd)
+        logger.error("LLM_DIAGNOSTIC %s", encoded)
+    except Exception:  # pragma: no cover - diagnostic recording is best-effort
+        logger.exception("failed to write LLM diagnostic record")
+
+
+def log_llm_failure(
+    *,
+    transport: str,
+    target: str,
+    payload: dict[str, Any],
+    exc: Exception,
+    attempt: int,
+    response: httpx.Response | None = None,
+) -> None:
+    """Record request/response evidence for model failures, with credentials removed.
+
+    The full payload shape is retained (including messages and tool schemas) so
+    empty-200 and provider compatibility bugs can be reproduced from the local
+    log.  Secrets are redacted and values are bounded before either disk or the
+    regular process log sees them.
+    """
+    if getattr(exc, "_llm_diagnostic_logged", False):
+        return
+    try:
+        setattr(exc, "_llm_diagnostic_logged", True)
+    except Exception:
+        pass
+    metadata: dict[str, Any] = {}
+    if response is not None:
+        metadata = {
+            "status_code": response.status_code,
+            "content_type": response.headers.get("content-type"),
+            "request_id": response.headers.get("x-request-id") or response.headers.get("request-id"),
+            "body_chars": len(response.content or b""),
+            "body_preview": _redact_diagnostic_text(
+                response.text or "", limit=_LLM_DIAGNOSTIC_MAX_BODY_CHARS,
+            ),
+        }
+    record = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "event": "llm_request_failed",
+        "transport": transport,
+        "attempt": attempt,
+        "target": _redact_diagnostic_text(target, limit=2_000),
+        "request": _safe_diagnostic_value(payload),
+        "error_type": exc.__class__.__name__,
+        "error": _redact_diagnostic_text(str(exc), limit=_LLM_DIAGNOSTIC_MAX_BODY_CHARS),
+        "response": metadata or None,
+    }
+    _write_llm_diagnostic(record)
 
 
 # ─────────────────────────── 错误分类 / 文案 ───────────────────────────
@@ -257,6 +375,7 @@ async def _stream_chunks_once(
     accumulated_content = ""
     usage_data: Optional[dict] = None
     tool_buf: dict[int, dict] = {}
+    received_event = False
     # MiniMax 等把 reasoning 内联进 content 用 <think>...</think> 包裹 → 增量分离,
     # 让 content_delta / 累积 content 干净(不泄漏 <think> 进消息/标题)。
     reasoning_splitter = ReasoningSplitter()
@@ -270,7 +389,14 @@ async def _stream_chunks_once(
         ) as resp:
             if resp.status_code >= 400:
                 await resp.aread()
-                resp.raise_for_status()
+                error = httpx.HTTPStatusError(
+                    f"LLM API {resp.status_code}", request=resp.request, response=resp,
+                )
+                log_llm_failure(
+                    transport="chat_completions_stream", target=target, payload=payload,
+                    exc=error, attempt=1, response=resp,
+                )
+                raise error
             async for raw_line in resp.aiter_lines():
                 if abort_event is not None and abort_event.is_set():
                     break
@@ -286,6 +412,7 @@ async def _stream_chunks_once(
                     chunk = json.loads(data)
                 except Exception:
                     continue
+                received_event = True
                 # usage chunk:choices 为空、带 usage(include_usage 开启后 [DONE] 前到达)
                 if chunk.get("usage"):
                     usage_data = chunk["usage"]
@@ -324,6 +451,9 @@ async def _stream_chunks_once(
                         "name": buf["function"]["name"],
                         "arguments_so_far": buf["function"]["arguments"],
                     }
+
+    if not received_event:
+        raise LLMEmptyResponseError("模型服务返回 HTTP 200，但流式响应没有任何有效 SSE 事件")
 
     # 流结束:吐出 splitter 残留(未闭合 <think> 残文不丢,作 reasoning)。
     tail_visible, tail_reasoning = reasoning_splitter.flush()
@@ -378,6 +508,14 @@ async def stream_chunks(
                 yield chunk
             return
         except Exception as exc:
+            log_llm_failure(
+                transport="chat_completions_stream",
+                target=url or f"{base_url.rstrip('/')}/chat/completions",
+                payload=payload,
+                exc=exc,
+                attempt=attempt + 1,
+                response=getattr(exc, "response", None),
+            )
             last_error = exc
             if (
                 emitted_anything
@@ -410,9 +548,10 @@ async def complete(
     target = url or f"{base_url.rstrip('/')}/chat/completions"
     last_error: Exception | None = None
     for attempt in range(retry_attempts):
+        response: httpx.Response | None = None
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(
+                resp = response = await client.post(
                     target,
                     headers=_headers(api_key, extra_headers=extra_headers),
                     json=payload,
@@ -438,6 +577,14 @@ async def complete(
                 message["content"] = visible
             return message
         except Exception as exc:
+            log_llm_failure(
+                transport="chat_completions",
+                target=target,
+                payload=payload,
+                exc=exc,
+                attempt=attempt + 1,
+                response=response if response is not None else getattr(exc, "response", None),
+            )
             last_error = exc
             if attempt >= retry_attempts - 1 or not is_retryable_llm_error(exc):
                 raise

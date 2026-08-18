@@ -106,6 +106,24 @@ async def test_search_tools_no_match():
     assert data["ok"] is True and data["activated"] == []
 
 
+@pytest.mark.asyncio
+async def test_system_assistant_search_tools_cannot_expose_local_skill_cache():
+    from types import SimpleNamespace
+    import app.ai_chat.tools as t
+
+    t._LAST_TOOL_SCHEMAS = [
+        {"type": "function", "function": {"name": "list_skills", "description": "列出本地技能", "parameters": {}}},
+        {"type": "function", "function": {"name": "list_system_assets", "description": "列出远端系统资产", "parameters": {}}},
+    ]
+    session = SimpleNamespace(assistant_profile="system_assistant")
+
+    local = json.loads(await t._handle_search_tools({"query": "select:list_skills"}, session=session, db=None))
+    remote = json.loads(await t._handle_search_tools({"query": "select:list_system_assets"}, session=session, db=None))
+
+    assert local["activated"] == []
+    assert remote["activated"] == ["list_system_assets"]
+
+
 def test_search_tools_in_base_schemas():
     from app.ai_chat.tools import TOOL_SCHEMAS
     names = {s["function"]["name"] for s in TOOL_SCHEMAS}

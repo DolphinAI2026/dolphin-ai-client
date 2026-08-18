@@ -43,7 +43,14 @@ class GitLabProvider:
         except RuntimeError:
             return None
 
-    async def create_repo(self, *, group_or_org: str, name: str, description: str) -> str:
+    async def create_repo(
+        self,
+        *,
+        group_or_org: str,
+        name: str,
+        description: str,
+        initialize_with_readme: bool = True,
+    ) -> str:
         # GitLab：先查 group id
         gresp = await self._request(
             "GET", f"/groups/{quote(group_or_org, safe='')}",
@@ -54,7 +61,7 @@ class GitLabProvider:
             "namespace_id": group_id,
             "description": description,
             "visibility": "private",
-            "initialize_with_readme": True,
+            "initialize_with_readme": initialize_with_readme,
             "default_branch": "main",
         }
         resp = await self._request("POST", "/projects", json=body)

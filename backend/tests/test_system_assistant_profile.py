@@ -12,6 +12,8 @@ from app.agents.profile import (
     resolve_profile,
     ws_bind_view_context,
 )
+from app.mcp_tools.system_assets import SYSTEM_ASSET_TOOL_NAMES
+from app.ai_chat import tools as chat_tools
 from app.ai_chat.agent import (
     _SYSTEM_ASSISTANT_INTRO_RESPONSE,
     _apply_session_overrides,
@@ -28,14 +30,15 @@ def test_system_assistant_profile_exposes_system_asset_read_and_use_capabilities
     assert "read_attachment" in tools
     assert "write_artifact" in tools
     assert "run_python" in tools
-    assert {
-        "search_tools",
-        "use_skill",
-        "read_knowledge",
-        "search_knowledge",
-        "list_skills",
-        "read_skill_file",
-    }.issubset(tools)
+    assert "search_tools" in tools
+    assert SYSTEM_ASSET_TOOL_NAMES.issubset(tools)
+
+    # System assets must be queried through the remote Builder AI Control Plane
+    # MCP tools, never through the sidecar's local cache/skill directory.
+    for local_query in (
+        "use_skill", "read_knowledge", "search_knowledge", "list_skills", "read_skill_file",
+    ):
+        assert local_query not in tools
 
     for forbidden_local in ("write_file", "edit_file", "run_command", "start_serve"):
         assert forbidden_local not in tools
@@ -83,6 +86,25 @@ def test_system_assistant_profile_exposes_system_asset_read_and_use_capabilities
         assert forbidden not in tools
 
 
+@pytest.mark.asyncio
+async def test_system_asset_tools_are_not_added_to_normal_tool_pool(monkeypatch):
+    async def fake_mcp_schemas():
+        return [
+            {"type": "function", "function": {"name": "get_application"}},
+            {"type": "function", "function": {"name": "list_system_assets"}},
+        ]
+
+    monkeypatch.setattr("app.ai_chat.mcp_bridge.get_tool_schemas_openai", fake_mcp_schemas)
+    schemas = await chat_tools.get_all_tool_schemas()
+    names = {schema.get("function", {}).get("name") for schema in schemas}
+
+    assert "get_application" in names
+    assert not (SYSTEM_ASSET_TOOL_NAMES & names)
+
+    system_schemas = await chat_tools.get_system_asset_tool_schemas()
+    assert [schema["function"]["name"] for schema in system_schemas] == ["list_system_assets"]
+
+
 def test_system_assistant_prompt_targets_system_level_code_assets():
     prompt = resolve_profile("system_assistant").system_prompt
     normalized = prompt.lower()
@@ -95,6 +117,18 @@ def test_system_assistant_prompt_targets_system_level_code_assets():
     assert "对应应用的 Code 会话" in prompt
     assert "不发现、枚举、猜测、绑定或创建工作区" in prompt
     assert "不沿用历史会话中的工程身份" in prompt
+    assert 'asset_type="mcp_server"' in prompt
+    assert "不是 MCP 服务资产查询" in prompt
+    assert "get_system_asset_schema" in prompt
+    assert "get_system_assistant_mcp_contract" in prompt
+    assert "allowed_values" in prompt
+    assert "environmentInstanceSchema" in prompt
+    assert "applicationEnvironmentInstanceSchema" in prompt
+    assert "绝不能杜撰 `environment:` 段" in prompt
+    assert "credentialRef / resolverRef" in prompt
+    assert "create_system_capability_git_repository" in prompt
+    assert "list_system_deployment_environments" in prompt
+    assert "list_environment_infrastructure_schemas" in prompt
     assert "Dolphin Code" in prompt
     assert "apaas" not in normalized
     assert "builder" not in normalized
@@ -127,8 +161,9 @@ def test_system_assistant_profile_does_not_require_a_bound_workspace():
     assert tools
     assert "read_attachment" in tools
     assert "write_artifact" in tools
-    assert "use_skill" in tools
-    assert "search_knowledge" in tools
+    assert "list_system_assets" in tools
+    assert "use_skill" not in tools
+    assert "search_knowledge" not in tools
     assert "read_workspace_file" not in tools
     assert "write_workspace_files" not in tools
     assert "run_workspace_command" not in tools

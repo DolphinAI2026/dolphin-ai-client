@@ -100,6 +100,20 @@ async def test_create_repo_calls_org_endpoint(patched_httpx):
 
 
 @pytest.mark.asyncio
+async def test_create_repo_can_leave_project_empty_for_a_local_first_push(patched_httpx):
+    patched_httpx.responses = [
+        _FakeResponse(201, {"full_name": "acme/widgets", "id": 1}),
+    ]
+    provider = GitHubProvider(access_token="ghp_test")
+
+    await provider.create_repo(
+        group_or_org="acme", name="widgets", description="hi", initialize_with_readme=False,
+    )
+
+    assert patched_httpx.calls[0]["json"]["auto_init"] is False
+
+
+@pytest.mark.asyncio
 async def test_commit_files_single_file_create(patched_httpx):
     """File doesn't exist (404) on a branch that already exists -> PUT without sha."""
     patched_httpx.responses = [
