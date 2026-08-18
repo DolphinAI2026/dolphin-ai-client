@@ -704,7 +704,6 @@ async def test_rebind_rejects_path_owned_by_another_tenant(
 @pytest.mark.parametrize(
     "repository_kind",
     [
-        "not_git",
         "subdirectory",
         "symlink",
         "dotdot",

@@ -242,10 +242,7 @@ async def _renew_browser_runtime_session(
                     auth_error = str(
                         (exc.headers or {}).get(RUNTIME_AUTH_ERROR_HEADER) or ""
                     ).strip()
-                    if (
-                        auth_error == "sandbox_launch_token_expired"
-                        and bootstrap_attempt == 0
-                    ):
+                    if bootstrap_attempt == 0 and exc.status_code != 401:
                         continue
                     if auth_error in _LAUNCH_AUTH_ERRORS or exc.status_code == 401:
                         raise SandboxRenewalFailure(

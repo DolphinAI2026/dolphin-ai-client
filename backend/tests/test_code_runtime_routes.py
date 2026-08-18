@@ -2183,6 +2183,7 @@ async def test_open_code_runtime_session_rolls_back_and_does_not_return_canary_o
     from fastapi import HTTPException
 
     import app.routes.code_runtime as code_runtime_routes
+    from app.config import settings
     from app.routes.code_runtime import open_code_runtime_session
 
     session = SimpleNamespace(
@@ -2207,6 +2208,8 @@ async def test_open_code_runtime_session_rolls_back_and_does_not_return_canary_o
 
     db.commit = fail_commit
     db.rollback = fake_rollback
+    monkeypatch.setattr(settings, "auth_provider", "")
+    monkeypatch.setattr(settings, "control_plane_binding_enabled", False)
     monkeypatch.setattr(code_runtime_routes, "resolve_code_session", fake_resolve)
     monkeypatch.setattr(code_runtime_routes, "open_code_session", fake_open_code_session)
 

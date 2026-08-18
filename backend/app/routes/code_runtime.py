@@ -410,7 +410,7 @@ async def _control_plane_request_auth(
                 class_=AsyncSession,
                 expire_on_commit=False,
             )
-            if db.bind is not None
+            if getattr(db, "bind", None) is not None
             else AsyncSessionLocal
         )
         authorization = await _locked_control_plane_user_authorization(
@@ -1380,22 +1380,32 @@ def _path_requires_runtime_current_alignment(path: str) -> bool:
 async def _ensure_runtime_current_session(
     binding: CodeRuntimeBinding,
     path: str,
+    *,
+    request: Request | None = None,
+    session_id: str | int | None = None,
 ) -> bool:
     runtime_session_id = str(binding.runtime_session_id or "").strip()
     if not runtime_session_id or not _path_requires_runtime_current_alignment(path):
         return False
     encoded_id = quote(runtime_session_id, safe="")
     target_path = f"/api/agent/sessions/{encoded_id}/activate"
+    async def runtime_request(method: str, target: str) -> dict[str, Any]:
+        if request is None:
+            return await _runtime_json_request(binding, method, target)
+        return await _browser_runtime_json_request(
+            binding,
+            method,
+            target,
+            request=request,
+            session_id=session_id if session_id is not None else binding.session_id,
+        )
+
     try:
-        await _runtime_json_request(binding, "POST", target_path)
+        await runtime_request("POST", target_path)
     except HTTPException as exc:
         if exc.status_code != 404:
             raise
-        current = await _runtime_json_request(
-            binding,
-            "GET",
-            "/api/agent/sessions/current",
-        )
+        current = await runtime_request("GET", "/api/agent/sessions/current")
         binding.runtime_session_id = str(
             (current or {}).get("runtimeSessionId") or ""
         ).strip() or None

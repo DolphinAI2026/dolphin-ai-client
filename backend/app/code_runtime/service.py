@@ -506,6 +506,33 @@ def _desktop_runtime_environment_present() -> bool:
     return any(os.getenv(key, "").strip() for key in _DESKTOP_RUNTIME_ENVIRONMENT_KEYS)
 
 
+async def _create_desktop_runtime_agent_session(
+    runtime_base_url: str,
+    entry_token: str,
+) -> str:
+    """Create a runtime conversation owned by one outer Code shell."""
+    target = f"{str(runtime_base_url).rstrip('/')}/api/agent/sessions"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=30, write=10, pool=10)) as client:
+            response = await client.post(
+                target,
+                headers={"Authorization": f"Bearer {entry_token}"},
+                json={},
+            )
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=503, detail="本地 Runtime agent session 不可用") from exc
+    if response.status_code >= 400:
+        raise HTTPException(status_code=502, detail="本地 Runtime 创建 agent session 失败")
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="本地 Runtime 返回了无效 agent session") from exc
+    runtime_session_id = str((payload or {}).get("runtimeSessionId") or "").strip()
+    if not runtime_session_id:
+        raise HTTPException(status_code=502, detail="本地 Runtime 未返回 agent session")
+    return runtime_session_id
+
+
 def _builder_prefix_path(builder_url: str) -> str:
     parsed = urlsplit(str(builder_url or "").strip())
     path = parsed.path.rstrip("/") or "/builder"
@@ -602,7 +629,7 @@ def _control_plane_headers(
         os.getenv("DOLPHIN_CODE_CONTROL_PLANE_DELEGATION_SECRET", "").strip()
         or (settings.dolphin_code_control_plane_delegation_secret or "").strip()
     )
-    if delegation_secret and delegated_context is not None:
+    if delegation_secret and delegated_context is not None and not has_user_bearer:
         headers["X-AI-Builder-Delegation-Secret"] = delegation_secret
         headers.update(_delegated_identity_headers(delegated_context, shell_session_id=shell_session_id))
     return headers
@@ -966,6 +993,7 @@ async def create_code_application(
     body = {
         "appCode": code,
         "appName": name,
+        "seedProjectId": seed_id,
     }
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=60, write=10, pool=10)) as client:
@@ -1158,7 +1186,8 @@ async def open_code_session(
         raise HTTPException(status_code=400, detail="Code 会话未绑定应用")
 
     desktop_entry_token: str | None = None
-    desktop_runtime = is_local_code_application_id(external_app_id)
+    local_application = is_local_code_application_id(external_app_id)
+    desktop_runtime = _desktop_runtime_environment_present()
     bootstrap = None
 
     remote_phase = on_phase
@@ -1182,6 +1211,12 @@ async def open_code_session(
     if not desktop_runtime:
         set_remote_phase("provisioning")
     if desktop_runtime:
+        await verify_control_plane_application_access(
+            external_app_id,
+            authorization_header=authorization_header,
+            delegated_context=ctx,
+            auth_provider=auth_provider,
+        )
         local_runtime = LocalRuntimeClient.from_environment()
         proxy_token = create_local_model_proxy_token(
             application_id=external_app_id,
@@ -1227,7 +1262,7 @@ async def open_code_session(
     if not builder_url:
         raise HTTPException(status_code=502, detail="Code Control Plane 未返回 builder URL")
 
-    if desktop_runtime or is_local_code_application_id(external_app_id):
+    if desktop_runtime or local_application:
         clean_builder_url = builder_url
         runtime_base_url = derive_runtime_base_url(builder_url)
     else:
@@ -1327,15 +1362,22 @@ async def open_code_session(
                     CodeRuntimeAgentSession.session_id == session.id
                 )
             )
-        current_runtime_session_id = (
-            ""
-            if desktop_runtime_instance_changed
-            else str(binding.runtime_session_id or "").strip()
-        )
+        existing_agent_session = None
+        if not desktop_runtime_instance_changed:
+            existing_agent_session = (
+                await db.execute(
+                    select(CodeRuntimeAgentSession)
+                    .where(CodeRuntimeAgentSession.session_id == session.id)
+                    .order_by(CodeRuntimeAgentSession.id.desc())
+                )
+            ).scalars().first()
         runtime_session_id = (
-            current_runtime_session_id
-            if current_runtime_session_id
-            else str(runtime_session_id or "").strip() or None
+            str(existing_agent_session.runtime_session_id or "").strip()
+            if existing_agent_session is not None
+            else await _create_desktop_runtime_agent_session(
+                runtime_base_url,
+                desktop_entry_token,
+            )
         )
         binding.runtime_session_id = runtime_session_id
     if runtime_session_id:

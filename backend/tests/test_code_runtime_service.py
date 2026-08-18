@@ -823,7 +823,7 @@ async def test_default_workspace_open_reports_control_plane_connection_target(mo
         await service.default_workspace_open("app-1")
 
     assert exc.value.status_code == 503
-    assert "http://127.0.0.1:8080" in str(exc.value.detail)
+    assert service.control_plane_base_url() in str(exc.value.detail)
 
 
 @pytest.mark.asyncio
@@ -1557,8 +1557,8 @@ async def test_open_code_session_upserts_runtime_binding(db_session):
 
     assert calls == ["91001"]
     assert result["session_id"] == session.public_id
-    assert result["external_base_path"] == f"/api/code-runtime/{session.public_id}"
-    assert result["embed_url"].startswith(f"/api/code-runtime/{session.public_id}/builder/?")
+    assert result["external_base_path"] == f"/api/code-runtime/{result['route_id']}"
+    assert result["embed_url"].startswith(f"/api/code-runtime/{result['route_id']}/builder/?")
     assert "dolphin_token=dolphin-embed" in result["embed_url"]
 
     binding = (
@@ -1603,7 +1603,7 @@ async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_en
         def from_environment(cls):
             return cls()
 
-        async def open_application_with_entry_token(self, _db, _session, _ctx):
+        async def open_application_with_entry_token(self, _db, _session, _ctx, **_kwargs):
             nonlocal opened_calls
             opened_calls += 1
             return (
@@ -1720,7 +1720,7 @@ async def test_desktop_runtime_creates_one_agent_session_per_shell_and_reuses_it
         def from_environment(cls):
             return cls()
 
-        async def open_application_with_entry_token(self, _db, _session, _ctx):
+        async def open_application_with_entry_token(self, _db, _session, _ctx, **_kwargs):
             return (
                 {
                     "applicationId": "desktop-code-app",
@@ -1822,7 +1822,7 @@ async def test_open_code_session_does_not_fallback_when_configured_desktop_runti
         def from_environment(cls):
             return cls()
 
-        async def open_application_with_entry_token(self, _db, _session, _ctx):
+        async def open_application_with_entry_token(self, _db, _session, _ctx, **_kwargs):
             raise HTTPException(status_code=503, detail="LOCAL_RUNTIME_MANAGER_UNAVAILABLE: unavailable")
 
     async def unexpected_control_plane(*_args, **_kwargs):
