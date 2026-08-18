@@ -290,7 +290,10 @@ async def _append_knowledge_manifest(messages: list[dict], db) -> None:
         logger.warning("knowledge manifest skipped: messages[0] is not a system message")
 
 
-LLM_RETRY_ATTEMPTS = 2
+# The first accepted response from some compatible gateways can still be empty
+# or a dropped connection.  Retrying before any model output is safe and keeps
+# a transient upstream glitch from terminating a whole Code turn.
+LLM_RETRY_ATTEMPTS = 3
 LLM_TOOL_RESULT_CONTEXT_MAX_CHARS = 24_000
 PERSISTED_TOOL_ARG_PREVIEW_CHARS = 240
 PERSISTED_TOOL_ARG_MAX_CHARS = 20_000
@@ -866,16 +869,18 @@ async def _call_llm(
     timeout: int = 120,
     max_tokens: int | None = None,
     temperature: float | None = None,
+    omit_generation_controls: bool = False,
 ) -> dict:
     """non-streaming chat completion + tool calling。返回 OpenAI 格式 response.choices[0].message"""
-    payload = {
+    payload: dict[str, Any] = {
         "model": cfg.model,
         "messages": messages,
         "tools": tools,
         "tool_choice": "auto",
-        "temperature": cfg.temperature if temperature is None else temperature,
-        "max_tokens": cfg.max_tokens if max_tokens is None else max_tokens,
     }
+    if not omit_generation_controls:
+        payload["temperature"] = cfg.temperature if temperature is None else temperature
+        payload["max_tokens"] = cfg.max_tokens if max_tokens is None else max_tokens
     _apply_provider_payload_compat(cfg, payload)
     if getattr(cfg, "api_format", "chat_completions") == "responses":
         return await _complete_responses(cfg, payload, timeout=timeout)
@@ -1078,8 +1083,19 @@ async def _call_llm_stream_with_fallback(
         async for chunk in _call_llm_stream(cfg, messages, tools, abort_event, timeout=timeout):
             yield chunk
         return
-    except httpx.HTTPStatusError:
-        raise
+    except httpx.HTTPStatusError as stream_exc:
+        # Some OpenAI-compatible gateways accept the same Chat Completions
+        # request normally but reject its streaming transport at their proxy
+        # layer (for example with a 502 HTML page).  A regular completion is
+        # still safe to use and keeps the Code conversation functional.  Do
+        # not mask client errors: those describe an invalid model/request and
+        # require the user to fix the configuration instead.
+        if stream_exc.response.status_code < 500:
+            raise
+        logger.warning(
+            "LLM streaming request returned HTTP %s; retrying non-streaming",
+            stream_exc.response.status_code,
+        )
     except Exception as stream_exc:
         if not _is_retryable_llm_error(stream_exc):
             raise
@@ -1087,20 +1103,30 @@ async def _call_llm_stream_with_fallback(
             "LLM stream failed after retries; falling back to non-stream request: %s",
             _format_llm_error(stream_exc),
         )
-        message = await _call_llm(cfg, messages, tools, timeout=timeout)
-        content = message.get("content") or ""
-        if content:
-            yield {"type": "content_delta", "text": content}
-        for idx, tc in enumerate(message.get("tool_calls") or []):
-            fn = tc.get("function") or {}
-            yield {
-                "type": "tool_call_delta",
-                "index": idx,
-                "id": tc.get("id"),
-                "name": fn.get("name"),
-                "arguments_so_far": fn.get("arguments") or "",
-            }
-        yield {"type": "done", "message": message, "usage": None}
+    # Keep the model/messages/tools shape, but omit optional generation controls.
+    # Some OpenAI-compatible gateways accept ``max_tokens`` syntactically then
+    # answer HTTP 200 with an empty body; the minimal Chat request is known to
+    # work for those providers and still supports tool calls.
+    message = await _call_llm(
+        cfg,
+        messages,
+        tools,
+        timeout=timeout,
+        omit_generation_controls=True,
+    )
+    content = message.get("content") or ""
+    if content:
+        yield {"type": "content_delta", "text": content}
+    for idx, tc in enumerate(message.get("tool_calls") or []):
+        fn = tc.get("function") or {}
+        yield {
+            "type": "tool_call_delta",
+            "index": idx,
+            "id": tc.get("id"),
+            "name": fn.get("name"),
+            "arguments_so_far": fn.get("arguments") or "",
+        }
+    yield {"type": "done", "message": message, "usage": None}
 
 
 # ─────────────────────────── 构建 agent 输入 ───────────────────────────

@@ -38,6 +38,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_RETRY_ATTEMPTS = 2
 
 
+class LLMEmptyResponseError(RuntimeError):
+    """The gateway accepted a request but returned no usable response body."""
+
+
 # ─────────────────────────── 错误分类 / 文案 ───────────────────────────
 
 
@@ -53,6 +57,7 @@ def is_retryable_llm_error(exc: Exception) -> bool:
             httpx.WriteTimeout,
             httpx.RemoteProtocolError,
             httpx.PoolTimeout,
+            LLMEmptyResponseError,
         ),
     )
 
@@ -413,7 +418,17 @@ async def complete(
                     json=payload,
                 )
                 resp.raise_for_status()
-                data = resp.json()
+                try:
+                    data = resp.json()
+                except ValueError as exc:
+                    body_preview = resp.text.strip().replace("\n", " ")[:300]
+                    if not body_preview:
+                        body_preview = "响应体为空"
+                    raise LLMEmptyResponseError(
+                        f"模型服务返回 HTTP {resp.status_code}，但响应不是有效 JSON：{body_preview}"
+                    ) from exc
+            if not isinstance(data, dict):
+                raise RuntimeError("模型服务返回的 Chat Completions 响应不是 JSON 对象")
             message = data["choices"][0]["message"]
             # MiniMax 等把 reasoning 内联进 content 用 <think>...</think> → 剥离, content 干净。
             # 无 <think> 的 provider 此处是 no-op(不含标签直接返回原文)。
