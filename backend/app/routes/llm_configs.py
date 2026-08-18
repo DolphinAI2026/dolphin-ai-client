@@ -696,11 +696,12 @@ async def _assert_target_tenant(db: AsyncSession, tenant_id: int) -> int:
 
 
 async def _clear_defaults(db: AsyncSession, tenant_id: int, purpose: str):
-    """清除指定租户的默认配置(每租户唯一默认)。"""
+    """清除指定租户、指定用途的默认配置。"""
     await db.execute(
         update(LLMConfig)
         .where(
             LLMConfig.tenant_id == tenant_id,
+            LLMConfig.purpose == purpose,
             LLMConfig.is_default == True,
         )
         .values(is_default=False)

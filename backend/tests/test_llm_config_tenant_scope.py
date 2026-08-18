@@ -87,10 +87,29 @@ async def test_list_for_purpose_only_own_tenant_no_fallback(db_session):
 
 @pytest.mark.asyncio
 async def test_clear_defaults_only_touches_own_tenant(db_session):
-    """每租户唯一默认:清默认只清本租户,不动别租户。"""
+    """清默认只清本租户,不动别租户。"""
     a_id, b_id, c_id, a_cfg, b_cfg = await _three_tenants(db_session)
     await _clear_defaults(db_session, a_id, "all")
     await db_session.refresh(a_cfg)
     await db_session.refresh(b_cfg)
     assert a_cfg.is_default is False, "本租户默认应被清"
     assert b_cfg.is_default is True, "别租户默认不应被波及"
+
+
+@pytest.mark.asyncio
+async def test_clear_defaults_only_touches_the_same_purpose(db_session):
+    """Builder 和 Coding 各自维护默认模型，不能互相取消。"""
+    tenant = Tenant(tenant_name="Purpose", tenant_code="purpose-default")
+    db_session.add(tenant)
+    await db_session.flush()
+    builder = _cfg(tenant.id, "https://builder/v1", purpose="builder")
+    coding = _cfg(tenant.id, "https://coding/v1", purpose="coding")
+    db_session.add_all([builder, coding])
+    await db_session.flush()
+
+    await _clear_defaults(db_session, tenant.id, "coding")
+    await db_session.refresh(builder)
+    await db_session.refresh(coding)
+
+    assert builder.is_default is True
+    assert coding.is_default is False
