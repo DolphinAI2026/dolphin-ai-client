@@ -35,6 +35,11 @@ class AuthContext:
     control_plane_tenant_name: Optional[str] = None
 
 
+def is_control_plane_context(ctx: AuthContext) -> bool:
+    """Return whether the request is scoped to a Control Plane tenant."""
+    return bool(str(ctx.control_plane_tenant_id or "").strip())
+
+
 async def resolve_default_tenant_id_for_user(db: AsyncSession, user_id: int) -> int | None:
     """Return the user's default active tenant id, falling back to the first active membership."""
     result = await db.execute(

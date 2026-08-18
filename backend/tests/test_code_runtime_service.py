@@ -895,6 +895,7 @@ async def test_list_code_applications_fetches_and_maps_control_plane_apps(monkey
                         "appName": "客户门户",
                         "description": "全代码应用",
                         "provisionStatus": "READY",
+                        "environmentName": "开发环境",
                         "repository": {"url": "https://git.example.com/acme/crm.git"},
                         "owner": {"userId": "u-1", "displayName": "Admin"},
                         "createdAt": "2026-06-30T10:00:00Z",
@@ -951,6 +952,7 @@ async def test_list_code_applications_fetches_and_maps_control_plane_apps(monkey
         "dicts": 0,
         "repository": {"url": "https://git.example.com/acme/crm.git"},
         "owner": {"userId": "u-1", "displayName": "Admin"},
+        "env_name": "开发环境",
         "created_at": "2026-06-30T10:00:00Z",
         "updated_at": "2026-06-30T11:00:00Z",
     }

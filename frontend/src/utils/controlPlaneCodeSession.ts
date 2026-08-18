@@ -2,6 +2,12 @@ import { getCommittedAuthToken } from '@/utils/request'
 
 const STORAGE_KEY = 'ai-builder-control-plane-code-session-v1'
 
+interface ExplicitControlPlaneCodeSessionRecord {
+  version: 1
+  token: string
+  sourceToken: string
+}
+
 export interface ControlPlaneCodeSession {
   token: string
   tenantId: string
@@ -29,16 +35,41 @@ function fromToken(token: string | null): ControlPlaneCodeSession | null {
   }
 }
 
-export function getControlPlaneCodeSession(): ControlPlaneCodeSession | null {
+function explicitRecord(value: string | null): ExplicitControlPlaneCodeSessionRecord | null {
+  if (!value?.startsWith('{')) return null
   try {
-    const stored = fromToken(sessionStorage.getItem(STORAGE_KEY))
-    if (stored) return stored
+    const parsed = JSON.parse(value) as Partial<ExplicitControlPlaneCodeSessionRecord>
+    if (
+      parsed.version !== 1
+      || typeof parsed.token !== 'string'
+      || typeof parsed.sourceToken !== 'string'
+      || !fromToken(parsed.token)
+    ) {
+      return null
+    }
+    return {
+      version: 1,
+      token: parsed.token,
+      sourceToken: parsed.sourceToken,
+    }
   } catch {
-    // Fall through to the initial login ticket when storage is unavailable.
+    return null
   }
-  const initial = fromToken(getCommittedAuthToken())
-  if (initial) setControlPlaneCodeSession(initial.token)
-  return initial
+}
+
+export function getControlPlaneCodeSession(): ControlPlaneCodeSession | null {
+  const committedToken = getCommittedAuthToken()
+  try {
+    const storedValue = sessionStorage.getItem(STORAGE_KEY)
+    const record = explicitRecord(storedValue)
+    if (record?.sourceToken === committedToken) return fromToken(record.token)
+    if (!record && !committedToken) return fromToken(storedValue)
+  } catch {
+    // Fall through to the committed login ticket when storage is unavailable.
+  }
+  const committed = fromToken(committedToken)
+  if (committed) setControlPlaneCodeSession(committed.token)
+  return committed
 }
 
 export function setControlPlaneCodeSession(token: string): ControlPlaneCodeSession | null {
@@ -46,6 +77,29 @@ export function setControlPlaneCodeSession(token: string): ControlPlaneCodeSessi
   if (!session) return null
   try { sessionStorage.setItem(STORAGE_KEY, token) } catch { /* private mode */ }
   return session
+}
+
+export function setExplicitControlPlaneCodeSession(
+  token: string,
+  sourceToken: string,
+  expectedTenantId: string,
+): ControlPlaneCodeSession | null {
+  const session = fromToken(token)
+  if (!session || session.tenantId !== expectedTenantId) return null
+  try {
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
+      version: 1,
+      token,
+      sourceToken,
+    } satisfies ExplicitControlPlaneCodeSessionRecord))
+  } catch {
+    return null
+  }
+  return session
+}
+
+export function clearControlPlaneCodeSession() {
+  try { sessionStorage.removeItem(STORAGE_KEY) } catch { /* private mode */ }
 }
 
 export function controlPlaneCodeAuthorization() {

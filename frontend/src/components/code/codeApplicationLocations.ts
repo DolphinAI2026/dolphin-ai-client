@@ -19,14 +19,9 @@ function fallbackLogicalId(location: CodeExecutionLocation, deploymentId: string
 }
 
 function environmentName(application: CodeApplication): string {
-  const owner = application.owner || {}
-  return stable(
-    application.env_name
-    || owner.displayName
-    || owner.display_name
-    || owner.name
-    || owner.tenant_name,
-  ) || '远程环境'
+  // owner 是应用归属人，不是部署环境；某些 Control Plane 返回数字 owner
+  // 标识，不能把它展示成“远程环境名称”。
+  return stable(application.env_name) || '远程环境'
 }
 
 function toLocation(

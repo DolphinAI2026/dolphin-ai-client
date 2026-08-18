@@ -84,6 +84,15 @@ describe('unified Code application locations', () => {
     expect(filterUnifiedCodeApplications([merged], 'remote')).toEqual([merged])
   })
 
+  it('uses an explicit environment name and never treats owner data as one', () => {
+    const remote = application('remote-crm', 'd-ai-code', {
+      owner: { displayName: 10 } as any,
+    })
+    const [merged] = mergeCodeApplicationLocations([], [remote], 'deployment-a')
+
+    expect(merged.remote?.environment_name).toBe('远程环境')
+  })
+
   it('requires an explicit first choice for two ready locations', () => {
     const [merged] = mergeCodeApplicationLocations(
       [application('local-crm', 'desktop-local', {

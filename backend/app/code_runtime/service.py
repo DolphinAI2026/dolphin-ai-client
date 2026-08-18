@@ -750,6 +750,7 @@ def _normalize_code_application(item: dict[str, Any]) -> dict[str, Any]:
         "dicts": 0,
         "repository": item.get("repository"),
         "owner": item.get("owner"),
+        "env_name": item.get("environmentName") or item.get("environment_name"),
         "created_at": item.get("createdAt") or item.get("created_at"),
         "updated_at": item.get("updatedAt") or item.get("updated_at"),
     }

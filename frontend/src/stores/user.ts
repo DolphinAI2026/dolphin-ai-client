@@ -2,8 +2,8 @@ import { defineStore } from 'pinia'
 import { ref, computed, onScopeDispose } from 'vue'
 import { authApi } from '@/api/auth'
 import type { User, TenantOption } from '@/types'
-import { resetOnboardingCache } from '@/composables/useOnboardingState'
-import { MODE_META, modeForRoutePath, useModeStore } from '@/stores/mode'
+import { safeLoginRedirectPath } from '@/router/loginRedirect'
+import { defaultProductHome, loadProductAvailability } from '@/stores/productAvailability'
 import {
   beginAuthSessionAlignment,
   beginAuthSessionBootstrap,
@@ -13,6 +13,11 @@ import {
   getAuthSessionState,
   subscribeToAuthSessionClear,
 } from '@/utils/request'
+import {
+  clearControlPlaneCodeSession,
+  setExplicitControlPlaneCodeSession,
+  setControlPlaneCodeSession,
+} from '@/utils/controlPlaneCodeSession'
 
 let activeSessionOwnerCleanup: (() => void) | null = null
 let activeSessionOwner: symbol | null = null
@@ -59,6 +64,7 @@ export const useUserStore = defineStore('user', () => {
   let tenantSwitchAbortController: AbortController | null = null
   let tenantSelectionGeneration = 0
   let tenantSelectionAbortController: AbortController | null = null
+  let controlPlaneCodeTenantSwitchGeneration = 0
   let tenantNavigationEpoch = 0
   let sessionOwner: symbol | null = null
   let sessionOwnerReleased = false
@@ -122,35 +128,19 @@ export const useUserStore = defineStore('user', () => {
     }
   }
 
-  const currentModeTenantHome = (tenantPublicId: string) => {
+  const defaultProductTenantHome = async (tenantPublicId: string) => {
     const basePath = currentAppBasePath()
     const prefix = basePath === '/' ? '' : basePath
-    const pathname = typeof window === 'undefined' ? '' : window.location.pathname
-    const routePath = (
-      basePath !== '/'
-      && (pathname === basePath || pathname.startsWith(`${basePath}/`))
-    )
-      ? `/${pathname.slice(basePath.length).replace(/^\/+/, '')}`
-      : pathname
-    const mode = routePath
-      ? modeForRoutePath(routePath)
-      : useModeStore().mode
-    const home = MODE_META[mode].home
+    const home = defaultProductHome(await loadProductAvailability())
     return `${prefix}${home}?tenantId=${encodeURIComponent(tenantPublicId)}`
   }
 
-  const storageAlignmentReloadDestination = (): string | null => {
+  const storageAlignmentReloadDestination = async (): Promise<string | null> => {
     if (typeof window === 'undefined') return null
     const basePath = currentAppBasePath()
     const prefix = basePath === '/' ? '' : basePath
-    const pathname = window.location.pathname
-    const routePath = (
-      basePath !== '/'
-      && (pathname === basePath || pathname.startsWith(`${basePath}/`))
-    )
-      ? `/${pathname.slice(basePath.length).replace(/^\/+/, '')}`
-      : pathname
-    return normalizeTenantDestination(`${prefix}${MODE_META[modeForRoutePath(routePath)].home}`)
+    const home = defaultProductHome(await loadProductAvailability())
+    return normalizeTenantDestination(`${prefix}${home}`)
   }
 
   // 多租户状态
@@ -178,6 +168,7 @@ export const useUserStore = defineStore('user', () => {
     token.value = newToken
     commitAuthSession(newToken)
     localStorage.setItem('token', newToken)
+    if (!setControlPlaneCodeSession(newToken)) clearControlPlaneCodeSession()
   }
 
   const setToken = (newToken: string) => {
@@ -199,6 +190,7 @@ export const useUserStore = defineStore('user', () => {
     try {
       localStorage.setItem('token', newToken)
       commitAuthSession(newToken)
+      if (!setControlPlaneCodeSession(newToken)) clearControlPlaneCodeSession()
       candidateCommitted = true
       token.value = newToken
       user.value = nextUser
@@ -234,6 +226,7 @@ export const useUserStore = defineStore('user', () => {
     localStorage.setItem('token', newToken)
     advanceTenantNavigationEpoch()
     const committedSession = commitAuthSession(newToken)
+    if (!setControlPlaneCodeSession(newToken)) clearControlPlaneCodeSession()
     token.value = newToken
     user.value = nextUser
     return committedSession
@@ -250,13 +243,15 @@ export const useUserStore = defineStore('user', () => {
     token.value = null
     user.value = null
     localStorage.removeItem('admin_token')
-    resetOnboardingCache()
   }
 
   const clearToken = () => {
     advanceTenantNavigationEpoch()
     clearAuthSession()
     localStorage.removeItem('token')
+    localStorage.removeItem('access_token')
+    localStorage.removeItem('tenant_id')
+    clearControlPlaneCodeSession()
   }
 
   const ownsCurrentSession = (requestToken: string, requestRevision: number) => {
@@ -344,16 +339,24 @@ export const useUserStore = defineStore('user', () => {
 
     // 单租户或已选择租户 — 直接登录
     setToken(res.access_token!)
+    if (res.web_console_access_token) {
+      localStorage.setItem('access_token', res.web_console_access_token)
+      if (res.web_console_tenant_id) {
+        localStorage.setItem('tenant_id', res.web_console_tenant_id)
+      } else {
+        localStorage.removeItem('tenant_id')
+      }
+    } else {
+      localStorage.removeItem('access_token')
+      localStorage.removeItem('tenant_id')
+    }
     await fetchUser()
-    return { requiresSelection: false }
-  }
-
-  const desktopLogin = async (username: string, password: string) => {
-    const { desktopLogin: api } = await import('@/api/desktopAuth')
-    const res: any = await api({ username, password })
-    setToken(res.access_token)
-    await fetchUser()
-    return { ok: true }
+    return {
+      requiresSelection: false,
+      // Control Plane login selects the Code shell explicitly. Do not discard
+      // the server-directed internal entry route and fall back to Builder home.
+      entryPath: safeLoginRedirectPath(res.entry_path),
+    }
   }
 
   const selectTenant = async (
@@ -510,6 +513,34 @@ export const useUserStore = defineStore('user', () => {
     }
   }
 
+  const switchControlPlaneCodeTenant = async (
+    targetTenantId: string,
+    authToken: string,
+  ) => {
+    const sourceSession = getAuthSessionState()
+    const generation = ++controlPlaneCodeTenantSwitchGeneration
+    const candidate = await authApi.switchControlPlaneCodeTenant(targetTenantId, authToken)
+    const currentSession = getAuthSessionState()
+    if (
+      generation !== controlPlaneCodeTenantSwitchGeneration
+      || currentSession.revision !== sourceSession.revision
+      || currentSession.token !== sourceSession.token
+    ) {
+      return 'stale_cancelled' as const
+    }
+    if (
+      !sourceSession.token
+      || !setExplicitControlPlaneCodeSession(
+        candidate.access_token,
+        sourceSession.token,
+        targetTenantId,
+      )
+    ) {
+      throw new Error('control-plane tenant candidate mismatch')
+    }
+    return 'committed' as const
+  }
+
   const switchTenant = async (targetTenantId: number | string) => {
     const navigationEpoch = advanceTenantNavigationEpoch()
     if (String(targetTenantId) === String(tenantId.value || '')) return
@@ -533,7 +564,7 @@ export const useUserStore = defineStore('user', () => {
     await switchTenantContext(
       targetTenantId,
       targetTenant.tenant_public_id,
-      currentModeTenantHome(targetTenant.tenant_public_id),
+      await defaultProductTenantHome(targetTenant.tenant_public_id),
       navigationEpoch,
     )
   }
@@ -555,15 +586,23 @@ export const useUserStore = defineStore('user', () => {
     if (localStorage.getItem('token') !== eventToken) return
     if (!ownsSessionOwner()) return
     beginAuthSessionAlignment(eventToken)
+    const alignmentRevision = getAuthSessionState().revision
     advanceTenantNavigationEpoch()
-    const destination = storageAlignmentReloadDestination()
-    if (destination) {
+    void storageAlignmentReloadDestination().then((destination) => {
+      const currentSession = getAuthSessionState()
+      if (
+        !destination
+        || !ownsSessionOwner()
+        || localStorage.getItem('token') !== eventToken
+        || getAuthSessionBootstrapToken() !== eventToken
+        || currentSession.revision !== alignmentRevision
+      ) return
       try {
         window.location.replace(destination)
       } catch {
         // The old page remains auth-pending if browser navigation is blocked.
       }
-    }
+    })
   }
   if (typeof window !== 'undefined') {
     window.addEventListener('storage', storageListener)
@@ -609,9 +648,9 @@ export const useUserStore = defineStore('user', () => {
     clearToken,
     fetchUser,
     login,
-    desktopLogin,
     selectTenant,
     switchTenantContext,
+    switchControlPlaneCodeTenant,
     switchTenant,
     fetchAvailableTenants,
     advanceTenantNavigationEpoch,
