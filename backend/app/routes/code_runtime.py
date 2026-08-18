@@ -1418,7 +1418,7 @@ async def list_code_runtime_rail_history(
     request: Request,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    source: Literal["local", "remote"] = "remote",
+    source: Literal["local", "remote", "all"] = "remote",
     scope: Literal["user", "tenant"] = "user",
 ):
     started = time.monotonic()

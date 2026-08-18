@@ -2512,7 +2512,7 @@ async def test_control_plane_code_sessions_are_isolated_by_remote_tenant(db_sess
 
 
 @pytest.mark.asyncio
-async def test_list_code_runtime_rail_history_includes_shell_session_without_binding(db_session):
+async def test_list_code_runtime_rail_history_accepts_all_source_and_includes_shell_session_without_binding(db_session):
     from app.routes.code_runtime import list_code_runtime_rail_history
 
     db_session.add(AIChatSession(
@@ -2527,7 +2527,7 @@ async def test_list_code_runtime_rail_history_includes_shell_session_without_bin
     ))
     await db_session.commit()
 
-    result = await list_code_runtime_rail_history(_request(), _ctx(), db_session)
+    result = await list_code_runtime_rail_history(_request(), _ctx(), db_session, source="all")
 
     assert len(result["apps"]) == 1
     app = result["apps"][0]
