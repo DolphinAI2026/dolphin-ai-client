@@ -102,6 +102,10 @@ class CreateCodeApplicationRequest(BaseModel):
     seed_project_id: Optional[str] = None
     local_application: bool = False
     local_workspace_path: Optional[str] = None
+    directory_mode: Literal["new_directory", "existing_directory"] = "new_directory"
+    initialize_project: bool = False
+    linked_remote_application_id: Optional[str] = None
+    linked_remote_deployment_id: Optional[str] = None
 
 
 class RebindLocalCodeWorkspaceRequest(BaseModel):
@@ -657,6 +661,10 @@ async def create_code_runtime_application(
         seed_project_id=body.seed_project_id,
         local_application=body.local_application,
         local_workspace_path=body.local_workspace_path,
+        directory_mode=body.directory_mode,
+        initialize_project=body.initialize_project,
+        linked_remote_application_id=body.linked_remote_application_id,
+        linked_remote_deployment_id=body.linked_remote_deployment_id,
         db=db,
         ctx=ctx,
         authorization_header=authorization,
@@ -780,10 +788,11 @@ async def open_code_runtime_session(
             "checking_project" if uses_local_builder else "provisioning",
             "opening",
         )
-        if uses_local_builder:
-            authorization, auth_provider = None, None
-        else:
-            authorization, auth_provider = await _control_plane_request_auth(request, ctx, db)
+        # A local workspace never opens a remote Code runtime, but it can use
+        # the logged-in Control Plane's Coding model catalog through the local
+        # model proxy.  Keep the authorization for that catalog request rather
+        # than falling back to an unrelated locally configured model.
+        authorization, auth_provider = await _control_plane_request_auth(request, ctx, db)
         open_kwargs: dict[str, Any] = {}
         open_kwargs["on_local_phase"] = lambda phase: _code_open_state.__setitem__(
             phase_key,
@@ -2300,6 +2309,18 @@ def _inject_shell_config(
         "var config=__SHELL_CONFIG__;"
         "window.__DOLPHIN_CODE_SHELL__=Object.assign({},window.__DOLPHIN_CODE_SHELL__||{},config);"
         "window.__APAAS_SHELL__=Object.assign({},window.__APAAS_SHELL__||{},config);"
+        # Some local Coding runtimes do not implement the optional shell
+        # protocol.  Notify the outer shell once the proxied document has
+        # loaded so a healthy Runtime cannot be mistaken for a failed one.
+        "var notifyReady=function(){"
+        "if(window.parent===window||!config.webConsoleOrigin)return;"
+        "var frameKey=new URLSearchParams(window.location.search).get('frameKey');"
+        "var message={type:'builder.ready'};"
+        "if(frameKey){message.frameKey=frameKey;message.payload={frameKey:frameKey};}"
+        "window.parent.postMessage(message,config.webConsoleOrigin);"
+        "};"
+        "if(document.readyState==='complete'){notifyReady();}"
+        "else{window.addEventListener('load',notifyReady,{once:true});}"
         "})();"
         "</script>"
     ).replace("__SHELL_CONFIG__", shell_config).encode("utf-8")

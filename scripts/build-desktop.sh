@@ -298,7 +298,8 @@ export DATABASE_URL="sqlite+aiosqlite:///:memory:"
 export ALLOW_DEFAULT_ENCRYPTION_KEY="1"
 .venv/bin/python -m PyInstaller dolphin-ai-sidecar.spec --clean --noconfirm
 "$ROOT/backend/.venv/bin/python" "$ROOT/scripts/verify-desktop-sidecar.py" \
-    --sidecar "$ROOT/backend/dist/dolphin-ai-sidecar"
+    --sidecar "$ROOT/backend/dist/dolphin-ai-sidecar" \
+    --timeout-seconds 60
 
 echo ""
 echo "==> 3/4 放置 sidecar 二进制 (triple=$TRIPLE)"

@@ -565,7 +565,9 @@ async function openCurrentSession() {
     startOpenStatusPolling(sessionRef, requestSeq)
     const openedResult = await awaitCurrentCodeFrameOpenRequest(
       isCurrentRequest,
-      () => codeRuntimeApi.openSession(sessionRef),
+      () => codeRuntimeApi.openSession(sessionRef, {
+        local: currentCodeApplicationSource() === 'local',
+      }),
     )
     if (openedResult.status === 'stale' || !isCurrentRequest()) return
     const opened = openedResult.value

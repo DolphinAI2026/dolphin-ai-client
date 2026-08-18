@@ -642,12 +642,34 @@ def test_derive_runtime_base_url_strips_builder_suffix():
     assert derive_runtime_base_url("https://sandbox.example.com/builder") == "https://sandbox.example.com"
 
 
-def test_control_plane_base_url_defaults_to_local_dev_port(monkeypatch):
+def test_control_plane_base_url_defaults_to_workspace_code_path(monkeypatch):
     from app.code_runtime.service import control_plane_base_url
 
     monkeypatch.delenv("DOLPHIN_CODE_CONTROL_PLANE_URL", raising=False)
 
-    assert control_plane_base_url() == "http://127.0.0.1:8080"
+    assert control_plane_base_url() == "https://om-demo.dfy.definesys.cn/control-plane"
+
+
+def test_control_plane_base_url_derives_code_path_from_matching_workspace_origin(monkeypatch):
+    from app.code_runtime.service import control_plane_base_url
+    from app.config import settings
+
+    monkeypatch.setenv("DOLPHIN_WORKSPACE_BASE_URL", "https://om-demo.dfy.definesys.cn/")
+    monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_URL", "https://om-demo.dfy.definesys.cn")
+    monkeypatch.setattr(settings, "dolphin_code_control_plane_url", "")
+
+    assert control_plane_base_url() == "https://om-demo.dfy.definesys.cn/control-plane"
+
+
+def test_control_plane_base_url_preserves_distinct_explicit_api_origin(monkeypatch):
+    from app.code_runtime.service import control_plane_base_url
+    from app.config import settings
+
+    monkeypatch.setenv("DOLPHIN_WORKSPACE_BASE_URL", "https://login.example.com")
+    monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_URL", "https://code.example.com")
+    monkeypatch.setattr(settings, "dolphin_code_control_plane_url", "")
+
+    assert control_plane_base_url() == "https://code.example.com"
 
 
 def test_control_plane_headers_prefer_user_token_and_add_workspace_tenant(monkeypatch):

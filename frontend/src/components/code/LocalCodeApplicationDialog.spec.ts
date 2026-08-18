@@ -25,6 +25,7 @@ describe('LocalCodeApplicationDialog', () => {
   it('uses one dialog with mutually exclusive new and existing directory modes', () => {
     expect(dialogSource).toContain('data-testid="local-app-name"')
     expect(dialogSource).toContain('data-testid="local-app-code"')
+    expect(dialogSource.match(/@keydown\.enter\.prevent/g)).toHaveLength(2)
     expect(dialogSource).toContain('data-testid="local-app-project-path"')
     expect(dialogSource).toContain('新建项目')
     expect(dialogSource).toContain('打开已有项目')

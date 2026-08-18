@@ -44,6 +44,12 @@
               <span>{{ item.label }}</span>
               <span class="menu-local-dot" aria-label="仅本机" />
             </button>
+
+            <div class="settings-nav-label settings-nav-label-ai">共享配置</div>
+            <button type="button" class="desktop-settings-menu-item" @click="openSharedConfiguration">
+              <span class="menu-icon"><AppIcon name="settings" :size="16" /></span>
+              <span>共享配置</span>
+            </button>
           </aside>
 
           <section class="desktop-settings-panel">
@@ -195,6 +201,8 @@ import BuilderFrame from '@/components/BuilderFrame.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import DesktopAboutDialog from '@/components/desktop/DesktopAboutDialog.vue'
 import DesktopServiceExamples from '@/components/desktop/DesktopServiceExamples.vue'
+import { useUserStore } from '@/stores/user'
+import { openControlPlaneConsole } from '@/utils/controlPlaneConsole'
 import {
   buildDesktopSetupInput,
   discoverDesktopService,
@@ -236,6 +244,7 @@ const sectionMeta: Record<SettingsSection, { title: string; description: string;
 }
 
 const activeSection = ref<SettingsSection>('remote')
+const user = useUserStore()
 const snapshot = ref<DesktopStateSnapshot | null>(null)
 const serviceUrl = ref('')
 const discovery = ref<DesktopDiscoveryDocument | null>(null)
@@ -290,6 +299,19 @@ async function rediscover() {
   operationError.value = ''
   try { discovery.value = await discoverDesktopService(serviceUrl.value.trim()) } catch (error) { operationError.value = desktopErrorMessage(error, '无法连接远程服务') }
   finally { discovering.value = false }
+}
+
+function openSharedConfiguration() {
+  const config = snapshot.value?.config
+  const baseUrl = config?.discovery_url || config?.discovery?.auth.login_url || config?.login.base_url || ''
+  if (!baseUrl || config?.discovery?.auth.provider !== 'control_plane') {
+    operationError.value = '请先连接 Control Plane，才能打开共享配置。'
+    return
+  }
+  openControlPlaneConsole('/capabilities', {
+    accessToken: user.token,
+    tenantId: user.user?.control_plane_tenant_id,
+  }, baseUrl)
 }
 
 async function saveConnection() {

@@ -425,7 +425,21 @@ def control_plane_base_url() -> str:
         or (settings.dolphin_code_control_plane_url or "").strip()
     )
     if configured:
-        return configured.rstrip("/")
+        configured = configured.rstrip("/")
+        # The Dolphin login origin is a gateway, whereas the Code Control Plane
+        # is mounted below /control-plane.  A common local-development setup
+        # supplied the login origin for both variables, which made the API
+        # request hit the SPA index page (HTTP 200, text/html) instead of the
+        # Control Plane JSON API.  Only derive the suffix when the two origins
+        # are the same; a separately configured Control Plane endpoint remains
+        # an exact API base URL and is left untouched.
+        workspace = (
+            os.getenv("DOLPHIN_WORKSPACE_BASE_URL", "").strip()
+            or (settings.dolphin_workspace_base_url or "").strip()
+        ).rstrip("/")
+        if workspace and configured == workspace and not configured.endswith("/control-plane"):
+            return f"{configured}/control-plane"
+        return configured
 
     # The old localhost fallback pointed desktop/web sessions at a developer's
     # machine whenever startup forgot to propagate the remote URL. Derive the

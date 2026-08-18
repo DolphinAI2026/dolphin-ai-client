@@ -23,6 +23,7 @@
           maxlength="80"
           autofocus
           placeholder="例如：销售线索评分助手"
+          @keydown.enter.prevent
         />
       </el-form-item>
 
@@ -32,6 +33,7 @@
           data-testid="local-app-code"
           maxlength="50"
           @input="codeEdited = true"
+          @keydown.enter.prevent
         />
       </el-form-item>
 

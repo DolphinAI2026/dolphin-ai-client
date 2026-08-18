@@ -501,6 +501,32 @@ async def test_register_existing_non_git_directory_does_not_initialize_git(
 
 
 @pytest.mark.asyncio
+async def test_opening_existing_non_git_workspace_initializes_git_metadata(
+    db,
+    ctx,
+    tmp_path,
+):
+    workspace_path = tmp_path / "existing-project"
+    workspace_path.mkdir()
+    (workspace_path / "README.md").write_text("already here", encoding="utf-8")
+    workspace = await ensure_registered_local_workspace(
+        db,
+        ctx,
+        application_id="local-existing-project",
+        display_name="Existing project",
+        workspace_path=workspace_path,
+        directory_mode="existing_directory",
+    )
+    code_session = await _create_code_session(db, workspace_id=workspace.ws_id)
+
+    resolved = await resolve_registered_workspace(db, code_session, ctx)
+
+    assert resolved.ws_id == workspace.ws_id
+    assert (workspace_path / ".git").is_dir()
+    assert (workspace_path / "README.md").read_text(encoding="utf-8") == "already here"
+
+
+@pytest.mark.asyncio
 async def test_register_new_directory_non_git_only_creates_directory(
     db,
     ctx,

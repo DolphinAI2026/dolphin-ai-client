@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "DolphinAI",
-  "version": "0.2.66",
+  "version": "0.4.1",
   "identifier": "com.definesys.dolphin-ai",
   "build": {
     "frontendDist": "../frontend/dist-desktop",
@@ -15,9 +15,14 @@
   },
   "bundle": {
     "active": true,
-    "createUpdaterArtifacts": true,
-    "targets": ["app", "dmg"],
-    "resources": ["resources/agent-runtime"],
+    "createUpdaterArtifacts": false,
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "resources": [
+      "resources/agent-runtime"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -25,10 +30,14 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/dolphin-ai-sidecar"],
+    "externalBin": [
+      "binaries/dolphin-ai-sidecar"
+    ],
     "windows": {
       "nsis": {
-        "languages": ["SimpChinese"]
+        "languages": [
+          "SimpChinese"
+        ]
       }
     },
     "macOS": {
@@ -37,7 +46,9 @@
   },
   "plugins": {
     "updater": {
-      "endpoints": ["https://github.com/DolphinAI2026/dolphin-ai-releases/releases/latest/download/latest.json"],
+      "endpoints": [
+        "https://github.com/DolphinAI2026/dolphin-ai-releases/releases/latest/download/latest.json"
+      ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENGOERGRUE1NzMwNzZGRkQKUldUOWJ3ZHpwZjZOei9KdklsdkhvbFhQTXdCZWl3cFhobnNYUXRDVUNwVUwydEtMQWtSMWJJc0UK"
     }
   }

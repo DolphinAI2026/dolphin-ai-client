@@ -531,6 +531,8 @@ const NAV = computed<NavItem[]>(() => {
   return items.filter(item => !desktopHidden(item.path))
 })
 const auditLogNavItem: NavItem = { key: 'audit-logs', label: '管理审计日志', icon: 'activity', path: '/audit-logs' }
+// 审计日志保留直达路由，默认不在主侧栏曝光。
+const showAuditLogNavItem = false
 
 const userAccount = computed(() => user.user?.username || '')
 const userName = computed(() => user.user?.display_name || userAccount.value || '未登录')
@@ -1010,7 +1012,7 @@ function renderIcon(name: string): string {
           </div>
 
           <a
-            v-if="user.isTenantAdmin"
+            v-if="showAuditLogNavItem && user.isTenantAdmin"
             class="console-row"
             :class="{ active: isActive(auditLogNavItem.path) }"
             :href="resolveHref(auditLogNavItem.path)"

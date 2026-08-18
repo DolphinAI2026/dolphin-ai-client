@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   CODE_RUNTIME_ACTIVATION_RETRY_DELAYS_MS,
+  CODE_RUNTIME_LOCAL_WORKSPACE_OPEN_TIMEOUT_MS,
   CODE_RUNTIME_WORKSPACE_OPEN_TIMEOUT_MS,
   resolveCodeRuntimeEmbedUrl,
 } from './codeRuntime'
@@ -33,6 +34,8 @@ describe('Code runtime browser-authenticated session APIs', () => {
 
   it('keeps the browser open request alive beyond the Control Plane cold-start budget', () => {
     expect(CODE_RUNTIME_WORKSPACE_OPEN_TIMEOUT_MS).toBe(690_000)
-    expect(apiSource).toContain('timeout: CODE_RUNTIME_WORKSPACE_OPEN_TIMEOUT_MS')
+    expect(CODE_RUNTIME_LOCAL_WORKSPACE_OPEN_TIMEOUT_MS).toBe(150_000)
+    expect(apiSource).toContain('options?.local')
+    expect(apiSource).toContain('CODE_RUNTIME_LOCAL_WORKSPACE_OPEN_TIMEOUT_MS')
   })
 })

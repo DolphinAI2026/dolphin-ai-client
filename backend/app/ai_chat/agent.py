@@ -994,7 +994,7 @@ async def _build_initial_messages(
 MAX_TURNS = 25  # 工具循环最大轮数（统一 config 的 25：app 配置/codegen 多步任务需要）
 
 _SYSTEM_ASSISTANT_INTRO_RESPONSE = (
-    "你好，我是睿鲸 AI 的 Dolphin Code 系统助手，负责企业 Code 的系统级资产和标准能力建设。\n"
+    "你好，我是 DolphinAI 的 Dolphin Code 系统助手，负责企业 Code 的系统级资产和标准能力建设。\n"
     "我可以协助四类工作：\n"
     "1. 盘点企业 Code 能力现状，给出种子工程、环境、工程规范和能力建设顺序。\n"
     "2. 查询和使用知识与 Skill，结合上传文件整理系统规范或资产草稿。\n"

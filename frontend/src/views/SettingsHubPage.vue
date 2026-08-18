@@ -149,10 +149,10 @@ const sections = computed<SettingSection[]>(() => [
     description: '模型、技能和 AI 工具等个人能力偏好。',
     icon: 'sparkles',
     items: [
-      { key: 'models', label: '模型配置', description: '远程模型目录由 Control Plane 统一维护；本地模型在下方单独补充。', icon: 'sparkles', tone: 'blue', path: isControlPlaneAccount.value ? undefined : (isDesktop ? undefined : '/platform-envs?tab=llm'), externalPath: isControlPlaneAccount.value ? '/ai-models' : undefined, visible: () => isDesktop || user.isTenantAdmin, status: isControlPlaneAccount.value ? '打开 Control Plane' : (isDesktop ? '需要 Control Plane' : undefined), statusTone: isDesktop && !isControlPlaneAccount.value ? 'warn' : 'muted' },
-      { key: 'skills', label: '技能', description: '远程技能由 Control Plane 统一维护，本机只加载允许的本地补充。', icon: 'wand', tone: 'purple', path: isControlPlaneAccount.value ? undefined : (isDesktop ? undefined : '/skills'), externalPath: isControlPlaneAccount.value ? '/skill-assets' : undefined, status: isControlPlaneAccount.value ? '打开 Control Plane' : (isDesktop ? '需要 Control Plane' : undefined), statusTone: isDesktop && !isControlPlaneAccount.value ? 'warn' : 'muted' },
-      { key: 'mcp', label: 'MCP 工具', description: '远程 MCP 服务由 Control Plane 统一维护，本地运行时只负责加载本地补充。', icon: 'tool', tone: 'green', path: isControlPlaneAccount.value ? undefined : (isDesktop ? undefined : '/admin/mcp'), externalPath: isControlPlaneAccount.value ? '/mcp-services' : undefined, visible: () => user.isPlatformAdmin || isDesktop, status: isControlPlaneAccount.value ? '打开 Control Plane' : (isDesktop ? '需要 Control Plane' : undefined), statusTone: isDesktop && !isControlPlaneAccount.value ? 'warn' : 'muted' },
-      { key: 'knowledge', label: '知识库', description: '远程知识库由 Control Plane 统一维护，本机只使用远程授权内容。', icon: 'book', tone: 'orange', path: isControlPlaneAccount.value ? undefined : (isDesktop ? undefined : '/knowledge'), externalPath: isControlPlaneAccount.value ? '/knowledge-bases' : undefined, visible: () => user.isPlatformAdmin || isDesktop, status: isControlPlaneAccount.value ? '打开 Control Plane' : (isDesktop ? '需要 Control Plane' : undefined), statusTone: isDesktop && !isControlPlaneAccount.value ? 'warn' : 'muted' },
+      { key: 'models', label: '模型配置', description: '在 Control Plane 管理当前组织可用模型和默认模型。', icon: 'sparkles', tone: 'blue', externalPath: '/ai-models', visible: () => isDesktop || user.isTenantAdmin, status: '打开 Control Plane', statusTone: 'muted' },
+      { key: 'skills', label: '技能', description: '在 Control Plane 管理共享技能和授权范围。', icon: 'wand', tone: 'purple', externalPath: '/skill-assets', status: '打开 Control Plane', statusTone: 'muted' },
+      { key: 'mcp', label: 'MCP 工具', description: '在 Control Plane 管理共享 MCP 服务。', icon: 'tool', tone: 'green', externalPath: '/mcp-services', visible: () => user.isPlatformAdmin || isDesktop, status: '打开 Control Plane', statusTone: 'muted' },
+      { key: 'knowledge', label: '知识库', description: '在 Control Plane 管理共享知识库和授权。', icon: 'book', tone: 'orange', externalPath: '/knowledge-bases', visible: () => user.isPlatformAdmin || isDesktop, status: '打开 Control Plane', statusTone: 'muted' },
       { key: 'local-models', label: '本地模型补充', description: '仅桌面端本地工程使用的 SQLite 模型，不会写入远程组织。', icon: 'cpu', tone: 'slate', path: '/platform-envs?tab=llm&source=local', visible: () => isDesktop, status: '仅本机可用', statusTone: 'muted' },
     ],
   },
@@ -171,10 +171,10 @@ const sections = computed<SettingSection[]>(() => [
     description: '面向当前组织或部署环境的外部账号和凭据。',
     icon: 'settings',
     items: [
-      { key: 'apaas', label: 'aPaaS 租户与账号', description: '远程 aPaaS 绑定由 Control Plane 统一维护。', icon: 'building', tone: 'blue', path: isControlPlaneAccount.value ? undefined : (isDesktop ? undefined : '/platform-envs?tab=envs'), externalPath: isControlPlaneAccount.value ? '/apaas-access' : undefined, visible: () => isDesktop || user.isTenantAdmin, status: isControlPlaneAccount.value ? '打开 Control Plane' : (isDesktop ? '需要 Control Plane' : undefined), statusTone: isDesktop && !isControlPlaneAccount.value ? 'warn' : 'muted' },
+      { key: 'apaas', label: 'aPaaS 租户与账号', description: '在 Control Plane 管理组织的 aPaaS 接入。', icon: 'building', tone: 'blue', externalPath: '/apaas-access', visible: () => isDesktop || user.isTenantAdmin, status: '打开 Control Plane', statusTone: 'muted' },
       { key: 'git', label: 'Git 认证与账号', description: isDesktop ? '本地应用目录仍在工作区维护；远程 Git 凭据由远程控制台维护。' : 'Builder 服务侧凭据，在工作区和项目中管理 GitHub / GitLab 连接。', icon: 'link', tone: 'orange', path: '/workspace-catalog', status: isDesktop ? '本地工作区 / 远程凭据分开' : '从工作区目录进入连接管理', statusTone: 'muted' },
-      { key: 'k8s', label: '运行环境', description: '远程运行环境和发布凭据由 Control Plane 管理。', icon: 'database', tone: 'green', path: isControlPlaneAccount.value ? undefined : (isDesktop ? undefined : '/platform-envs?tab=envs'), externalPath: isControlPlaneAccount.value ? '/environments' : undefined, status: isControlPlaneAccount.value ? '打开 Control Plane' : (isDesktop ? '需要 Control Plane' : '由发布流程读取'), statusTone: isDesktop && !isControlPlaneAccount.value ? 'warn' : 'muted' },
-      { key: 'members', label: '组织账号与成员', description: '远程组织成员和权限由 Control Plane 管理。', icon: 'users', tone: 'slate', path: isControlPlaneAccount.value ? undefined : (isDesktop ? undefined : '/tenant-users'), externalPath: isControlPlaneAccount.value ? '/admin-users' : undefined, visible: () => user.isTenantAdmin || isDesktop, status: isControlPlaneAccount.value ? '打开 Control Plane' : (isDesktop ? '需要 Control Plane' : undefined), statusTone: isDesktop && !isControlPlaneAccount.value ? 'warn' : 'muted' },
+      { key: 'k8s', label: '运行环境', description: '在 Control Plane 管理远程运行环境和发布凭据。', icon: 'database', tone: 'green', externalPath: '/environments', status: '打开 Control Plane', statusTone: 'muted' },
+      { key: 'members', label: '组织账号与成员', description: '在 Control Plane 管理组织成员和权限。', icon: 'users', tone: 'slate', externalPath: '/admin-users', visible: () => user.isTenantAdmin || isDesktop, status: '打开 Control Plane', statusTone: 'muted' },
     ],
   },
   {
@@ -222,7 +222,7 @@ async function openRemoteItem(path: string) {
     router.push('/desktop-settings')
     return
   }
-  if (!baseUrl) {
+  if (isDesktop && !baseUrl) {
     router.push('/desktop-settings')
     return
   }

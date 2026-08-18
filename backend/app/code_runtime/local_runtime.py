@@ -226,7 +226,32 @@ def _validate_workspace_directory(raw_path: str) -> Path:
             ).stdout.strip()
         ).resolve(strict=True)
     except (GitCommandError, OSError) as exc:
-        raise _error(409, _WORKSPACE_INVALID, "注册的本地工作区不是 Git 仓库") from exc
+        # Local Runtime needs a repository metadata directory for its isolated
+        # agent sessions. Existing user projects, however, need not have been
+        # created with Git. Bootstrap an empty local repository on first open;
+        # this only creates .git and never changes project files.
+        initialized = git(repository_path, "init", "--quiet", check=False)
+        if initialized.returncode != 0:
+            raise _error(
+                409,
+                _WORKSPACE_INVALID,
+                "无法为本地项目初始化 Git 元数据",
+            ) from exc
+        try:
+            git_top_level = Path(
+                git(
+                    repository_path,
+                    "rev-parse",
+                    "--path-format=absolute",
+                    "--show-toplevel",
+                ).stdout.strip()
+            ).resolve(strict=True)
+        except (GitCommandError, OSError) as retry_exc:
+            raise _error(
+                409,
+                _WORKSPACE_INVALID,
+                "无法为本地项目初始化 Git 元数据",
+            ) from retry_exc
     if _workspace_path_identity(git_top_level) != _workspace_path_identity(repository_path):
         raise _error(409, _WORKSPACE_INVALID, "注册路径必须是 Git 顶层目录")
     return Path(local_workspace_path_text(repository_path))

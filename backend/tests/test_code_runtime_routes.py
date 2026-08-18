@@ -1814,6 +1814,9 @@ def test_code_runtime_shell_config_exposes_external_session_rail_flag():
     assert b'"hideHistory":true' in injected
     assert b'"hideNewSession":true' in injected
     assert b"window.__APAAS_SHELL__" in injected
+    assert b"type:'builder.ready'" in injected
+    assert b"window.parent.postMessage(message,config.webConsoleOrigin)" in injected
+    assert b"URLSearchParams(window.location.search).get('frameKey')" in injected
     assert b"MutationObserver" not in injected
     assert b"querySelectorAll" not in injected
     assert b"<style>" not in injected
@@ -1844,10 +1847,7 @@ def test_code_runtime_shell_config_uses_script_safe_json():
         dangerous_origin,
         '/ai-builder/"quoted"</script>',
     ).decode("utf-8")
-    config_source = injected.split("window.__APAAS_SHELL__||{},", 1)[1].split(
-        ");})();</script>",
-        1,
-    )[0]
+    config_source = injected.split("var config=", 1)[1].split(";window.__DOLPHIN_CODE_SHELL__", 1)[0]
 
     assert "</script>" not in config_source.lower()
     assert "\\u003c/script\\u003e" in config_source.lower()
@@ -1892,6 +1892,10 @@ async def test_create_code_runtime_application_delegates_to_control_plane(
             app_name="销售线索评分助手",
             app_code="sales-lead-helper",
             seed_project_id="90001",
+            directory_mode="existing_directory",
+            initialize_project=True,
+            linked_remote_application_id="remote-app-1",
+            linked_remote_deployment_id="deployment-1",
         ),
         SimpleNamespace(headers={"authorization": "Bearer builder-token"}),
         ctx,
@@ -1903,6 +1907,14 @@ async def test_create_code_runtime_application_delegates_to_control_plane(
         "app_name": "销售线索评分助手",
         "app_code": "sales-lead-helper",
         "seed_project_id": "90001",
+        "local_application": False,
+        "local_workspace_path": None,
+        "directory_mode": "existing_directory",
+        "initialize_project": True,
+        "linked_remote_application_id": "remote-app-1",
+        "linked_remote_deployment_id": "deployment-1",
+        "db": db_session,
+        "ctx": ctx,
         "authorization_header": "Bearer user-token",
         "delegated_context": ctx,
         "auth_provider": None,
@@ -1961,7 +1973,7 @@ async def test_control_plane_request_refreshes_expired_user_token(
 
 
 @pytest.mark.asyncio
-async def test_open_local_code_runtime_session_does_not_require_control_plane_auth(
+async def test_open_local_code_runtime_session_uses_control_plane_auth_for_online_models(
     db_session,
     monkeypatch,
 ):
@@ -1980,16 +1992,28 @@ async def test_open_local_code_runtime_session_does_not_require_control_plane_au
     )
     db_session.add(session)
     await db_session.flush()
-    monkeypatch.setenv("DOLPHIN_CODE_BUILDER_URL", "http://127.0.0.1:61137/builder/")
 
-    async def fail_if_control_plane_auth_is_requested(*_args, **_kwargs):
-        raise AssertionError("local Code sessions must not request Control Plane auth")
+    auth_calls = 0
+    open_calls: list[dict] = []
+
+    async def control_plane_auth_for_online_models(*_args, **_kwargs):
+        nonlocal auth_calls
+        auth_calls += 1
+        return "Bearer online-model-catalog-token", None
+
+    async def open_local_code_session(**kwargs):
+        open_calls.append(kwargs)
+        return {
+            "external_application_id": "local-code-smoke",
+            "embed_url": f"/api/code-runtime/{session.public_id}/builder/?token=entry-token",
+        }
 
     monkeypatch.setattr(
         code_runtime_routes,
         "_control_plane_request_auth",
-        fail_if_control_plane_auth_is_requested,
+        control_plane_auth_for_online_models,
     )
+    monkeypatch.setattr(code_runtime_routes, "open_code_session", open_local_code_session)
 
     result = await open_code_runtime_session(
         session.public_id,
@@ -2002,6 +2026,8 @@ async def test_open_local_code_runtime_session_does_not_require_control_plane_au
     assert result["embed_url"].startswith(
         f"/api/code-runtime/{session.public_id}/builder/?"
     )
+    assert auth_calls == 1
+    assert open_calls[0]["authorization_header"] == "Bearer online-model-catalog-token"
 
 
 @pytest.mark.asyncio

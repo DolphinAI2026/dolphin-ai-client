@@ -295,8 +295,7 @@ export const routes: RouteRecordRaw[] = [
       path: '/platform-envs',
       name: 'PlatformEnvs',
       component: () => import('@/views/PlatformEnvs.vue'),
-      // The settings hub links to a single-purpose view. Keep the old
-      // unqualified route as the compatibility page with both tabs.
+      // Deprecated compatibility page retained for old bookmarks only.
       props: route => ({
         only: route.query.tab === 'llm' ? 'llm' : route.query.tab === 'envs' ? 'envs' : undefined,
       }),

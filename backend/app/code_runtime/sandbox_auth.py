@@ -554,6 +554,13 @@ async def bootstrap_runtime_session(
                 headers={RUNTIME_AUTH_ERROR_HEADER: auth_error},
             )
     if response.status_code >= 400:
+        parsed_runtime_url = urlsplit(resolved_runtime_base_url)
+        logger.warning(
+            "Runtime bootstrap rejected status=%s auth_error=%s runtime_host=%s",
+            response.status_code,
+            auth_error or "none",
+            parsed_runtime_url.hostname or "unknown",
+        )
         raise HTTPException(status_code=response.status_code, detail="Runtime bootstrap failed")
 
     runtime_cookie, expires_at = _runtime_cookie(response)

@@ -231,7 +231,7 @@ describe('CodeConversationPage', () => {
       pageSource.indexOf('async function openCurrentSession()'),
       pageSource.indexOf('function queuePendingFrame'),
     )
-    const openIndex = openSource.indexOf('codeRuntimeApi.openSession(sessionRef)')
+    const openIndex = openSource.indexOf('codeRuntimeApi.openSession(sessionRef, {')
     const openedActivationIndex = openSource.lastIndexOf('activateCurrentCodeAgentSession(')
 
     expect(pageSource).toContain('function currentRuntimeAgentId()')
@@ -250,7 +250,7 @@ describe('CodeConversationPage', () => {
     expect(openSource).toContain('awaitCurrentCodeFrameOpenRequest')
     expect(openSource.match(/awaitCurrentCodeFrameOpenRequest/g)).toHaveLength(2)
     expect(openSource.match(/\.status === 'stale' \|\| !isCurrentRequest\(\)/g)).toHaveLength(4)
-    expect(openSource).toContain('() => codeRuntimeApi.openSession(sessionRef)')
+    expect(openSource).toContain("local: currentCodeApplicationSource() === 'local'")
     expect(openSource).toMatch(
       /activateCurrentCodeAgentSession\(\s*sessionRef,\s*runtimeAgentId,\s*isCurrentRequest,?\s*\)/,
     )

@@ -8,6 +8,8 @@ export const CODE_RUNTIME_ACTIVATION_RETRY_DELAYS_MS = [] as const
 
 // 首次冷启动会同步等待 Control Plane 部署 Sandbox；必须长于后端的 workspace/open 预算。
 export const CODE_RUNTIME_WORKSPACE_OPEN_TIMEOUT_MS = 690_000
+// 本地运行时不应沿用远程沙箱的十余分钟冷启动预算；超过该时间应当返回可重试的错误。
+export const CODE_RUNTIME_LOCAL_WORKSPACE_OPEN_TIMEOUT_MS = 150_000
 
 export type CodeExecutionLocation = 'local' | 'remote'
 export type CodeRailHistorySource = CodeExecutionLocation | 'all'
@@ -275,14 +277,16 @@ export const codeRuntimeApi = {
       ...(body?.selected_llm_config_id != null ? { selected_llm_config_id: body.selected_llm_config_id } : {}),
     }, { headers: controlPlaneCodeAuthorization() })
   },
-  async openSession(sessionRef: number | string) {
+  async openSession(sessionRef: number | string, options?: { local?: boolean }) {
     const encodedSessionRef = encodeURIComponent(String(sessionRef))
     const opened = await request.post<any, CodeRuntimeOpenResponse>(
       `/code/sessions/${encodedSessionRef}/open`,
       undefined,
       {
         headers: controlPlaneCodeAuthorization(),
-        timeout: CODE_RUNTIME_WORKSPACE_OPEN_TIMEOUT_MS,
+        timeout: options?.local
+          ? CODE_RUNTIME_LOCAL_WORKSPACE_OPEN_TIMEOUT_MS
+          : CODE_RUNTIME_WORKSPACE_OPEN_TIMEOUT_MS,
       },
     )
     return {
