@@ -20,6 +20,12 @@ describe('Code runtime browser-authenticated session APIs', () => {
     )
   })
 
+  it('keeps the outer session rail compatible with backends that predate source=all', () => {
+    expect(apiSource).toContain("listRailHistory(source: CodeRailHistorySource = 'all'")
+    expect(apiSource).toContain("Number(error?.response?.status) === 422")
+    expect(apiSource).toContain("return load('remote')")
+  })
+
   it('adds the deployed application base to runtime iframe URLs', () => {
     expect(resolveCodeRuntimeEmbedUrl('/api/code-runtime/2/builder/', '/ai-builder/'))
       .toBe('/ai-builder/api/code-runtime/2/builder/')

@@ -313,11 +313,21 @@ export const codeRuntimeApi = {
       { local_workspace_path: localWorkspacePath },
     )
   },
-  listRailHistory(source: CodeRailHistorySource = 'all', scope: 'user' | 'tenant' = 'user') {
-    return request.get<any, CodeRailHistoryResponse>('/code/rail/history', {
-      params: { source, scope },
-      ...(source === 'local' ? {} : { headers: controlPlaneCodeAuthorization() }),
+  async listRailHistory(source: CodeRailHistorySource = 'all', scope: 'user' | 'tenant' = 'user') {
+    const load = (requestedSource: CodeRailHistorySource) => request.get<any, CodeRailHistoryResponse>('/code/rail/history', {
+      params: { source: requestedSource, scope },
+      ...(requestedSource === 'local' ? {} : { headers: controlPlaneCodeAuthorization() }),
     })
+    try {
+      return await load(source)
+    } catch (error: any) {
+      // Older Builder backends only accept local/remote.  Keep the outer rail
+      // available while those environments roll forward to source=all.
+      if (source === 'all' && Number(error?.response?.status) === 422) {
+        return load('remote')
+      }
+      throw error
+    }
   },
   listAgentSessions(shellSessionId: string) {
     return request.get<any, { sessions: CodeAgentSessionRecord[] }>(
