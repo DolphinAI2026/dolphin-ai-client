@@ -7,6 +7,7 @@ describe('SystemAssistantSessionSections', () => {
     expect(sectionsSource).toContain('function applicationSessionActive(session: CodeRailSession): boolean')
     expect(sectionsSource).toContain('activeApplicationShellSessionId?: string')
     expect(sectionsSource).toContain('activeApplicationRuntimeSessionId?: string')
+    expect(sectionsSource).toContain("String(session.runtimeSessionId || '') === activeRuntimeSessionId")
     expect(sectionsSource).toContain(':class="{ active: applicationSessionActive(session) }"')
   })
 

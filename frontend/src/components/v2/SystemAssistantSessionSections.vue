@@ -88,9 +88,15 @@ function sessionRunning(session: RailSession): boolean {
 
 function applicationSessionActive(session: CodeRailSession): boolean {
   if (props.isApplicationSessionActive?.(session)) return true
-  return session.source === 'code-agent'
-    && String(session.shellSessionId || '') === String(props.activeApplicationShellSessionId || '')
-    && String(session.runtimeSessionId || '') === String(props.activeApplicationRuntimeSessionId || '')
+  if (session.source !== 'code-agent') return false
+  // Runtime IDs are globally unique.  The rail index can retain an older
+  // shell public ID while the active Code URL has the newest public ID after a
+  // rebind, so require the shell only for a shell-only route with no runtime.
+  const activeRuntimeSessionId = String(props.activeApplicationRuntimeSessionId || '')
+  if (activeRuntimeSessionId) {
+    return String(session.runtimeSessionId || '') === activeRuntimeSessionId
+  }
+  return String(session.shellSessionId || '') === String(props.activeApplicationShellSessionId || '')
 }
 
 function toggleSessionMenu(session: RailSession) {
