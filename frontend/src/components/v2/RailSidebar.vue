@@ -118,6 +118,22 @@ const activeCodeRuntimeSessionId = computed(() => {
 const aiSessions = ref<AIChatSession[]>([])
 const systemAssistantSessionData = ref<AIChatSession[]>([])
 const codeRailHistory = ref<CodeRailHistoryResponse | null>(null)
+const CODE_RAIL_HIDDEN_APPLICATIONS_KEY = 'apaas-code-rail-hidden-applications-v1'
+function loadHiddenCodeRailApplications(): Set<string> {
+  try {
+    const stored = JSON.parse(localStorage.getItem(CODE_RAIL_HIDDEN_APPLICATIONS_KEY) || '[]')
+    return new Set(Array.isArray(stored) ? stored.filter((value): value is string => typeof value === 'string') : [])
+  } catch {
+    return new Set()
+  }
+}
+const hiddenCodeRailApplications = ref<Set<string>>(loadHiddenCodeRailApplications())
+function hideCodeRailApplication(logicalApplicationId: string) {
+  const next = new Set(hiddenCodeRailApplications.value)
+  next.add(logicalApplicationId)
+  hiddenCodeRailApplications.value = next
+  try { localStorage.setItem(CODE_RAIL_HIDDEN_APPLICATIONS_KEY, JSON.stringify([...next])) } catch { /* private mode */ }
+}
 const showRecent = computed(() => !effectiveCollapsed.value)
 let railAppsSeq = 0
 let railSessionsSeq = 0
@@ -130,7 +146,8 @@ const systemAssistantSessions = computed<RailSession[]>(() =>
   sortRailSessionsByUpdatedAt(normalizeAiSessions(systemAssistantSessionData.value)),
 )
 const systemAssistantApplicationGroups = computed<CodeRailSessionGroup[]>(() =>
-  groupCodeRailHistoryByApplication(codeRailHistory.value),
+  groupCodeRailHistoryByApplication(codeRailHistory.value)
+    .filter(group => !hiddenCodeRailApplications.value.has(group.logicalApplicationId)),
 )
 
 // 非系统助手入口仍使用当前模式对应的单一会话源。
@@ -920,6 +937,7 @@ function renderIcon(name: string): string {
         @open-application-session="openSession"
         @new-application-session="createCodeAgentSession"
         @archive-application-session="archiveRailSession"
+        @hide-application="hideCodeRailApplication"
       />
 
       <!-- 普通应用会话继续按日期或应用分组。 -->

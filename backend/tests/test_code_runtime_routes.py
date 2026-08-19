@@ -2978,6 +2978,7 @@ async def test_archive_code_runtime_agent_session_hides_only_the_conversation(db
     )).scalar_one()
     assert result == {"ok": True, "archived": True}
     assert archived.deleted_at is not None
+    assert archived.deleted_at.tzinfo is None
     assert shell.status == "active"
 
 

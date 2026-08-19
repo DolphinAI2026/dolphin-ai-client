@@ -1856,7 +1856,9 @@ async def archive_code_runtime_agent_session(
     ).scalar_one_or_none()
     if not scoped:
         raise HTTPException(status_code=404, detail="会话不存在、已归档或无权限")
-    scoped.deleted_at = datetime.now(timezone.utc)
+    # The existing runtime timestamps are stored as UTC without timezone
+    # metadata; keep this write compatible with PostgreSQL/asyncpg.
+    scoped.deleted_at = datetime.utcnow()
     await db.commit()
     return {"ok": True, "archived": True}
 

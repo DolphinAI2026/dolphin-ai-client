@@ -13,6 +13,15 @@ describe('SystemAssistantSessionSections', () => {
 
   it('lets a long conversation history scroll inside the rail', () => {
     expect(sectionsSource).toContain('min-height: 0; display: flex; flex: 1 1 auto;')
+    expect(sectionsSource).toContain('overflow-y: scroll')
+    expect(sectionsSource).toContain('scrollbar-gutter: stable')
+  })
+
+  it('lets users archive a conversation or remove an application group without deleting the project', () => {
+    expect(sectionsSource).toContain("'archive-application-session'")
+    expect(sectionsSource).toContain("'hide-application'")
+    expect(sectionsSource).toContain('从侧边栏移除项目')
+    expect(sectionsSource).toContain('归档会话')
   })
 
   it('shows three recent conversations per application and expands the remainder on demand', () => {

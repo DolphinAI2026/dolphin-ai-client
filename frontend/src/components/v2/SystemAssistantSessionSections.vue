@@ -27,6 +27,7 @@ const emit = defineEmits<{
   (event: 'open-application-session', session: RailSession): void
   (event: 'new-application-session', shellSessionId: string): void
   (event: 'archive-application-session', session: CodeRailSession): void
+  (event: 'hide-application', logicalApplicationId: string): void
 }>()
 
 const collapsed = ref(new Set<string>())
@@ -231,6 +232,15 @@ function archiveApplicationSession(session: CodeRailSession) {
             >
               <AppIcon name="plus" :size="13" />
             </button>
+            <button
+              type="button"
+              class="sas-app-remove"
+              title="从侧边栏移除项目"
+              aria-label="从侧边栏移除项目"
+              @click="emit('hide-application', group.logicalApplicationId)"
+            >
+              <AppIcon name="x" :size="13" />
+            </button>
           </div>
           <div v-if="!collapsed.has(applicationGroupKey(group))" class="sas-items app-items">
             <div
@@ -303,7 +313,7 @@ function archiveApplicationSession(session: CodeRailSession) {
 .sas-section-toggle :deep(.app-icon), .sas-app-toggle :deep(.app-icon) { transition: transform .14s ease; }
 .sas-section-toggle :deep(.app-icon.expanded), .sas-app-toggle :deep(.app-icon.expanded) { transform: rotate(90deg); }
 .sas-count { margin-left: auto; color: #9aa5b5; font-size: 10px; font-weight: 500; letter-spacing: 0; }
-.sas-icon-button, .sas-app-new { display: grid; place-items: center; padding: 0; color: #637188; background: transparent; border: 1px solid transparent; border-radius: 6px; cursor: pointer; }
+.sas-icon-button, .sas-app-new, .sas-app-remove { display: grid; place-items: center; padding: 0; color: #637188; background: transparent; border: 1px solid transparent; border-radius: 6px; cursor: pointer; }
 .sas-icon-button { width: 26px; height: 26px; }
 .sas-icon-button:hover, .sas-app-new:hover { color: #1f56c7; background: #e9f1ff; border-color: #d4e2fb; }
 .sas-items { display: flex; flex-direction: column; gap: 3px; }
@@ -335,6 +345,9 @@ function archiveApplicationSession(session: CodeRailSession) {
 .sas-location-tags, .sas-location { flex: 0 0 auto; color: #9aa5b5; font-size: 10px; }
 .sas-location { max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sas-app-new { width: 23px; height: 23px; margin-right: 3px; }
+.sas-app-remove { width: 23px; height: 23px; margin-right: 3px; opacity: 0; }
+.sas-app-header:hover .sas-app-remove, .sas-app-remove:focus-visible { opacity: 1; }
+.sas-app-remove:hover { color: #a34b4b; background: #fff1f1; border-color: #f2d7d7; }
 .app-items { padding-left: 7px; }
 .app-item { padding-left: 8px; }
 .sas-empty { padding: 12px 8px; color: #9aa5b5; font-size: 11px; text-align: center; }
