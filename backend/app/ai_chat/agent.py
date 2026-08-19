@@ -760,13 +760,12 @@ async def _resolve_control_plane_llm_config(
     session: AIChatSession,
     purpose: str,
 ) -> LLMConfigSnapshot | None:
-    """Use the signed-in desktop account's online model as Builder's default.
+    """Use the signed-in Control Plane account's online model as Builder's default.
 
     Local model configurations remain selectable supplements. They must not be
-    required merely because a desktop user has a private local database tenant.
+    required merely because a Control Plane user has a private local database
+    tenant. This path is shared by the desktop client and the deployed web UI.
     """
-    if not runtime.is_desktop():
-        return None
     user = await db.get(User, session.user_id)
     if (
         user is None
@@ -796,7 +795,7 @@ async def _resolve_control_plane_llm_config(
         )
     except Exception as exc:
         detail = str(getattr(exc, "detail", None) or exc).strip()
-        logger.warning("desktop Control Plane model catalogue unavailable: %s", detail)
+        logger.warning("Control Plane model catalogue unavailable: %s", detail)
         raise ControlPlaneModelCatalogError(
             f"线上模型目录加载失败：{detail[:500] or '未知错误'}"
         ) from exc

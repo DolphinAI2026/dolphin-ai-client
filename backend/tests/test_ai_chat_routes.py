@@ -149,6 +149,42 @@ async def test_desktop_builder_can_persist_a_selected_control_plane_model(
 
 
 @pytest.mark.asyncio
+async def test_web_system_assistant_can_persist_a_selected_control_plane_model(
+    db_session,
+    monkeypatch,
+):
+    tenant = Tenant(tenant_name="web_cp_models", tenant_code="web_cp_models")
+    user = User(
+        username="web_cp_models_user",
+        hashed_password="x",
+        account_source="control_plane",
+    )
+    db_session.add_all([tenant, user])
+    await db_session.flush()
+    ctx = _ctx(user, tenant.id, control_plane_tenant_id="cp-tenant-models")
+
+    async def fake_catalog(**kwargs):
+        assert kwargs["purpose"] == "coding"
+        return [{"id": -1001, "model": "online-model", "is_default": True}]
+
+    monkeypatch.setattr(runtime, "is_desktop", lambda: False)
+    monkeypatch.setattr(ai_chat_routes, "control_plane_access_token", lambda _user: "token")
+    monkeypatch.setattr(ai_chat_routes, "list_control_plane_model_options", fake_catalog)
+
+    created = await create_session(
+        CreateSessionRequest(
+            assistant_profile="system_assistant",
+            mode="code",
+            selected_llm_config_id=-1001,
+        ),
+        ctx,
+        db_session,
+    )
+
+    assert created["selected_llm_config_id"] == -1001
+
+
+@pytest.mark.asyncio
 async def test_system_assistant_detail_keeps_existing_attachment_shape(db_session):
     tenant = Tenant(tenant_name="sa_attachment_t", tenant_code="sa_attachment_t")
     db_session.add(tenant)

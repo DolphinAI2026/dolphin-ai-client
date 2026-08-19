@@ -163,6 +163,51 @@ async def test_desktop_builder_defaults_to_control_plane_model_not_empty_local_t
     assert snapshot.extra_headers["X-Tenant-Id"] == "cp-tenant-42"
 
 
+@pytest.mark.asyncio
+async def test_web_system_assistant_uses_selected_control_plane_model(
+    db_session,
+    monkeypatch,
+):
+    user = User(
+        username="web-system-assistant-user",
+        display_name="Web system assistant",
+        hashed_password="not-used",
+        account_source="control_plane",
+        coding_tenant_id="cp-tenant-43",
+    )
+    db_session.add(user)
+    await db_session.flush()
+    session = AIChatSession(
+        tenant_id=999,
+        user_id=user.id,
+        title="系统助手",
+        assistant_profile="system_assistant",
+        selected_llm_config_id=-102,
+        control_plane_tenant_id="cp-tenant-43",
+    )
+    db_session.add(session)
+    await db_session.flush()
+
+    async def fake_catalog(**kwargs):
+        assert kwargs["purpose"] == "coding"
+        return [
+            {"id": -101, "model": "online-default", "is_default": True},
+            {"id": -102, "model": "deepseek-v4-flash", "is_default": False},
+        ]
+
+    monkeypatch.setattr(agent_module.runtime, "is_desktop", lambda: False)
+    monkeypatch.setattr(agent_module, "control_plane_access_token", lambda _user: "cp-token")
+    monkeypatch.setattr(agent_module, "control_plane_base_url", lambda: "https://control.example")
+    monkeypatch.setattr(agent_module, "list_control_plane_model_options", fake_catalog)
+
+    snapshot = await _resolve_llm_config(db_session, session)
+
+    assert snapshot.model == "deepseek-v4-flash"
+    assert snapshot.base_url == "https://control.example/api/code/model-gateway/v1"
+    assert snapshot.api_format == "responses"
+    assert snapshot.extra_headers["X-Tenant-Id"] == "cp-tenant-43"
+
+
 def test_control_plane_responses_adapter_preserves_tool_turns():
     input_items = _responses_input([
         {"role": "system", "content": "You are helpful."},

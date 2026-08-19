@@ -106,10 +106,7 @@ async def _validated_selected_llm_config_id(
             raise HTTPException(status_code=400, detail="所选模型不可用或不支持当前助手")
         return cfg.id
 
-    if (
-        not runtime.is_desktop()
-        or str(getattr(ctx.user, "account_source", "") or "").lower() != "control_plane"
-    ):
+    if str(getattr(ctx.user, "account_source", "") or "").lower() != "control_plane":
         raise HTTPException(status_code=400, detail="所选模型不可用或不支持当前助手")
     access_token = control_plane_access_token(ctx.user)
     if not access_token:
