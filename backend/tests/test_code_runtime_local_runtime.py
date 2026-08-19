@@ -424,7 +424,7 @@ async def test_open_rejects_unbound_local_application(db, ctx, engineering_sessi
 
     assert exc.value.status_code == 409
     assert "LOCAL_APPLICATION_WORKSPACE_REQUIRED" in str(exc.value.detail)
-    assert "本地 Git 工作区" in str(exc.value.detail)
+    assert "本地项目目录" in str(exc.value.detail)
 
 
 @pytest.mark.asyncio
@@ -501,7 +501,7 @@ async def test_register_existing_non_git_directory_does_not_initialize_git(
 
 
 @pytest.mark.asyncio
-async def test_opening_existing_non_git_workspace_initializes_git_metadata(
+async def test_opening_existing_non_git_workspace_does_not_initialize_git_metadata(
     db,
     ctx,
     tmp_path,
@@ -522,7 +522,7 @@ async def test_opening_existing_non_git_workspace_initializes_git_metadata(
     resolved = await resolve_registered_workspace(db, code_session, ctx)
 
     assert resolved.ws_id == workspace.ws_id
-    assert (workspace_path / ".git").is_dir()
+    assert not (workspace_path / ".git").exists()
     assert (workspace_path / "README.md").read_text(encoding="utf-8") == "already here"
 
 
@@ -723,7 +723,6 @@ async def test_rebind_rejects_path_owned_by_another_tenant(
 @pytest.mark.parametrize(
     "repository_kind",
     [
-        "subdirectory",
         "symlink",
         "dotdot",
         "duplicate_separator",
@@ -734,12 +733,7 @@ async def test_open_rejects_unmanaged_workspace_paths(
     db, ctx, git_repo, engineering_session, tmp_path, repository_kind
 ):
     path: Path | str = tmp_path / "plain-directory"
-    if repository_kind == "subdirectory":
-        path = git_repo / "nested"
-        path.mkdir()
-    elif repository_kind == "not_git":
-        path.mkdir()
-    elif repository_kind == "symlink":
+    if repository_kind == "symlink":
         path = tmp_path / "repository-alias"
         path.symlink_to(git_repo, target_is_directory=True)
     elif repository_kind == "dotdot":
@@ -1383,7 +1377,6 @@ async def test_open_starts_missing_instance_with_runtime_context_path_and_enviro
         "sandbox_instance_id",
         "workspace_id",
         "worktree_path",
-        "git_common_dir",
         "codex_home",
         "runtime_dir",
         "runtime_context_path",
@@ -1396,7 +1389,7 @@ async def test_open_starts_missing_instance_with_runtime_context_path_and_enviro
     assert str(start_payload["sandbox_instance_id"]).startswith("local-")
     assert start_payload["workspace_id"] == workspace.ws_id
     assert start_payload["worktree_path"] == str(git_repo)
-    assert start_payload["git_common_dir"] == str(git_repo / ".git")
+    assert "git_common_dir" not in start_payload
     assert start_payload["agent_runtime_path"] == str(tmp_path / "agent-runtime")
     assert start_payload["runtime_addr"] == "127.0.0.1:19090"
     assert start_payload["environment"] == {

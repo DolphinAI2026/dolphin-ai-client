@@ -354,17 +354,29 @@ impl RuntimeDriver for LocalProcessRuntimeDriver {
     }
 
     fn identity(&self, pid: u32) -> Result<Option<ProcessIdentity>, LocalRuntimeError> {
-        Ok(self
-            .processes
-            .lock()
-            .map_err(|_| {
-                LocalRuntimeError::new(
-                    LocalRuntimeErrorCode::ReconcileIdentityMismatch,
-                    "local runtime registry lock is poisoned",
-                )
-            })?
-            .get(&pid)
-            .map(|process| process.identity.clone()))
+        let mut processes = self.processes.lock().map_err(|_| {
+            LocalRuntimeError::new(
+                LocalRuntimeErrorCode::ReconcileIdentityMismatch,
+                "local runtime registry lock is poisoned",
+            )
+        })?;
+        let Some(process) = processes.get_mut(&pid) else {
+            return Ok(None);
+        };
+        match process.child.try_wait() {
+            Ok(None) => Ok(Some(process.identity.clone())),
+            Ok(Some(_)) => {
+                // Do not let an externally terminated child remain "ready" in the
+                // in-memory registry. The manager can then discard its journal and
+                // create a replacement instead of reporting a spurious conflict.
+                processes.remove(&pid);
+                Ok(None)
+            }
+            Err(error) => Err(LocalRuntimeError::new(
+                LocalRuntimeErrorCode::ReconcileIdentityMismatch,
+                format!("cannot inspect local runtime process state: {error}"),
+            )),
+        }
     }
 
     fn recover_identity(
@@ -1779,7 +1791,7 @@ mod tests {
             sandbox_instance_id: "instance-a".into(),
             workspace_id: "workspace-a".into(),
             worktree_path: "/tmp/worktree".into(),
-            git_common_dir: "/tmp/git-common".into(),
+            git_common_dir: Some("/tmp/git-common".into()),
             codex_home: "/tmp/codex".into(),
             runtime_dir: "/tmp/runtime".into(),
             runtime_context_path: "/tmp/runtime/runtime-context.json".into(),

@@ -34,7 +34,6 @@ from app.code_runtime.application_locations import (
     local_workspace_path_digest,
     prepare_local_application_workspace,
 )
-from app.engineering_sessions.git_state import GitCommandError, git, git_common_dir
 from app.engineering_sessions.service import EngineeringSessionService
 from app.models import Application, RegisteredWorkspace
 from app.models.workspace_git import WorkspaceGitRemote
@@ -201,6 +200,12 @@ def _allocate_loopback_address() -> str:
 
 
 def _validate_workspace_directory(raw_path: str) -> Path:
+    """Validate an owned local project directory without requiring Git.
+
+    Local Code opens arbitrary existing directories.  Git remains available to
+    an agent when a project has it, but selecting/opening a project must never
+    initialize or reject a directory merely because it has no `.git` metadata.
+    """
     if (
         not raw_path
         or not os.path.isabs(raw_path)
@@ -211,49 +216,11 @@ def _validate_workspace_directory(raw_path: str) -> Path:
     try:
         repository_path = Path(raw_path).resolve(strict=True)
     except OSError as exc:
-        raise _error(409, _WORKSPACE_INVALID, "注册的本地 Git 工作区不存在") from exc
+        raise _error(409, _WORKSPACE_INVALID, "注册的本地项目目录不存在") from exc
     if _workspace_path_identity(repository_path) != _workspace_path_identity(raw_path):
         raise _error(409, _WORKSPACE_INVALID, "注册工作区路径不能是别名或符号链接")
     if not repository_path.is_dir():
-        raise _error(409, _WORKSPACE_INVALID, "注册的本地 Git 工作区不是目录")
-    try:
-        git_top_level = Path(
-            git(
-                repository_path,
-                "rev-parse",
-                "--path-format=absolute",
-                "--show-toplevel",
-            ).stdout.strip()
-        ).resolve(strict=True)
-    except (GitCommandError, OSError) as exc:
-        # Local Runtime needs a repository metadata directory for its isolated
-        # agent sessions. Existing user projects, however, need not have been
-        # created with Git. Bootstrap an empty local repository on first open;
-        # this only creates .git and never changes project files.
-        initialized = git(repository_path, "init", "--quiet", check=False)
-        if initialized.returncode != 0:
-            raise _error(
-                409,
-                _WORKSPACE_INVALID,
-                "无法为本地项目初始化 Git 元数据",
-            ) from exc
-        try:
-            git_top_level = Path(
-                git(
-                    repository_path,
-                    "rev-parse",
-                    "--path-format=absolute",
-                    "--show-toplevel",
-                ).stdout.strip()
-            ).resolve(strict=True)
-        except (GitCommandError, OSError) as retry_exc:
-            raise _error(
-                409,
-                _WORKSPACE_INVALID,
-                "无法为本地项目初始化 Git 元数据",
-            ) from retry_exc
-    if _workspace_path_identity(git_top_level) != _workspace_path_identity(repository_path):
-        raise _error(409, _WORKSPACE_INVALID, "注册路径必须是 Git 顶层目录")
+        raise _error(409, _WORKSPACE_INVALID, "注册的本地项目目录不是目录")
     return Path(local_workspace_path_text(repository_path))
 
 
@@ -277,7 +244,7 @@ async def _application_for_session(
         await db.execute(select(Application).where(Application.id == application_pk))
     ).scalar_one_or_none()
     if application is None:
-        raise _error(409, _WORKSPACE_REQUIRED, "应用未绑定本地 Git 工作区")
+        raise _error(409, _WORKSPACE_REQUIRED, "应用未绑定本地项目目录")
     # Desktop local applications and their workspaces are owned by this device
     # (tenant 0), not by the Control Plane tenant carried by the signed-in user.
     # Keep the user check: a different local account must still never open it.
@@ -290,7 +257,7 @@ async def _application_for_session(
         application.tenant_id != workspace_tenant_id
         or application.user_id != int(ctx.user.id)
     ):
-        raise _error(403, _WORKSPACE_FORBIDDEN, "无权访问应用的本地 Git 工作区")
+        raise _error(403, _WORKSPACE_FORBIDDEN, "无权访问应用的本地项目目录")
     return application
 
 
@@ -317,8 +284,8 @@ async def _workspace_for_id(
         )
     ).scalar_one_or_none()
     if foreign is not None:
-        raise _error(403, _WORKSPACE_FORBIDDEN, "无权访问该本地 Git 工作区")
-    raise _error(409, _WORKSPACE_REQUIRED, "应用必须先绑定本地 Git 工作区")
+        raise _error(403, _WORKSPACE_FORBIDDEN, "无权访问该本地项目目录")
+    raise _error(409, _WORKSPACE_REQUIRED, "应用必须先绑定本地项目目录")
 
 
 async def resolve_registered_workspace(
@@ -342,7 +309,7 @@ async def resolve_registered_workspace(
         session_user_id is not None
         and int(session_user_id) != int(ctx.user.id)
     ):
-        raise _error(403, _WORKSPACE_FORBIDDEN, "无权访问该 Code 会话的本地 Git 工作区")
+        raise _error(403, _WORKSPACE_FORBIDDEN, "无权访问该 Code 会话的本地项目目录")
 
     workspace_id = _text(getattr(session, "workspace_id", None))
     application = await _application_for_session(db, session, ctx)
@@ -366,7 +333,7 @@ async def resolve_registered_workspace(
             if len(owned) == 1:
                 workspace_id = owned[0].ws_id
             elif len(owned) > 1:
-                raise _error(409, _WORKSPACE_REQUIRED, "应用绑定了多个本地 Git 工作区")
+                raise _error(409, _WORKSPACE_REQUIRED, "应用绑定了多个本地项目目录")
             else:
                 foreign = (
                     await db.execute(
@@ -378,10 +345,10 @@ async def resolve_registered_workspace(
                     )
                 ).scalars().all()
                 if foreign:
-                    raise _error(403, _WORKSPACE_FORBIDDEN, "无权访问该本地 Git 工作区")
+                    raise _error(403, _WORKSPACE_FORBIDDEN, "无权访问该本地项目目录")
 
     if not workspace_id:
-        raise _error(409, _WORKSPACE_REQUIRED, "应用必须先绑定本地 Git 工作区")
+        raise _error(409, _WORKSPACE_REQUIRED, "应用必须先绑定本地项目目录")
     workspace = await _workspace_for_id(db, workspace_id, ctx)
     if validate_git:
         _validate_workspace_path(workspace)
@@ -1033,17 +1000,7 @@ async def _repo_metadata(
             )
         )
     ).scalar_one_or_none()
-    default_branch = _text(getattr(remote, "default_branch", None))
-    if not default_branch:
-        branch_result = git(
-            repository_path,
-            "symbolic-ref",
-            "--quiet",
-            "--short",
-            "HEAD",
-            check=False,
-        )
-        default_branch = _text(branch_result.stdout) or "main"
+    default_branch = _text(getattr(remote, "default_branch", None)) or "main"
     if remote is not None:
         raw = _text(remote.remote_url)
         parsed = urlsplit(raw)
@@ -1442,7 +1399,6 @@ class LocalRuntimeClient:
     ) -> dict[str, Any]:
         try:
             managed_worktree_path = repository_path.resolve(strict=True)
-            managed_git_common_dir = git_common_dir(repository_path)
             if self.runtime_data_dir is None or self.agent_runtime_path is None:
                 raise _error(503, _MANAGER_UNAVAILABLE, "本地 Runtime manager 未配置")
             agent_runtime_path = self.agent_runtime_path.resolve(strict=True)
@@ -1492,7 +1448,7 @@ class LocalRuntimeClient:
                 token_path = runtime_dir / _SANDBOX_TOKEN_FILE
         except HTTPException:
             raise
-        except (GitCommandError, OSError, RuntimeError, ValueError) as exc:
+        except (OSError, RuntimeError, ValueError) as exc:
             raise _error(503, _PREPARATION_FAILED, "无法准备本地 Runtime 配置") from exc
 
         environment = {
@@ -1515,7 +1471,6 @@ class LocalRuntimeClient:
             "sandbox_instance_id": sandbox_instance_id,
             "workspace_id": workspace.ws_id,
             "worktree_path": str(managed_worktree_path),
-            "git_common_dir": str(managed_git_common_dir),
             "codex_home": str(codex_home),
             "runtime_dir": str(runtime_dir),
             "runtime_context_path": str(context_path),

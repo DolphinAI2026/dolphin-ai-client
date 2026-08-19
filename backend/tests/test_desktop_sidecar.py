@@ -54,6 +54,15 @@ def test_desktop_builds_run_the_sidecar_startup_smoke_check():
         assert "verify-desktop-sidecar.py" in script
 
 
+def test_arm_desktop_build_isolated_from_a_running_bundle_and_checks_lazy_profile_import():
+    root = Path(__file__).resolve().parents[2]
+    script = (root / "scripts" / "build-desktop.sh").read_text(encoding="utf-8")
+
+    assert "CARGO_TARGET_DIR=\"$TAURI_TARGET_DIR\"" in script
+    assert "mktemp -d /tmp/d-ai-code/build-desktop/tauri-target." in script
+    assert "--verify-import app.agents.profile" in script
+
+
 def test_sqlite_database_url_removes_windows_verbatim_prefix():
     database_path = PureWindowsPath(r"\\?\E:\dolphin_code\.appdata\app.db")
 

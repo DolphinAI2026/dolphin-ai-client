@@ -236,14 +236,24 @@ export function railSessionTarget(
   currentQuery: LocationQueryRaw = {},
 ): RailSessionTarget {
   const item = typeof session === 'object' ? session : { id: session }
+  const codeSource = mode === 'code'
+    && 'executionLocation' in item
+    && (item.executionLocation === 'local' || item.executionLocation === 'remote')
+    ? item.executionLocation
+    : undefined
+  const codeQuery = (agent?: string) => {
+    const query = nextAgentQuery(currentQuery, agent)
+    if (codeSource) query.source = codeSource
+    return query
+  }
   if (mode === 'code' && isCodeAgentRailSession(item)) {
     return {
       path: `/code/${item.shellSessionId}`,
-      query: nextAgentQuery(currentQuery, item.runtimeSessionId),
+      query: codeQuery(item.runtimeSessionId),
     }
   }
   const path = mode === 'code' ? `/code/${item.id}` : `/ai-chat/${item.id}`
-  const query = nextAgentQuery(currentQuery)
+  const query = mode === 'code' ? codeQuery() : nextAgentQuery(currentQuery)
   return Object.keys(query).length ? { path, query } : { path }
 }
 

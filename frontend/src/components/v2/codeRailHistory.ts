@@ -122,6 +122,28 @@ export function codeRailHistorySessions(history: CodeRailHistoryResponse | null 
   return (history?.apps || []).flatMap(appSessions)
 }
 
+/**
+ * The persisted rail index only knows sessions created through the host. A
+ * session created in the embedded runtime must be read from that runtime so
+ * it appears alongside its older siblings in the rail.
+ */
+export async function hydrateCodeRailHistorySessions(
+  history: CodeRailHistoryResponse,
+  loadSessions: (shellSessionId: string) => Promise<{ sessions: CodeRailHistoryApp['sessions'] }>,
+): Promise<CodeRailHistoryResponse> {
+  const apps = await Promise.all(history.apps.map(async (app) => {
+    const shellSessionId = text(app.shell_session_id)
+    if (!shellSessionId) return app
+    try {
+      const result = await loadSessions(shellSessionId)
+      return Array.isArray(result?.sessions) ? { ...app, sessions: result.sessions } : app
+    } catch {
+      return app
+    }
+  }))
+  return { ...history, apps }
+}
+
 export function groupCodeRailHistoryByApplication(
   history: CodeRailHistoryResponse | null | undefined,
 ): CodeRailSessionGroup[] {

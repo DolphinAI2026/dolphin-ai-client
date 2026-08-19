@@ -400,7 +400,6 @@ mod tests {
             "sandbox_instance_id": "instance-a",
             "workspace_id": "workspace-a",
             "worktree_path": "/tmp/worktree",
-            "git_common_dir": "/tmp/git-common",
             "codex_home": "/tmp/codex",
             "runtime_dir": "/tmp/runtime",
             "runtime_context_path": "/tmp/runtime/runtime-context.json",

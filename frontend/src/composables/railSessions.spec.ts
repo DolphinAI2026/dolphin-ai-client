@@ -197,6 +197,17 @@ describe('rail session navigation target', () => {
     expect(railSessionTarget('code', { id: 42, title: 'CRM Code' })).toEqual({ path: '/code/42' })
   })
 
+  it('keeps a Code session execution location in the route', () => {
+    expect(railSessionTarget('code', {
+      id: 'shell-remote',
+      title: 'CRM Code',
+      executionLocation: 'remote',
+    } as any)).toEqual({
+      path: '/code/shell-remote',
+      query: { source: 'remote' },
+    })
+  })
+
   it('routes code runtime agent sessions through their shell session with runtime query', () => {
     expect(railSessionTarget('code', {
       id: 'runtime-2',

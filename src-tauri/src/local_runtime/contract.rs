@@ -22,7 +22,10 @@ pub struct StartRequest {
     pub sandbox_instance_id: String,
     pub workspace_id: String,
     pub worktree_path: PathBuf,
-    pub git_common_dir: PathBuf,
+    /// Git is optional for a local project. Kept optional for backwards
+    /// compatibility with older sidecars that still send this field.
+    #[serde(default)]
+    pub git_common_dir: Option<PathBuf>,
     pub codex_home: PathBuf,
     pub runtime_dir: PathBuf,
     pub runtime_context_path: PathBuf,

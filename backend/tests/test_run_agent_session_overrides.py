@@ -11,13 +11,17 @@ view_context → code 会话经 /ai-chat 发送时 agent 不知道 ws_id,反问�
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
+import zlib
 
 import pytest
+from sqlalchemy import select
 
 from app.agents.profile import resolve_profile, narrow_tools_for_locked_ws
+from app.ai_chat import agent as agent_mod
 from app.ai_chat.agent import _apply_session_overrides, run_agent
-from app.models.ai_chat import AIChatSession
+from app.models.ai_chat import AIChatMessage, AIChatSession
 
 
 def _code_session(ws_id):
@@ -132,3 +136,41 @@ async def test_run_agent_chat_session_no_lock_no_network(db_session):
             break
 
     assert getattr(session, "_locked_ws_id", None) is None
+
+
+@pytest.mark.asyncio
+async def test_run_agent_persists_unexpected_frozen_runtime_failure(db_session, monkeypatch):
+    """A lazy PyInstaller import failure must be visible after the UI reloads history."""
+    session = AIChatSession(
+        tenant_id=12345,
+        user_id=678,
+        title="系统助手",
+        mode="code",
+        assistant_profile="system_assistant",
+    )
+    db_session.add(session)
+    await db_session.flush()
+
+    async def fail_before_agent_loop(*_args, **_kwargs):
+        raise zlib.error("incorrect header check")
+        yield  # pragma: no cover - keeps this an async generator
+
+    monkeypatch.setattr(agent_mod, "_run_agent_inner", fail_before_agent_loop)
+
+    events = [
+        event
+        async for event in run_agent(db_session, session, "列出种子工程", asyncio.Event())
+    ]
+
+    assistant_event = next(event for event in events if event["event"] == "assistant_message")
+    error_event = next(event for event in events if event["event"] == "error")
+    assert "本地系统助手运行组件加载失败" in json.loads(assistant_event["data"])["content"]
+    assert json.loads(error_event["data"])["code"] == "SYSTEM_ASSISTANT_RUNTIME_LOAD_FAILED"
+
+    persisted = (await db_session.execute(
+        select(AIChatMessage).where(AIChatMessage.session_id == session.id)
+    )).scalars().all()
+    assert any(
+        message.extra_meta.get("notice_type") == "SYSTEM_ASSISTANT_RUNTIME_LOAD_FAILED"
+        for message in persisted
+    )

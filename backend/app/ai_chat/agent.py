@@ -1419,6 +1419,28 @@ def _assistant_message_event(msg: AIChatMessage) -> dict:
     return _sse("assistant_message", payload)
 
 
+def _unexpected_runtime_error_notice(exc: Exception) -> tuple[str, str]:
+    """Turn an unexpected local failure into a safe, actionable chat notice.
+
+    Most model and tool failures are handled inside ``_run_agent_inner``.  This
+    final guard covers failures *before* the normal loop begins, including a
+    frozen desktop sidecar being unable to lazily load one of its Python
+    modules.  The raw exception remains in the desktop log; it must not become
+    an empty SSE stream that vanishes after the UI refreshes its history.
+    """
+    if exc.__class__.__module__ == "zlib":
+        return (
+            "本轮执行中断：本地系统助手运行组件加载失败。请退出并重新打开 DolphinAI 后重试；"
+            "若仍出现，请将桌面日志中的 SYSTEM_ASSISTANT_RUNTIME_LOAD_FAILED 提供给维护人员。",
+            "SYSTEM_ASSISTANT_RUNTIME_LOAD_FAILED",
+        )
+    return (
+        "本轮执行中断：系统助手运行时发生异常，未完成的操作没有执行。请稍后重试；"
+        "若持续出现，请查看桌面端日志。",
+        "SYSTEM_ASSISTANT_RUNTIME_ERROR",
+    )
+
+
 async def run_agent(
     db: AsyncSession,
     session: AIChatSession,
@@ -1444,6 +1466,22 @@ async def run_agent(
             system_prompt_override, tool_names_override,
         ):
             yield event
+    except Exception as exc:  # noqa: BLE001 - this is the last user-visible run boundary
+        logger.exception("unexpected ai-chat run failure session_id=%s", getattr(session, "id", None))
+        error_text, error_code = _unexpected_runtime_error_notice(exc)
+        holder["status"] = "error"
+        holder["error"] = error_text
+        msg = await _persist_assistant_notice(
+            db,
+            session,
+            error_text,
+            run_id=holder["run_id"],
+            notice_type=error_code,
+        )
+        if msg:
+            yield _assistant_message_event(msg)
+        yield _sse("error", {"error": error_text, "code": error_code, "retryable": True})
+        yield _sse("done", {"ok": False, "run_id": holder["run_id"], "error_code": error_code})
     finally:
         if holder["run_id"]:
             # shield：SSE 客户端断开会往本 task 抛 CancelledError（非 Exception 子类，

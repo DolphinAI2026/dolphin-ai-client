@@ -656,7 +656,10 @@ async function openCurrentSession() {
       locationRecovery.value = recoveryState
         ? { state: recoveryState, originalLocation: openErrorContext!.execution_location }
         : null
-      if (isLocalWorkspaceError(message)) {
+      // A remote Control Plane error must never turn into the device-local
+      // directory recovery screen.  The source is preserved in the rail route
+      // so only a confirmed local session exposes local-runtime actions.
+      if (isLocalWorkspaceError(message) && currentCodeApplicationSource() === 'local') {
         workspaceOpeningMode.value = 'local'
         localWorkspaceOpening.value = true
         workspaceOpeningPhase.value = workspaceErrorPhase(message)

@@ -1188,6 +1188,11 @@ async def open_code_session(
     desktop_entry_token: str | None = None
     local_application = is_local_code_application_id(external_app_id)
     desktop_runtime = _desktop_runtime_environment_present()
+    # A desktop sidecar can open both device-local applications and Control
+    # Plane applications.  Only identifiers owned by this device (`local-*`)
+    # may enter the local Runtime path; a remote app must retain its remote
+    # workspace-open and browser-session bootstrap flow.
+    uses_local_runtime = desktop_runtime and local_application
     bootstrap = None
 
     remote_phase = on_phase
@@ -1208,19 +1213,15 @@ async def open_code_session(
             auth_provider=auth_provider,
         )
 
-    if not desktop_runtime:
+    if not uses_local_runtime:
         set_remote_phase("provisioning")
-    # `local-*` is a desktop-owned workspace identifier, not a Control Plane
-    # application id.  Verifying it remotely makes every local app fail with
-    # APPLICATION_NOT_FOUND before the local runtime has a chance to open it.
-    if desktop_runtime:
-        if not local_application:
-            await verify_control_plane_application_access(
-                external_app_id,
-                authorization_header=authorization_header,
-                delegated_context=ctx,
-                auth_provider=auth_provider,
-            )
+    # Do not preflight a remote application through the desktop-local
+    # application endpoint.  `workspace/open` is the authoritative remote
+    # authorization and provisioning operation.  Some Control Plane versions
+    # route this preflight through the local-workspace resolver, which wrongly
+    # returns LOCAL_APPLICATION_WORKSPACE_REQUIRED for an otherwise valid
+    # remote application.
+    if uses_local_runtime:
         local_runtime = LocalRuntimeClient.from_environment()
         proxy_token = create_local_model_proxy_token(
             application_id=external_app_id,
@@ -1266,7 +1267,7 @@ async def open_code_session(
     if not builder_url:
         raise HTTPException(status_code=502, detail="Code Control Plane 未返回 builder URL")
 
-    if desktop_runtime or local_application:
+    if uses_local_runtime:
         clean_builder_url = builder_url
         runtime_base_url = derive_runtime_base_url(builder_url)
     else:
@@ -1342,7 +1343,7 @@ async def open_code_session(
     previous_sandbox_instance_id = str(binding.sandbox_instance_id or "").strip()
     opened_sandbox_instance_id = str(opened.get("sandboxInstanceId") or "").strip()
     desktop_runtime_instance_changed = bool(
-        desktop_runtime
+        uses_local_runtime
         and previous_sandbox_instance_id
         and opened_sandbox_instance_id
         and previous_sandbox_instance_id != opened_sandbox_instance_id
@@ -1357,7 +1358,7 @@ async def open_code_session(
     binding.builder_url = clean_builder_url
     binding.workspace_id = opened.get("workspaceId") or binding.workspace_id
     binding.sandbox_instance_id = opened_sandbox_instance_id or binding.sandbox_instance_id
-    if desktop_runtime:
+    if uses_local_runtime:
         if not desktop_entry_token:
             raise HTTPException(status_code=503, detail="本地 Runtime entry token 不可用")
         if desktop_runtime_instance_changed:
@@ -1401,11 +1402,11 @@ async def open_code_session(
     binding.conversation_id = opened.get("conversationId") or binding.conversation_id
     binding.status = "ready"
     binding.last_error = None
-    if desktop_runtime:
+    if uses_local_runtime:
         binding.execution_target = ExecutionTarget.DESKTOP_AGENT_RUNTIME.value
         binding.desktop_agent_runtime_token_enc = encrypt_runtime_cookie(desktop_entry_token)
     await db.flush()
-    if desktop_runtime:
+    if uses_local_runtime:
         await _remember_runtime_agent_session(db, session=session, binding=binding)
         await db.flush()
 

@@ -73,6 +73,7 @@ import type { CodeAgentSessionRecord, CodeRailHistoryResponse } from '@/api/code
 import {
   codeRailHistorySessions,
   groupCodeRailHistoryByApplication,
+  hydrateCodeRailHistorySessions,
   type CodeRailSessionGroup,
 } from './codeRailHistory'
 import ruijingWhaleMarkUrl from '@/assets/brand/ruijing-whale-mark.svg'
@@ -187,9 +188,14 @@ async function loadRailSessions() {
       systemAssistantSessionData.value = systemResult.status === 'fulfilled'
         ? systemResult.value?.sessions || []
         : systemAssistantSessionData.value
-      codeRailHistory.value = applicationResult.status === 'fulfilled'
-        ? applicationResult.value
-        : codeRailHistory.value
+      if (applicationResult.status === 'fulfilled') {
+        const history = await hydrateCodeRailHistorySessions(
+          applicationResult.value,
+          codeRuntimeApi.listAgentSessions,
+        )
+        if (seq !== railSessionsSeq || mode !== currentMode.value) return
+        codeRailHistory.value = history
+      }
       return
     }
     const d = await aiChatApi.listSessions()
@@ -848,7 +854,7 @@ function renderIcon(name: string): string {
     </button>
 
     <div
-      v-if="!effectiveCollapsed"
+      v-if="!effectiveCollapsed && visibleModeOrder.length > 1"
       class="rail-mode-switch"
       role="tablist"
       aria-label="工作模式"

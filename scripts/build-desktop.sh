@@ -10,6 +10,8 @@ TRIPLE="$(rustc --print host-tuple)"
 CONFIG="$ROOT/src-tauri/tauri.conf.json"
 SOURCE_REVISION="$(git -C "$ROOT" rev-parse HEAD)"
 UPDATER_ARTIFACTS_ENABLED=1
+TAURI_TARGET_DIR=""
+TAURI_RELEASE_DIR=""
 
 is_release_build() {
     [[ "${DOLPHIN_RELEASE_BUILD:-}" == "1" || "${GITHUB_REF_TYPE:-}" == "tag" || "${GITHUB_REF:-}" == refs/tags/* ]]
@@ -33,6 +35,19 @@ restore_tauri_config() {
     fi
 }
 
+cleanup_build_target() {
+    if [[ -n "${TAURI_TARGET_DIR:-}" && -d "$TAURI_TARGET_DIR" ]]; then
+        rm -rf "$TAURI_TARGET_DIR"
+    fi
+}
+
+cleanup() {
+    restore_tauri_config
+    cleanup_build_target
+}
+
+trap cleanup EXIT
+
 if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
     if is_release_build; then
         echo "ERROR: TAURI_SIGNING_PRIVATE_KEY is required for a Release-tag desktop build." >&2
@@ -42,7 +57,6 @@ if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
     TAURI_CONFIG_BACKUP="$(mktemp /tmp/d-ai-code/build-desktop/tauri.conf.XXXXXX)"
     cp "$CONFIG" "$TAURI_CONFIG_BACKUP"
     node -e 'const fs = require("node:fs"); const file = process.argv[1]; const config = JSON.parse(fs.readFileSync(file, "utf8")); config.bundle.createUpdaterArtifacts = false; fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);' "$CONFIG"
-    trap restore_tauri_config EXIT
     UPDATER_ARTIFACTS_ENABLED=0
     echo "==> TAURI_SIGNING_PRIVATE_KEY is not set; updater artifacts are temporarily disabled for this non-Release desktop build."
 fi
@@ -126,8 +140,8 @@ publish_linux_release() {
     local version release_dir appimage_dir deb_dir prefix
     version="$(read_package_version)"
     release_dir="$ROOT/dist-desktop/release"
-    appimage_dir="$ROOT/src-tauri/target/release/bundle/appimage"
-    deb_dir="$ROOT/src-tauri/target/release/bundle/deb"
+    appimage_dir="$TAURI_RELEASE_DIR/bundle/appimage"
+    deb_dir="$TAURI_RELEASE_DIR/bundle/deb"
     prefix="dolphin-ai-${version}-linux-x86_64"
     mkdir -p "$release_dir"
     find "$release_dir" -maxdepth 1 -type f -name '*portable*.zip' -delete
@@ -145,8 +159,8 @@ publish_macos_arm_release() {
     local version release_dir dmg_dir app_dir prefix
     version="$(read_package_version)"
     release_dir="$ROOT/dist-desktop/release"
-    dmg_dir="$ROOT/src-tauri/target/release/bundle/dmg"
-    app_dir="$ROOT/src-tauri/target/release/bundle/macos"
+    dmg_dir="$TAURI_RELEASE_DIR/bundle/dmg"
+    app_dir="$TAURI_RELEASE_DIR/bundle/macos"
     prefix="dolphin-ai-${version}-macos-aarch64"
     mkdir -p "$release_dir"
     find "$release_dir" -maxdepth 1 -type f -name '*portable*.zip' -delete
@@ -159,7 +173,7 @@ publish_macos_arm_release() {
 }
 
 repack_linux_appimage_with_pristine_codex() {
-    local bundle_dir="$ROOT/src-tauri/target/release/bundle/appimage"
+    local bundle_dir="$TAURI_RELEASE_DIR/bundle/appimage"
     local source_codex="$ROOT/src-tauri/resources/agent-runtime/codex/bin/codex"
     local source_builder_index="$ROOT/src-tauri/resources/agent-runtime/web/builder/dist/index.html"
     local appdir appdir_codex output_file output_name plugin arch
@@ -299,6 +313,7 @@ export ALLOW_DEFAULT_ENCRYPTION_KEY="1"
 .venv/bin/python -m PyInstaller dolphin-ai-sidecar.spec --clean --noconfirm
 "$ROOT/backend/.venv/bin/python" "$ROOT/scripts/verify-desktop-sidecar.py" \
     --sidecar "$ROOT/backend/dist/dolphin-ai-sidecar" \
+    --verify-import app.agents.profile \
     --timeout-seconds 60
 
 echo ""
@@ -331,8 +346,12 @@ grep -q 'id="root"' "$BUILDER_INDEX" && grep -q 'type="module"' "$BUILDER_INDEX"
     echo "ERROR: Tauri 构建前 Builder 入口不是可运行的前端构建产物: $BUILDER_INDEX" >&2
     exit 1
 }
+mkdir -p /tmp/d-ai-code/build-desktop
+TAURI_TARGET_DIR="$(mktemp -d /tmp/d-ai-code/build-desktop/tauri-target.XXXXXX)"
+TAURI_RELEASE_DIR="$TAURI_TARGET_DIR/release"
+echo "==> 使用隔离 Tauri 构建目录：$TAURI_TARGET_DIR"
 for bundle_dir in "${BUNDLE_DIRS[@]}"; do
-    generated_dir="$ROOT/src-tauri/target/release/bundle/$bundle_dir"
+    generated_dir="$TAURI_RELEASE_DIR/bundle/$bundle_dir"
     if [[ -d "$generated_dir" ]]; then
         find "$generated_dir" -mindepth 1 -delete
     fi
@@ -340,9 +359,9 @@ done
 
 run_tauri_build() {
     if [[ "${DOLPHIN_TAURI_VERBOSE:-}" == "1" ]]; then
-        npx tauri build --verbose --bundles "$1"
+        CARGO_TARGET_DIR="$TAURI_TARGET_DIR" npx tauri build --verbose --bundles "$1"
     else
-        npx tauri build --bundles "$1"
+        CARGO_TARGET_DIR="$TAURI_TARGET_DIR" npx tauri build --bundles "$1"
     fi
 }
 

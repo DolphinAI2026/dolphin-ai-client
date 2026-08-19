@@ -20,6 +20,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--sidecar", required=True, type=Path)
     parser.add_argument("--sidecar-arg", action="append", default=[])
+    parser.add_argument("--verify-import", action="append", default=[])
     parser.add_argument("--timeout-seconds", type=float, default=30)
     return parser.parse_args()
 
@@ -72,6 +73,25 @@ def stop(process: subprocess.Popen[bytes]) -> None:
         process.wait(timeout=5)
 
 
+def verify_lazy_imports(sidecar: Path, args: argparse.Namespace, run_dir: Path, log_path: Path) -> None:
+    """Exercise modules that a health endpoint does not import until a chat runs."""
+    for module_name in args.verify_import:
+        command = [
+            str(sidecar),
+            *args.sidecar_arg,
+            "--data-dir",
+            str(run_dir / "import-data"),
+            "--applications-root",
+            str(run_dir / "import-applications"),
+            "--runtime-data-dir",
+            str(run_dir / "import-runtime"),
+            "--verify-import",
+            module_name,
+        ]
+        with log_path.open("ab") as log_file:
+            completed = subprocess.run(command, stdout=log_file, stderr=subprocess.STDOUT, timeout=args.timeout_seconds)
+        if completed.returncode != 0:
+            raise RuntimeError(f"sidecar failed lazy import {module_name!r} (exit code {completed.returncode})")
 def main() -> int:
     args = parse_args()
     sidecar = sidecar_path(args.sidecar)
@@ -111,6 +131,7 @@ def main() -> int:
                 start_new_session=os.name != "nt",
             )
             wait_for_health(process, port, args.timeout_seconds)
+        verify_lazy_imports(sidecar, args, run_dir, log_path)
         succeeded = True
         print(f"Desktop sidecar startup smoke check passed: {sidecar.name}")
         return 0

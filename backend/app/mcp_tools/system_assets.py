@@ -36,6 +36,7 @@ SYSTEM_ASSET_TOOL_NAMES = frozenset({
     "list_system_assets",
     "get_system_asset",
     "get_system_asset_schema",
+    "get_system_asset_creation_examples",
     "get_system_assistant_mcp_contract",
     "create_system_asset",
     "update_system_asset",
@@ -61,6 +62,7 @@ SYSTEM_ASSET_TOOL_NAMES = frozenset({
     "configure_system_git_remote",
     "push_system_git_repository",
     "list_system_git_connections",
+    "create_system_asset_starter_repository",
     "create_system_capability_git_repository",
 })
 
@@ -204,6 +206,16 @@ _ASSET_FIELD_SCHEMAS: dict[str, dict[str, Any]] = {
         ],
         "update_fields": ["seedName", "tagIds", "providerProjectId", "pathWithNamespace", "repositoryUrl", "branch", "description"],
         "fixed_values": {"provider": "gitlab"},
+        "examples": {
+            "new_git_seed": {
+                "seedName": "订单服务 Java 种子",
+                "providerProjectId": "<新建 Git 项目的 ID>",
+                "pathWithNamespace": "<平台 Git 组>/order-service-java-seed",
+                "repositoryUrl": "https://<git-host>/<平台 Git 组>/order-service-java-seed.git",
+                "branch": "main",
+                "description": "用于企业订单服务的 Spring Boot 工程起点。",
+            },
+        },
     },
     "skill": {
         "schema_source": "System Assistant typed Skill tools",
@@ -257,6 +269,13 @@ _SYSTEM_ASSISTANT_MCP_CONTRACTS: dict[str, dict[str, Any]] = {
             {"name": "runtime_type", "required": False, "allowed_values": ["AGENT_RUNTIME", "APP_RUNTIME"], "description": "仅 capability 使用；APP_RUNTIME 返回权威 yamlSchema 双段模板和完整外部参数示例。"},
         ],
     },
+    "get_system_asset_creation_examples": {
+        "parameters": [
+            {"name": "asset_type", "required": True, "allowed_values": ["seed_project", "capability"]},
+            {"name": "limit", "required": False, "description": "最多返回多少个当前租户的真实参考资产，默认 3，最大 10。"},
+        ],
+        "returns": "当前租户远端 Git 资产的脱敏参考字段、权威创建 schema 和从零创建步骤。参考资产只可借鉴技术栈/命名/分支，不能复制其项目 ID、仓库地址或代码。",
+    },
     "create_system_asset": {
         "parameters": [
             {"name": "asset_type", "required": True, "allowed_values": sorted(_ASSET_TYPES)},
@@ -299,6 +318,17 @@ _SYSTEM_ASSISTANT_MCP_CONTRACTS: dict[str, dict[str, Any]] = {
             {"name": "git_connection_id", "required": True, "description": "必须先调用 list_system_git_connections，从返回的 id 选择，不能猜测。"},
             {"name": "branch", "required": False, "description": "默认为当前分支；必须是有效 Git 分支名。"},
             {"name": "confirmed", "required": False, "allowed_values": [False, True]},
+        ],
+    },
+    "create_system_asset_starter_repository": {
+        "parameters": [
+            {"name": "asset_type", "required": True, "allowed_values": ["seed_project", "capability"]},
+            {"name": "repository_path", "required": True, "description": "用户明确提供的不存在或空的绝对目录。"},
+            {"name": "git_connection_id", "required": True, "description": "必须先调用 list_system_git_connections，从返回的 id 选择。"},
+            {"name": "code", "required": True, "description": "新资产的机器编码，同时默认用作新 Git 仓库名。"},
+            {"name": "name", "required": True, "description": "新资产显示名称。"},
+            {"name": "branch", "required": False, "description": "默认 main；必须是有效 Git 分支名。"},
+            {"name": "confirmed", "required": False, "allowed_values": [False, True], "description": "先预览；确认后才会创建目录、首个提交、远端空仓和推送。"},
         ],
     },
     "configure_system_git_remote": {
@@ -486,6 +516,53 @@ def _clean_repository_remote(host: str, repo_full_path: str) -> str:
     if not base.startswith("https://") or not path or any(part in {".", ".."} for part in path.split("/")):
         raise SystemGitError("SYSTEM_GIT_REMOTE_INVALID", "GitConnection 的 host 或仓库路径无效")
     return f"{base}/{path}.git"
+
+
+def _new_system_git_root(repository_path: str) -> Path:
+    """Validate one explicit empty directory as the target for a new repo."""
+    supplied = str(repository_path or "").strip()
+    if not supplied:
+        raise SystemGitError("SYSTEM_GIT_PATH_REQUIRED", "repository_path 不能为空")
+    candidate = Path(supplied).expanduser()
+    if not candidate.is_absolute() or candidate == candidate.parent:
+        raise SystemGitError("SYSTEM_GIT_PATH_INVALID", "repository_path 必须是明确的绝对目录，不能是根目录")
+    if candidate.exists():
+        if not candidate.is_dir():
+            raise SystemGitError("SYSTEM_GIT_PATH_INVALID", "repository_path 必须是目录")
+        if any(candidate.iterdir()):
+            raise SystemGitError("SYSTEM_GIT_TARGET_NOT_EMPTY", "从零创建只接受不存在或空目录，避免覆盖已有文件")
+    elif not candidate.parent.is_dir():
+        raise SystemGitError("SYSTEM_GIT_PARENT_MISSING", "repository_path 的父目录必须已存在")
+    return candidate.resolve()
+
+
+def _starter_repository_name(code: str, requested_name: str | None = None) -> str:
+    value = str(requested_name or code or "").strip()
+    if not _GIT_REPOSITORY_NAME_RE.fullmatch(value):
+        raise SystemGitError(
+            "SYSTEM_GIT_REPOSITORY_NAME_INVALID",
+            "code / repository_name 只能包含字母、数字、点、下划线和连字符，且不能包含斜杠",
+        )
+    return value
+
+
+def _write_starter_repository_files(root: Path, asset_type: str, code: str, name: str, description: str | None) -> None:
+    """Create the minimum auditable source skeleton before its first commit."""
+    root.mkdir()
+    summary = str(description or "").strip() or f"{name} 的系统资产工程。"
+    (root / "README.md").write_text(f"# {name}\n\n{summary}\n", encoding="utf-8")
+    (root / ".gitignore").write_text(".DS_Store\n.env\n", encoding="utf-8")
+    if asset_type == "capability":
+        (root / "capability.json").write_text(json.dumps({
+            "capability": {"id": code, "name": name, "version": "0.1.0"},
+            "description": summary,
+        }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    else:
+        (root / "AGENTS.md").write_text(
+            "# 工程约定\n\n"
+            "在将此工程登记为种子工程前，请补齐实际技术栈、构建、测试和发布约定。\n",
+            encoding="utf-8",
+        )
 
 
 def _system_git_snapshot(repository_path: str) -> dict[str, Any]:
@@ -695,6 +772,120 @@ def _require_asset_type(asset_type: str) -> str:
 def _asset_field_schema(asset_type: str) -> dict[str, Any]:
     """Return a detached schema so callers cannot mutate the process contract."""
     return json.loads(json.dumps(_ASSET_FIELD_SCHEMAS[asset_type]))
+
+
+def _asset_result_items(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract a bounded list from the compatible Control Plane envelopes."""
+    candidates: list[Any] = [result.get("items"), result.get("records"), result.get("data")]
+    data = result.get("data")
+    if isinstance(data, dict):
+        candidates.extend([data.get("items"), data.get("records"), data.get("content")])
+    for candidate in candidates:
+        if isinstance(candidate, list):
+            return [item for item in candidate if isinstance(item, dict)]
+    return []
+
+
+def _creation_reference(asset_type: str, item: dict[str, Any]) -> dict[str, Any]:
+    """Expose only safe, useful fields of a live reference asset."""
+    fields = (
+        ("id", "seedProjectId", "seedName", "name", "providerProjectId", "pathWithNamespace", "repositoryUrl", "branch", "description", "tagIds")
+        if asset_type == "seed_project"
+        else ("id", "capabilityId", "code", "name", "runtimeType", "agentCapabilityKind", "riskLevel", "status", "description", "tagIds")
+    )
+    return {
+        field: _safe(item[field])
+        for field in fields
+        if item.get(field) not in (None, "", [], {})
+    }
+
+
+def _reference_repository(item: dict[str, Any]) -> tuple[str, str] | None:
+    """Return the repository full path and branch from one asset response."""
+    repo_path = str(item.get("pathWithNamespace") or item.get("repositoryFullPath") or "").strip().strip("/")
+    branch = str(item.get("branch") or item.get("defaultBranch") or "main").strip()
+    if not repo_path or not branch:
+        return None
+    return repo_path, branch
+
+
+def _redact_reference_rule_text(value: str, *, limit: int = 6000) -> str:
+    """Keep reference rules useful without reflecting accidental secrets."""
+    text = str(value or "")[:limit]
+    text = re.sub(
+        r"(?im)^(\s*(?:api[_-]?key|token|secret|password|authorization)\s*[:=]\s*).+$",
+        r"\1***",
+        text,
+    )
+    return text
+
+
+async def _reference_rules_for_assets(
+    resolve_identity: Callable[[int | None, int | None], tuple[int, int]],
+    tenant_id: int,
+    user_id: int,
+    references: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], str]:
+    """Read small, public engineering-rule files through a matching GitConnection."""
+    resolved_tenant_id, _resolved_user_id = resolve_identity(tenant_id, user_id)
+    try:
+        async with AsyncSessionLocal() as db:
+            connections = (await db.execute(
+                select(GitConnection)
+                .join(Project, Project.id == GitConnection.project_id)
+                .where(Project.tenant_id == resolved_tenant_id)
+                .order_by(GitConnection.id.asc())
+            )).scalars().all()
+    except Exception:
+        return [], "参考工程规则来源暂不可用；已保留资产元数据和创建 schema。"
+    active = [
+        connection for connection in connections
+        if str(connection.status or "").lower() in {"connected", "active", "enabled"}
+    ]
+    if not active:
+        return [], "当前租户没有可用 GitConnection，未读取参考工程规则。"
+
+    from app.git.connection import make_provider
+
+    rules: list[dict[str, Any]] = []
+    for item in references:
+        coordinates = _reference_repository(item)
+        if coordinates is None:
+            continue
+        repo_full_path, branch = coordinates
+        # Asset repositories are governed by the tenant's Git connection.  A
+        # configured connection is sufficient here; its token stays inside the
+        # provider and is never returned to the model.
+        connection = active[0]
+        provider = make_provider(connection)
+        files: list[dict[str, str]] = []
+        for path in ("AGENTS.md", "README.md", "capability.json"):
+            try:
+                content = await provider.read_file(repo_full_path=repo_full_path, path=path, ref=branch)
+            except Exception:  # missing optional file / unavailable provider
+                continue
+            if content.strip():
+                files.append({"path": path, "content": _redact_reference_rule_text(content)})
+        if files:
+            rules.append({"repository": repo_full_path, "branch": branch, "files": files})
+    if not rules:
+        return [], "未读取到参考工程的 AGENTS.md、README.md 或 capability.json。"
+    return rules, "已从当前租户的参考 Git 工程读取规则文件；请先向用户概括规则，再开始创建。"
+
+
+def _from_scratch_steps(asset_type: str) -> list[str]:
+    if asset_type == "seed_project":
+        return [
+            "先从 reference_assets 选择技术栈和目录约定相近的样例；只借鉴结构，不复制其 Git 项目 ID、仓库地址或代码。",
+            "用户提供新建目录后，先选 list_system_git_connections 的连接，再用 create_system_asset_starter_repository 预览并确认；它会创建空仓、推送首个提交并返回 providerProjectId、pathWithNamespace、repositoryUrl 和 branch。",
+            "调用 get_system_asset_schema(asset_type='seed_project')，按返回字段组装新 payload；先 create_system_asset(..., confirmed=false) 生成预览，得到用户确认后再 confirmed=true。",
+        ]
+    return [
+        "先从 reference_assets 选择相近的运行时类型和风险等级；只借鉴设计，不复制 code、ID、Git 地址或外部参数值。",
+        "先调用 get_system_asset_schema(asset_type='capability', runtime_type=...)；APP_RUNTIME 必须原样使用双段 yamlSchema 模板，AGENT_RUNTIME 需填写 agentCapabilityKind。",
+        "用户提供新建目录后，先选 list_system_git_connections 的连接，再用 create_system_asset_starter_repository 预览并确认；它会生成 capability.json、创建空仓、绑定 origin 并推送首个提交。",
+        "最后按 schema 调用 create_system_asset(..., confirmed=false) 预览；用户确认后才创建能力资产。",
+    ]
 
 
 def _capability_yaml_schema_contract() -> dict[str, Any]:
@@ -1012,6 +1203,52 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
                 result["capability_yaml_schema"] = _capability_yaml_schema_contract()
                 result["runtime_type"] = normalized_runtime_type or None
             return _ok(**result)
+        except AssetGatewayError as exc:
+            return _err(exc.code, str(exc))
+
+    @mcp.tool()
+    async def get_system_asset_creation_examples(
+        asset_type: str,
+        limit: int = 3,
+        tenant_id: int = 0,
+        user_id: int = 0,
+    ) -> dict:
+        """读取当前租户真实 Git 资产，作为种子工程或能力从零创建的参考。
+
+        只返回适合借鉴的脱敏元数据和权威 schema；已有项目 ID、仓库地址、
+        能力 code 与外部参数都不能复制到新资产。
+        """
+        try:
+            kind = str(asset_type or "").strip()
+            if kind not in {"seed_project", "capability"}:
+                return _err(
+                    "SYSTEM_ASSET_CREATION_EXAMPLE_TYPE_INVALID",
+                    "asset_type 只能是 seed_project 或 capability",
+                )
+            page_size = min(10, max(1, int(limit)))
+            gateway = await _gateway(resolve_identity, tenant_id, user_id)
+            params: dict[str, Any] = {"page": 1, "pageSize": page_size} if kind == "capability" else {}
+            result = await gateway.request(
+                asset_type=kind,
+                method="GET",
+                path=_asset_path(kind),
+                params=params,
+            )
+            items = _asset_result_items(result)
+            reference_items = items[:page_size]
+            reference_rules, rules_status = await _reference_rules_for_assets(
+                resolve_identity, tenant_id, user_id, reference_items,
+            )
+            return _ok(
+                asset_type=kind,
+                reference_asset_count=len(items),
+                reference_assets=[_creation_reference(kind, item) for item in reference_items],
+                reference_rules=reference_rules,
+                reference_rules_status=rules_status,
+                schema=_asset_field_schema(kind),
+                from_scratch_steps=_from_scratch_steps(kind),
+                copy_safety="参考资产仅用于选择技术栈和约定；不得复制其仓库、项目 ID、机器编码或外部参数值，新资产必须使用新的 Git 仓库与标识。",
+            )
         except AssetGatewayError as exc:
             return _err(exc.code, str(exc))
 
@@ -1473,6 +1710,133 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
             } for connection, project in rows])
         except SystemGitError as exc:
             return _err(exc.code, str(exc))
+
+    @mcp.tool()
+    async def create_system_asset_starter_repository(
+        asset_type: str,
+        repository_path: str,
+        git_connection_id: int,
+        code: str,
+        name: str,
+        description: str | None = None,
+        repository_name: str | None = None,
+        branch: str = "main",
+        confirmed: bool = False,
+        tenant_id: int = 0,
+        user_id: int = 0,
+    ) -> dict:
+        """从零初始化种子工程或能力的 Git 工程，并在平台 Git 组建空仓后推送。
+
+        只接受用户明确提供的空目录。首次调用只展示将写入的文件和将创建的
+        Git 仓库；确认后才进行本地写入、首个提交、远端建仓及 push。
+        """
+        try:
+            kind = str(asset_type or "").strip()
+            if kind not in {"seed_project", "capability"}:
+                return _err("SYSTEM_ASSET_STARTER_TYPE_INVALID", "asset_type 只能是 seed_project 或 capability")
+            normalized_code = str(code or "").strip()
+            project_name = _starter_repository_name(normalized_code, repository_name)
+            display_name = str(name or "").strip()
+            if not display_name:
+                return _err("SYSTEM_ASSET_STARTER_NAME_REQUIRED", "name 不能为空")
+            target_branch = str(branch or "").strip()
+            if not target_branch or not _GIT_BRANCH_RE.fullmatch(target_branch) or target_branch.startswith("-"):
+                return _err("SYSTEM_GIT_BRANCH_INVALID", "branch 必须是有效的非空 Git 分支名")
+            root = _new_system_git_root(repository_path)
+            connection = await _system_git_connection(resolve_identity, tenant_id, user_id, git_connection_id)
+            if connection is None:
+                return _err("SYSTEM_GIT_CONNECTION_REQUIRED", "必须选择平台已配置的 GitConnection")
+            group = str(connection.group_id_or_org or "").strip().strip("/")
+            if not group:
+                return _err("SYSTEM_GIT_GROUP_REQUIRED", "所选 GitConnection 尚未配置系统资产 Git 组（group_id_or_org）")
+            full_path = f"{group}/{project_name}"
+            clean_remote = _clean_repository_remote(connection.host, full_path)
+            initial_files = ["README.md", ".gitignore"] + (["capability.json"] if kind == "capability" else ["AGENTS.md"])
+            preview = {
+                "asset_type": kind,
+                "repository_path": str(root),
+                "repository_name": project_name,
+                "repository_full_path": full_path,
+                "origin": clean_remote,
+                "branch": target_branch,
+                "initial_files": initial_files,
+                "asset_registration": (
+                    {
+                        "seedName": display_name,
+                        "providerProjectId": "<本工具创建后返回>",
+                        "pathWithNamespace": full_path,
+                        "repositoryUrl": clean_remote,
+                        "branch": target_branch,
+                    }
+                    if kind == "seed_project" else {
+                        "code": normalized_code,
+                        "name": display_name,
+                        "gitRepository": clean_remote,
+                    }
+                ),
+            }
+            if not confirmed:
+                return _confirmation_preview("create_system_asset_starter_repository", kind, full_path, preview)
+
+            from app.git.connection import make_provider
+            provider = make_provider(connection)
+            existing = await provider.get_repo(full_path)
+            created = existing is None
+            if created:
+                full_path = await provider.create_repo(
+                    group_or_org=group,
+                    name=project_name,
+                    description=f"System {kind}: {display_name}",
+                    initialize_with_readme=False,
+                )
+                clean_remote = _clean_repository_remote(connection.host, full_path)
+                existing = await provider.get_repo(full_path)
+            provider_project_id = existing.get("id") if isinstance(existing, dict) else None
+            if provider_project_id is None:
+                raise SystemGitError("SYSTEM_GIT_PROVIDER_PROJECT_ID_UNAVAILABLE", "Git 平台没有返回仓库 Project ID")
+            authenticated_url = _authenticated_git_remote(connection, clean_remote)
+            try:
+                if _run_git(root.parent, "ls-remote", authenticated_url):
+                    raise SystemGitError("SYSTEM_GIT_REMOTE_NOT_EMPTY", "目标远端仓库已存在提交；未写入本地目录")
+                _write_starter_repository_files(root, kind, normalized_code, display_name, description)
+                _run_git(root, "init", "-b", target_branch)
+                _run_git(root, "add", ".")
+                _run_git(
+                    root, "-c", "user.name=DolphinAI System Assistant",
+                    "-c", "user.email=system-assistant@localhost",
+                    "commit", "-m", f"chore: initialize {project_name}",
+                )
+                _run_git(root, "remote", "add", "origin", clean_remote)
+                push_output = _run_git(root, "-c", f"remote.origin.url={authenticated_url}", "push", "-u", "origin", target_branch)
+            finally:
+                del authenticated_url
+            snapshot = _system_git_snapshot(str(root))
+            snapshot.update({
+                "asset_type": kind,
+                "repository_created": created,
+                "git_connection_id": connection.id,
+                "provider": connection.provider,
+                "repository_full_path": full_path,
+                "repository_url": clean_remote.removesuffix(".git"),
+                "provider_project_id": provider_project_id,
+                "push_output": push_output[-1000:],
+                "asset_registration": (
+                    {
+                        "seedName": display_name,
+                        "providerProjectId": provider_project_id,
+                        "pathWithNamespace": full_path,
+                        "repositoryUrl": clean_remote,
+                        "branch": target_branch,
+                        "description": str(description or "").strip() or None,
+                    }
+                    if kind == "seed_project" else {"code": normalized_code, "name": display_name}
+                ),
+            })
+            return _ok(result=_safe(snapshot))
+        except SystemGitError as exc:
+            return _err(exc.code, str(exc))
+        except Exception as exc:  # noqa: BLE001 - provider details may contain credentials
+            return _err("SYSTEM_GIT_PROVIDER_REQUEST_FAILED", "Git 平台建仓或推送失败；请检查连接权限、Git 组和网络后重试")
 
     @mcp.tool()
     async def create_system_capability_git_repository(

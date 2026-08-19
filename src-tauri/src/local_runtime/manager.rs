@@ -214,7 +214,41 @@ impl<D: RuntimeDriver> LocalRuntimeManager<D> {
         &self,
         runtime_scope_id: &str,
     ) -> Result<Option<InstanceStatus>, LocalRuntimeError> {
-        Ok(self.active_instances()?.get(runtime_scope_id).cloned())
+        let Some(status) = self.active_instances()?.get(runtime_scope_id).cloned() else {
+            return Ok(None);
+        };
+        // Starting status must stay observable while readiness is in progress. A
+        // process may not yet be retained by every driver implementation at this
+        // point, so liveness reconciliation only applies to a published ready
+        // instance.
+        if status.state != InstanceState::Ready {
+            return Ok(Some(status));
+        }
+
+        let record = self.journal.load(runtime_scope_id)?;
+        let record_matches = record.as_ref().is_some_and(|record| {
+            record.pid == status.pid
+                && record.application_id == status.application_id
+                && record.sandbox_instance_id == status.sandbox_instance_id
+        });
+        let process_matches = match record.as_ref() {
+            Some(record) => self.driver.identity(status.pid)?.is_some_and(|identity| {
+                identity.process_started_at == record.process_started_at
+                    && identity.ownership_nonce == record.ownership_nonce
+            }),
+            None => false,
+        };
+        if record_matches && process_matches {
+            return Ok(Some(status));
+        }
+
+        // A stale ready entry is not a usable runtime. Clear only the matching
+        // journal record; a mismatched record is left for start() to reconcile.
+        self.clear_status(runtime_scope_id, &status.sandbox_instance_id);
+        if record_matches {
+            self.journal.remove(runtime_scope_id)?;
+        }
+        Ok(None)
     }
 
     pub fn stop(
@@ -390,7 +424,11 @@ fn validate_request(data_root: &Path, request: &StartRequest) -> Result<(), Loca
         ));
     }
     let worktree = canonical(&request.worktree_path)?;
-    let git_common = canonical(&request.git_common_dir)?;
+    let git_common = request
+        .git_common_dir
+        .as_ref()
+        .map(|path| canonical(path))
+        .transpose()?;
     let codex_home = canonical(&request.codex_home)?;
     let runtime_dir = canonical(&request.runtime_dir)?;
     let runtime_context = canonical(&request.runtime_context_path)?;
@@ -404,13 +442,14 @@ fn validate_request(data_root: &Path, request: &StartRequest) -> Result<(), Loca
             .join(&request.sandbox_instance_id),
     )?;
     let expected_runtime_context = canonical(&expected_runtime_dir.join("runtime-context.json"))?;
-    if !git_common.is_dir()
-        || !agent_runtime.is_file()
-        || actual_git_common_dir(&worktree)? != git_common
-    {
+    let git_metadata_is_valid = match git_common.as_ref() {
+        Some(expected) => expected.is_dir() && actual_git_common_dir(&worktree)? == *expected,
+        None => true,
+    };
+    if !worktree.is_dir() || !agent_runtime.is_file() || !git_metadata_is_valid {
         return Err(LocalRuntimeError::new(
             LocalRuntimeErrorCode::InvalidRequest,
-            "managed Git worktree or runtime executable is invalid",
+            "managed project directory or runtime executable is invalid",
         ));
     }
     if !codex_home.starts_with(&root)
@@ -837,7 +876,7 @@ mod tests {
             sandbox_instance_id: instance.into(),
             workspace_id: "workspace-a".into(),
             worktree_path: worktree,
-            git_common_dir: git_common,
+            git_common_dir: Some(git_common),
             codex_home: codex,
             runtime_dir: runtime.clone(),
             runtime_context_path: runtime.join("runtime-context.json"),
@@ -890,6 +929,17 @@ mod tests {
             actual_git_common_dir(&worktree).unwrap(),
             fs::canonicalize(&common).unwrap()
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn request_accepts_a_project_directory_without_git_metadata() {
+        let root = temp_root();
+        let mut start_request = request(&root, "instance-a");
+        fs::remove_dir_all(start_request.worktree_path.join(".git")).unwrap();
+        start_request.git_common_dir = None;
+
+        assert!(validate_request(&root, &start_request).is_ok());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -961,6 +1011,26 @@ mod tests {
         let first = manager.start(request.clone()).unwrap();
         let second = manager.start(request).unwrap();
         assert_eq!(first.pid, second.pid);
+        assert_eq!(manager.driver.spawns.load(Ordering::SeqCst), 2);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn status_retires_a_ready_runtime_after_its_process_exits() {
+        let root = temp_root();
+        let driver = FakeDriver {
+            spawns: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+            identity: None,
+        };
+        let manager = LocalRuntimeManager::new(&root, driver);
+        manager.start(request(&root, "instance-a")).unwrap();
+
+        assert!(manager.status("scope-a").unwrap().is_none());
+        assert!(manager.journal.load("scope-a").unwrap().is_none());
+
+        let replacement = manager.start(request(&root, "instance-b")).unwrap();
+        assert_eq!(replacement.sandbox_instance_id, "instance-b");
         assert_eq!(manager.driver.spawns.load(Ordering::SeqCst), 2);
         fs::remove_dir_all(root).unwrap();
     }

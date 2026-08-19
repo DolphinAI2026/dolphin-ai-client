@@ -288,7 +288,7 @@ def test_system_asset_tool_names_cover_each_requested_asset_family():
 
     assert {
         "list_system_assets", "get_system_asset_schema", "get_system_assistant_mcp_contract",
-        "create_system_asset", "delete_system_asset",
+        "get_system_asset_creation_examples", "create_system_asset", "delete_system_asset",
     }.issubset(names)
     assert {"get_environment_capability_config", "save_environment_capability_config"}.issubset(names)
     assert {
@@ -315,8 +315,40 @@ def test_system_asset_tool_names_cover_each_requested_asset_family():
         "list_system_git_connections",
         "configure_system_git_remote",
         "push_system_git_repository",
+        "create_system_asset_starter_repository",
         "create_system_capability_git_repository",
     }.issubset(names)
+
+
+@pytest.mark.asyncio
+async def test_creation_examples_read_live_seed_references_and_never_offer_them_for_copy(tools):
+    registered, gateway = tools
+
+    async def reference_request(**kwargs):
+        gateway.calls.append(kwargs)
+        return {"items": [{
+            "seedProjectId": "seed-1", "seedName": "ht-java", "providerProjectId": 42,
+            "pathWithNamespace": "orcamatrix/ht-java", "repositoryUrl": "https://git.example.com/orcamatrix/ht-java.git",
+            "branch": "main", "description": "Java baseline",
+        }]}
+
+    gateway.request = reference_request
+    result = await registered["get_system_asset_creation_examples"](
+        "seed_project", tenant_id=1, user_id=2
+    )
+
+    assert result["ok"] is True
+    assert result["reference_asset_count"] == 1
+    assert result["reference_assets"] == [{
+        "seedProjectId": "seed-1", "seedName": "ht-java", "providerProjectId": 42,
+        "pathWithNamespace": "orcamatrix/ht-java", "repositoryUrl": "https://git.example.com/orcamatrix/ht-java.git",
+        "branch": "main", "description": "Java baseline",
+    }]
+    assert "不得复制" in result["copy_safety"]
+    assert result["schema"]["examples"]["new_git_seed"]["branch"] == "main"
+    assert gateway.calls == [{
+        "asset_type": "seed_project", "method": "GET", "path": "/api/seed-projects", "params": {},
+    }]
 
 
 @pytest.mark.asyncio
@@ -491,6 +523,63 @@ def _git_remote(repo) -> str:
         check=False, capture_output=True, text=True,
     )
     return result.stdout.strip()
+
+
+@pytest.mark.asyncio
+async def test_starter_repository_creates_new_capability_repo_only_after_confirmation(tools, tmp_path, monkeypatch):
+    registered, _gateway = tools
+    connection = SimpleNamespace(
+        id=42,
+        provider="gitlab",
+        host="https://git.example.com",
+        group_id_or_org="orcamatrix/capabilities",
+    )
+
+    async def fake_connection(*_args, **_kwargs):
+        return connection
+
+    class FakeProvider:
+        created = False
+
+        async def get_repo(self, _path):
+            return {"id": 9527} if self.created else None
+
+        async def create_repo(self, **kwargs):
+            assert kwargs["group_or_org"] == "orcamatrix/capabilities"
+            assert kwargs["initialize_with_readme"] is False
+            self.created = True
+            return "orcamatrix/capabilities/approval-center"
+
+    import app.git.connection as git_connection
+    monkeypatch.setattr(system_assets, "_system_git_connection", fake_connection)
+    monkeypatch.setattr(system_assets, "_authenticated_git_remote", lambda *_args: "https://ephemeral-token@git.example.com/orcamatrix/capabilities/approval-center.git")
+    monkeypatch.setattr(git_connection, "make_provider", lambda _connection: FakeProvider())
+    real_run_git = system_assets._run_git
+
+    def fake_run_git(root, *args, check=True):
+        if args and args[0] == "ls-remote":
+            return ""
+        if "push" in args:
+            return "To https://git.example.com/orcamatrix/capabilities/approval-center.git"
+        return real_run_git(root, *args, check=check)
+
+    monkeypatch.setattr(system_assets, "_run_git", fake_run_git)
+    repo = tmp_path / "approval-center"
+    preview = await registered["create_system_asset_starter_repository"](
+        "capability", str(repo), 42, "approval-center", "审批中心", tenant_id=1, user_id=2,
+    )
+    assert preview["confirmation_required"] is True
+    assert not repo.exists()
+
+    result = await registered["create_system_asset_starter_repository"](
+        "capability", str(repo), 42, "approval-center", "审批中心", confirmed=True, tenant_id=1, user_id=2,
+    )
+    assert result["ok"] is True
+    assert (repo / "capability.json").is_file()
+    assert _git(repo, "rev-parse", "--verify", "HEAD") is None
+    assert _git_remote(repo) == "https://git.example.com/orcamatrix/capabilities/approval-center.git"
+    assert result["result"]["provider_project_id"] == 9527
+    assert result["result"]["asset_registration"] == {"code": "approval-center", "name": "审批中心"}
 
 
 def test_control_plane_asset_requests_forward_the_authenticated_tenant_header():

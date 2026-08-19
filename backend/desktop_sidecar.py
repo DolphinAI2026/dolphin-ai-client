@@ -4,6 +4,7 @@
 所需的全部环境变量注入 os.environ, 然后以 app 对象方式启动 uvicorn。
 """
 import argparse
+import importlib
 import multiprocessing
 import os
 import runpy
@@ -178,6 +179,12 @@ def main() -> None:
     parser.add_argument("--applications-root", type=Path)
     parser.add_argument("--runtime-data-dir", type=Path)
     parser.add_argument("--run-script", type=str, default="")
+    parser.add_argument(
+        "--verify-import",
+        action="append",
+        default=[],
+        help="build-time only: load modules after desktop environment setup, then exit",
+    )
     args = parser.parse_args()
 
     if args.run_script:
@@ -196,6 +203,15 @@ def main() -> None:
         applications_root=args.applications_root,
         runtime_data_dir=args.runtime_data_dir,
     )
+
+    # A health check only imports the FastAPI startup path.  Keep a small
+    # build-time hook for modules that the desktop sidecar loads lazily while a
+    # conversation is running, so a malformed frozen archive is caught before
+    # it is put into a DMG.
+    if args.verify_import:
+        for module_name in args.verify_import:
+            importlib.import_module(module_name)
+        return
 
     # 现在才 import app (此时 Settings() 能读到上面注入的 env)
     import uvicorn

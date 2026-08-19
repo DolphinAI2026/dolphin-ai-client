@@ -129,6 +129,11 @@ def test_system_assistant_prompt_targets_system_level_code_assets():
     assert "create_system_capability_git_repository" in prompt
     assert "list_system_deployment_environments" in prompt
     assert "list_environment_infrastructure_schemas" in prompt
+    assert "get_system_asset_creation_examples" in prompt
+    assert "严禁复制其 Git 项目 ID" in prompt
+    assert "create_system_asset_starter_repository" in prompt
+    assert "reference_rules" in prompt
+    assert "参考仓库 → 文件名 → 可复用规则" in prompt
     assert "Dolphin Code" in prompt
     assert "apaas" not in normalized
     assert "builder" not in normalized

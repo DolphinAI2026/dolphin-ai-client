@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import railSidebarSource from './RailSidebar.vue?raw'
 import { railTenantHome } from './RailSidebar.vue'
-import { groupCodeRailHistoryByApplication } from './codeRailHistory'
+import { groupCodeRailHistoryByApplication, hydrateCodeRailHistorySessions } from './codeRailHistory'
 import type { CodeRailHistoryResponse } from '@/api/codeRuntime'
 
 type RailSidebarModule = typeof import('./RailSidebar.vue') & {
@@ -31,6 +31,10 @@ describe('RailSidebar product availability', () => {
 
   it('sends the rail logo to the configured product home', () => {
     expect(railSidebarSource).toContain('go(defaultProductHome(productAvailability))')
+  })
+
+  it('hides the mode switch when a tenant has only one available product', () => {
+    expect(railSidebarSource).toContain('v-if="!effectiveCollapsed && visibleModeOrder.length > 1"')
   })
 })
 
@@ -257,10 +261,27 @@ describe('RailSidebar unified session source (SP2b)', () => {
 
   it('keeps the application-scoped sessions returned by Code rail history', () => {
     expect(railSidebarSource).toContain('codeRuntimeApi.listRailHistory()')
-    expect(railSidebarSource).toContain('codeRailHistory.value = applicationResult.status === \'fulfilled\'')
-    expect(railSidebarSource).toContain('? applicationResult.value')
-    expect(railSidebarSource).not.toContain('hydrateCodeRailHistory')
-    expect(railSidebarSource).not.toContain('codeRuntimeApi.listAgentSessions')
+    expect(railSidebarSource).toContain('hydrateCodeRailHistorySessions')
+    expect(railSidebarSource).toContain('codeRuntimeApi.listAgentSessions')
+  })
+
+  it('uses live runtime sessions while retaining an unavailable shell snapshot', async () => {
+    const history: CodeRailHistoryResponse = {
+      apps: [
+        { shell_session_id: 'shell-live', external_application_id: 'crm', sessions: [] },
+        { shell_session_id: 'shell-fallback', external_application_id: 'erp', sessions: [{ runtimeSessionId: 'runtime-old' }] },
+      ],
+    } as CodeRailHistoryResponse
+
+    const hydrated = await hydrateCodeRailHistorySessions(history, async (shellSessionId) => {
+      if (shellSessionId === 'shell-fallback') throw new Error('runtime unavailable')
+      return { sessions: [{ runtimeSessionId: 'runtime-new' }] }
+    })
+
+    expect(hydrated.apps.map(app => app.sessions.map(session => session.runtimeSessionId))).toEqual([
+      ['runtime-new'],
+      ['runtime-old'],
+    ])
   })
 
   it('keeps desktop Code applications and history on the selected local or remote source', () => {

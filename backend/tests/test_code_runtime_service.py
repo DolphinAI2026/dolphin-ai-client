@@ -1493,7 +1493,7 @@ async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_en
     session = AIChatSession(
         tenant_id=7,
         user_id=11,
-        external_application_id="desktop-code-app",
+        external_application_id="local-desktop-code-app",
         title="Desktop Code",
         mode="code",
         status="active",
@@ -1514,7 +1514,7 @@ async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_en
             opened_calls += 1
             return (
                 {
-                    "applicationId": "desktop-code-app",
+                    "applicationId": "local-desktop-code-app",
                     "workspaceId": "workspace-desktop",
                     "sandboxInstanceId": "desktop-instance",
                     "conversationId": "",
@@ -1569,7 +1569,7 @@ async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_en
         )
     ).scalar_one()
     assert opened_calls == 1
-    assert verified == ["desktop-code-app"]
+    assert verified == []
     assert bootstrap_calls == 0
     assert binding.execution_target == "desktop_agent_runtime"
     assert binding.runtime_session_id == "desktop-runtime-session-1"
@@ -1605,7 +1605,7 @@ async def test_desktop_runtime_creates_one_agent_session_per_shell_and_reuses_it
     first = AIChatSession(
         tenant_id=7,
         user_id=11,
-        external_application_id="desktop-code-app",
+        external_application_id="local-desktop-code-app",
         title="Desktop Code 1",
         mode="code",
         status="active",
@@ -1613,7 +1613,7 @@ async def test_desktop_runtime_creates_one_agent_session_per_shell_and_reuses_it
     second = AIChatSession(
         tenant_id=7,
         user_id=11,
-        external_application_id="desktop-code-app",
+        external_application_id="local-desktop-code-app",
         title="Desktop Code 2",
         mode="code",
         status="active",
@@ -1629,7 +1629,7 @@ async def test_desktop_runtime_creates_one_agent_session_per_shell_and_reuses_it
         async def open_application_with_entry_token(self, _db, _session, _ctx, **_kwargs):
             return (
                 {
-                    "applicationId": "desktop-code-app",
+                    "applicationId": "local-desktop-code-app",
                     "workspaceId": "workspace-desktop",
                     "sandboxInstanceId": "desktop-instance",
                     "conversationId": "",
@@ -1714,7 +1714,7 @@ async def test_open_code_session_does_not_fallback_when_configured_desktop_runti
     session = AIChatSession(
         tenant_id=7,
         user_id=11,
-        external_application_id="desktop-code-app",
+        external_application_id="local-desktop-code-app",
         title="Desktop Code",
         mode="code",
         status="active",
@@ -1760,7 +1760,7 @@ async def test_open_code_session_does_not_fallback_when_configured_desktop_runti
 
 
 @pytest.mark.asyncio
-async def test_desktop_runtime_does_not_start_when_control_plane_application_check_fails(
+async def test_desktop_sidecar_opens_remote_application_without_local_runtime_or_preflight(
     db_session,
     monkeypatch,
 ):
@@ -1770,8 +1770,8 @@ async def test_desktop_runtime_does_not_start_when_control_plane_application_che
     session = AIChatSession(
         tenant_id=7,
         user_id=11,
-        external_application_id="desktop-code-app",
-        title="Desktop Code",
+        external_application_id="remote-code-app",
+        title="Remote Code",
         mode="code",
         status="active",
     )
@@ -1784,27 +1784,42 @@ async def test_desktop_runtime_does_not_start_when_control_plane_application_che
             return cls()
 
         async def open_application_with_entry_token(self, *_args):
-            raise AssertionError("local runtime must not start before application authorization")
+            raise AssertionError("a remote application must not start the local runtime")
 
-    async def denied(*_args, **_kwargs):
-        raise HTTPException(status_code=403, detail="Tenant is not accessible")
+    async def unexpected_preflight(*_args, **_kwargs):
+        raise AssertionError("remote workspace/open is the authorization boundary")
+
+    open_calls: list[str] = []
+
+    async def remote_workspace_open(
+        application_id: str,
+        _handoff_id: str | None = None,
+        **_kwargs,
+    ):
+        open_calls.append(application_id)
+        return {
+            "workspaceId": "remote-workspace",
+            "sandboxInstanceId": "remote-instance",
+            "specReviewUrl": "https://sandbox.example.com/workspaces/remote-workspace/builder?token=entry-token",
+        }
 
     monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_URL", "http://127.0.0.1:9988")
     monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_TOKEN", "manager-token")
     monkeypatch.setenv("DOLPHIN_DESKTOP_DATA_DIR", "/tmp/desktop-data")
     monkeypatch.setenv("DOLPHIN_AGENT_RUNTIME_PATH", "/tmp/agent-runtime")
     monkeypatch.setattr(service, "LocalRuntimeClient", UnexpectedLocalRuntimeClient)
-    monkeypatch.setattr(service, "verify_control_plane_application_access", denied)
+    monkeypatch.setattr(service, "verify_control_plane_application_access", unexpected_preflight)
+    monkeypatch.setattr(service, "default_workspace_open", remote_workspace_open)
 
-    with pytest.raises(HTTPException, match="Tenant is not accessible") as exc:
-        await open_code_session(
-            db=db_session,
-            session_id=session.id,
-            ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
-            authorization_header="Bearer user-token",
-        )
+    result = await open_code_session(
+        db=db_session,
+        session_id=session.id,
+        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
+        authorization_header="Bearer user-token",
+    )
 
-    assert exc.value.status_code == 403
+    assert open_calls == ["remote-code-app"]
+    assert result["external_application_id"] == "remote-code-app"
 
 
 @pytest.mark.asyncio
