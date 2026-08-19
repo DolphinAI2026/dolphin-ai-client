@@ -101,6 +101,22 @@ CREATE TABLE IF NOT EXISTS git_connections (
   CONSTRAINT fk_git_conn_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 7b. tenant_git_connections（租户级默认 Git 凭证，供系统资产和未归属项目复用）
+CREATE TABLE IF NOT EXISTS tenant_git_connections (
+  id INT NOT NULL AUTO_INCREMENT,
+  tenant_id INT NOT NULL,
+  provider VARCHAR(20) NOT NULL,
+  host VARCHAR(255) NOT NULL,
+  access_token_enc TEXT NOT NULL,
+  group_id_or_org VARCHAR(255) NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'connected',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_tenant_git_connection (tenant_id),
+  CONSTRAINT fk_tenant_git_connection_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- 8. platform_drift_logs 空表
 CREATE TABLE IF NOT EXISTS platform_drift_logs (
   id INT NOT NULL AUTO_INCREMENT,

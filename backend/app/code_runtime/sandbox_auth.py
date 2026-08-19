@@ -461,6 +461,13 @@ def _validated_runtime_base_url(value: str | None) -> str | None:
         if parsed.query or parsed.fragment:
             raise ValueError("query and fragment are forbidden")
         parsed.port
+        hostname = str(parsed.hostname or "").rstrip(".").lower()
+        # workspace/open runs in the Control Plane's cluster.  A value such as
+        # `runtime.namespace.svc.cluster.local` is valid *inside* that cluster
+        # but is not routable from the desktop client.  In that case use the
+        # public Builder URL below to derive the runtime origin instead.
+        if hostname == "cluster.local" or hostname.endswith((".svc", ".svc.cluster.local")):
+            raise ValueError("cluster-internal hostname")
     except ValueError as exc:
         logger.warning("Ignoring invalid Control Plane runtimeBaseUrl: %s", exc)
         return None

@@ -9,6 +9,16 @@ export interface GitConnection {
   status: string
 }
 
+export interface TenantGitConnection {
+  id: number
+  scope: 'tenant'
+  tenant_id: number
+  provider: 'gitlab' | 'github'
+  host: string
+  group_id_or_org: string
+  status: string
+}
+
 export interface ConnectGitPATRequest {
   provider: 'gitlab' | 'github'
   host: string
@@ -36,6 +46,15 @@ export interface SyncWorkspaceResponse {
 }
 
 export const gitConnectionApi = {
+  getTenant(): Promise<TenantGitConnection | null> {
+    return request.get<any, TenantGitConnection | null>('/tenant/git-connection')
+  },
+  connectTenant(body: ConnectGitPATRequest): Promise<TenantGitConnection> {
+    return request.put<any, TenantGitConnection>('/tenant/git-connection', body)
+  },
+  disconnectTenant() {
+    return request.delete<any, { status: string }>('/tenant/git-connection')
+  },
   get(projectId: number): Promise<GitConnection | null> {
     return request.get<any, GitConnection | null>(`/projects/${projectId}/git-connection`)
   },

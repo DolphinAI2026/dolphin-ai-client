@@ -1334,6 +1334,30 @@ async def test_bootstrap_runtime_session_uses_entry_token_only_upstream_and_retu
     assert "runtime-cookie-secret" not in repr(bootstrap)
 
 
+@pytest.mark.asyncio
+async def test_bootstrap_runtime_session_ignores_cluster_internal_runtime_base_url():
+    import httpx
+
+    from app.code_runtime.sandbox_auth import bootstrap_runtime_session
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == (
+            "https://test.example.com/workspaces/ws-1/api/status?token=entry-secret"
+        )
+        return httpx.Response(
+            200,
+            headers={"set-cookie": "apaas_sandbox_token=runtime-cookie; Path=/; HttpOnly"},
+        )
+
+    bootstrap = await bootstrap_runtime_session(
+        "https://test.example.com/workspaces/ws-1/builder?token=entry-secret",
+        runtime_base_url="http://agent-runtime.dolphin-code.svc.cluster.local",
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    assert bootstrap.runtime_base_url == "https://test.example.com/workspaces/ws-1"
+
+
 def test_runtime_session_expiry_for_storage_normalizes_aware_datetime_to_naive_utc():
     from datetime import datetime, timedelta, timezone
 
@@ -2204,6 +2228,68 @@ async def test_open_code_session_does_not_retry_invalid_launch_token(
     assert bootstraps == 1
     assert canary not in str(exc_info.value)
     assert canary not in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_open_code_session_retries_transient_runtime_bootstrap_without_reopening_workspace(
+    db_session,
+    monkeypatch,
+):
+    from app.code_runtime import service
+    from app.code_runtime.sandbox_auth import RuntimeBootstrap
+    from app.code_runtime.service import open_code_session
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="code-app-1",
+        title="客户门户 Code",
+        mode="code",
+        status="active",
+    )
+    db_session.add(session)
+    await db_session.commit()
+    workspace_opens = 0
+    bootstrap_attempts = 0
+    retry_delays: list[int] = []
+
+    async def fake_open(_external_application_id: str, _handoff_id: str | None = None):
+        nonlocal workspace_opens
+        workspace_opens += 1
+        return {
+            "workspaceId": "ws-1",
+            "specReviewUrl": "https://sandbox.example.com/workspaces/ws-1/builder?token=entry-token",
+        }
+
+    async def fake_bootstrap(_builder_url: str):
+        nonlocal bootstrap_attempts
+        bootstrap_attempts += 1
+        if bootstrap_attempts < 3:
+            raise HTTPException(status_code=503, detail="Runtime bootstrap failed")
+        return RuntimeBootstrap(
+            clean_builder_url="https://sandbox.example.com/workspaces/ws-1/builder",
+            runtime_base_url="https://sandbox.example.com/workspaces/ws-1",
+            runtime_cookie="runtime-cookie",
+            runtime_cookie_hash="a" * 64,
+            expires_at=None,
+        )
+
+    async def fake_sleep(delay: int):
+        retry_delays.append(delay)
+
+    monkeypatch.setattr(service, "bootstrap_runtime_session", fake_bootstrap)
+    monkeypatch.setattr(service.asyncio, "sleep", fake_sleep)
+
+    await open_code_session(
+        db=db_session,
+        session_id=session.id,
+        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7, tenant_role="member"),
+        workspace_open=fake_open,
+    )
+
+    assert workspace_opens == 1
+    assert bootstrap_attempts == 3
+    assert retry_delays == [1, 1]
 
 
 @pytest.mark.asyncio

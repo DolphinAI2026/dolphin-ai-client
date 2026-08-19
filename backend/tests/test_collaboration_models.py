@@ -11,7 +11,7 @@ from app.models import User, Application, Project, Tenant
 from app.models.spec import Spec as SpecORM
 from app.models.collaboration import (
     ApplicationMember, ChangeProposal, ProposalReview,
-    GitConnection, PlatformDriftLog,
+    GitConnection, TenantGitConnection, PlatformDriftLog,
 )
 
 
@@ -61,7 +61,7 @@ async def test_collaboration_tables_registered(db_session):
         return inspect(sync_session.connection()).get_table_names()
     names = await db_session.run_sync(_table_names)
     for t in ("application_members", "change_proposals", "proposal_reviews",
-              "git_connections", "platform_drift_logs"):
+              "git_connections", "tenant_git_connections", "platform_drift_logs"):
         assert t in names
 
 
@@ -163,6 +163,23 @@ async def test_git_connection_unique_per_project(db_session):
         status="connected",
     )
     db_session.add(conn2)
+    with pytest.raises(IntegrityError):
+        await db_session.commit()
+    await db_session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_tenant_git_connection_unique_per_tenant(db_session):
+    seed = await _seed_basics(db_session)
+    db_session.add(TenantGitConnection(
+        tenant_id=seed["tenant"].id, provider="gitlab", host="https://gitlab.example.com",
+        access_token_enc="enc1", status="connected",
+    ))
+    await db_session.commit()
+    db_session.add(TenantGitConnection(
+        tenant_id=seed["tenant"].id, provider="github", host="https://github.com",
+        access_token_enc="enc2", status="connected",
+    ))
     with pytest.raises(IntegrityError):
         await db_session.commit()
     await db_session.rollback()

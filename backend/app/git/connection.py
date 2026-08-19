@@ -1,9 +1,10 @@
 """GitConnection 凭证加解密 + provider 工厂"""
 from __future__ import annotations
 import os
+from typing import Protocol
 from cryptography.fernet import Fernet
 
-from app.models.collaboration import GitConnection
+from app.models.collaboration import GitConnection, TenantGitConnection
 from app.git.provider.base import GitProvider
 from app.git.provider.gitlab import GitLabProvider
 from app.git.provider.github import GitHubProvider
@@ -32,7 +33,13 @@ def decrypt_token(enc: str) -> str:
     return _fernet().decrypt(enc.encode()).decode()
 
 
-def make_provider(conn: GitConnection) -> GitProvider:
+class GitCredential(Protocol):
+    provider: str
+    host: str
+    access_token_enc: str
+
+
+def make_provider(conn: GitCredential) -> GitProvider:
     """根据 GitConnection.provider 构造对应 GitProvider 实例"""
     token = decrypt_token(conn.access_token_enc)
     if conn.provider == "gitlab":

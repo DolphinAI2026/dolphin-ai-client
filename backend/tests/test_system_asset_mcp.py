@@ -8,6 +8,9 @@ from types import SimpleNamespace
 import pytest
 
 from app.mcp_tools import system_assets
+from app.models import Project, User
+from app.models.collaboration import GitConnection, TenantGitConnection
+from app.models.tenant import Tenant
 
 
 class _FakeMCP:
@@ -28,6 +31,17 @@ class _Gateway:
     async def request(self, **kwargs):
         self.calls.append(kwargs)
         return {"id": "created", "values": {"password": "never-returned"}}
+
+
+class _SessionContext:
+    def __init__(self, session):
+        self.session = session
+
+    async def __aenter__(self):
+        return self.session
+
+    async def __aexit__(self, *_args):
+        return False
 
 
 @pytest.fixture
@@ -443,6 +457,77 @@ async def test_configure_system_git_remote_requires_confirmation(tools, capabili
     )
     assert applied["ok"] is True
     assert _git_remote(capability_repository) == remote
+
+
+@pytest.mark.asyncio
+async def test_tenant_git_connection_is_listed_and_scope_prevents_id_collision(tools, db_session, monkeypatch):
+    registered, _gateway = tools
+    tenant = Tenant(tenant_name="git-tenant", tenant_code="git-tenant")
+    user = User(username="git-user", hashed_password="x")
+    db_session.add_all([tenant, user])
+    await db_session.flush()
+    project = Project(name="legacy-project", user_id=user.id, tenant_id=tenant.id)
+    db_session.add(project)
+    await db_session.flush()
+    db_session.add_all([
+        TenantGitConnection(
+            tenant_id=tenant.id, provider="gitlab", host="https://git.example.com",
+            access_token_enc="tenant-token", group_id_or_org="platform/assets", status="connected",
+        ),
+        GitConnection(
+            project_id=project.id, provider="gitlab", host="https://git.example.com",
+            access_token_enc="project-token", group_id_or_org="legacy/project", status="connected",
+        ),
+    ])
+    await db_session.commit()
+    monkeypatch.setattr(system_assets, "AsyncSessionLocal", lambda: _SessionContext(db_session))
+
+    listed = await registered["list_system_git_connections"](tenant_id=tenant.id, user_id=user.id)
+    assert {(item["connection_scope"], item["id"]) for item in listed["connections"]} == {
+        ("tenant", 1), ("project", 1),
+    }
+    tenant_connection = await system_assets._system_git_connection(
+        lambda tenant_id, _user_id: (tenant_id, user.id), tenant.id, user.id, 1, "tenant",
+    )
+    assert isinstance(tenant_connection, TenantGitConnection)
+    project_connection = await system_assets._system_git_connection(
+        lambda tenant_id, _user_id: (tenant_id, user.id), tenant.id, user.id, 1, "project",
+    )
+    assert isinstance(project_connection, GitConnection)
+    with pytest.raises(system_assets.SystemGitError, match="connection_scope"):
+        await system_assets._system_git_connection(
+            lambda tenant_id, _user_id: (tenant_id, user.id), tenant.id, user.id, 1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_deployment_git_default_is_used_when_tenant_has_no_override(tools, db_session, monkeypatch):
+    registered, _gateway = tools
+    tenant = Tenant(tenant_name="default-git-tenant", tenant_code="default-git-tenant")
+    user = User(username="default-git-user", hashed_password="x")
+    db_session.add_all([tenant, user])
+    await db_session.commit()
+    monkeypatch.setattr(system_assets, "AsyncSessionLocal", lambda: _SessionContext(db_session))
+    monkeypatch.setattr(system_assets.settings, "system_git_default_provider", "gitlab")
+    monkeypatch.setattr(system_assets.settings, "system_git_default_host", "https://git.example.com")
+    monkeypatch.setattr(system_assets.settings, "system_git_default_access_token", "deployment-secret")
+    monkeypatch.setattr(system_assets.settings, "system_git_default_group_or_org", "platform/assets")
+
+    listed = await registered["list_system_git_connections"](tenant_id=tenant.id, user_id=user.id)
+    assert listed["connections"] == [{
+        "id": 0,
+        "connection_scope": "deployment_default",
+        "provider": "gitlab",
+        "host": "https://git.example.com",
+        "group_id_or_org": "platform/assets",
+        "status": "connected",
+        "source": "deployment_config",
+    }]
+    resolved = await system_assets._system_git_connection(
+        lambda tenant_id, _user_id: (tenant_id, user.id), tenant.id, user.id, 0, "deployment_default",
+    )
+    assert isinstance(resolved, system_assets.DeploymentGitConnection)
+    assert resolved.access_token_enc != "deployment-secret"
 
 
 @pytest.mark.asyncio

@@ -239,6 +239,12 @@ export const routes: RouteRecordRaw[] = [
       meta: { requiresAuth: true, tenantContext: 'none', navExpanded: true }
     },
     {
+      path: '/settings/git',
+      name: 'TenantGitConnection',
+      component: () => import('@/views/TenantGitConnectionPage.vue'),
+      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true, product: 'builder' }
+    },
+    {
       // Legacy CodingPage is kept only for the workspace preview iframe.
       // User-facing Code sessions live under /code/* now.
       path: '/coding',

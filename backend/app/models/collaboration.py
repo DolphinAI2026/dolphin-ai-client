@@ -82,6 +82,24 @@ class GitConnection(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
+class TenantGitConnection(Base):
+    """租户级默认 Git 平台凭证，供系统助手和未归属项目的资产复用。"""
+    __tablename__ = "tenant_git_connections"
+    __table_args__ = (UniqueConstraint("tenant_id", name="uq_tenant_git_connection"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False,
+    )
+    provider: Mapped[str] = mapped_column(String(20), nullable=False)
+    host: Mapped[str] = mapped_column(String(255), nullable=False)
+    access_token_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    group_id_or_org: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="connected", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
 class PlatformDriftLog(Base):
     """漂移检测日志"""
     __tablename__ = "platform_drift_logs"

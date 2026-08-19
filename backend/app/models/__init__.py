@@ -21,6 +21,7 @@ from app.models.collaboration import (  # noqa: F401  — register ORM mapping
     ChangeProposal,
     ProposalReview,
     GitConnection,
+    TenantGitConnection,
     PlatformDriftLog,
 )
 # Import deploy history (DeployRecord) — 2026-05-24

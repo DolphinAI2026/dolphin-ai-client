@@ -12,14 +12,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.deps import get_auth_context, AuthContext
+from app.deps import get_auth_context, require_tenant_admin, AuthContext
 from app.models import Application
-from app.models.collaboration import GitConnection
+from app.models.collaboration import GitConnection, TenantGitConnection
 from app.git.connection import encrypt_token
 from app.project_access import require_project_access
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/projects", tags=["git-connection"])
+tenant_router = APIRouter(prefix="/tenant", tags=["git-connection"])
 # application 级别的 git-init 走独立 router（路径前缀不同）
 app_router = APIRouter(prefix="/applications", tags=["git-init"])
 
@@ -124,6 +125,83 @@ def _to_dict(conn: GitConnection) -> dict:
         "status": conn.status,
         # 不返回 access_token_enc — 安全
     }
+
+
+def _tenant_to_dict(conn: TenantGitConnection) -> dict:
+    return {
+        "id": conn.id,
+        "scope": "tenant",
+        "tenant_id": conn.tenant_id,
+        "provider": conn.provider,
+        "host": conn.host,
+        "group_id_or_org": conn.group_id_or_org,
+        "status": conn.status,
+    }
+
+
+@tenant_router.get("/git-connection")
+async def get_tenant_git_connection(
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """读取当前租户的默认 Git 连接。密文和令牌永不返回。"""
+    conn = await db.scalar(
+        select(TenantGitConnection).where(TenantGitConnection.tenant_id == ctx.tenant_id)
+    )
+    return _tenant_to_dict(conn) if conn else None
+
+
+@tenant_router.put("/git-connection")
+async def upsert_tenant_git_connection(
+    req: ConnectGitPATRequest,
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """配置当前租户的默认 GitLab/GitHub PAT，供系统资产统一复用。"""
+    if req.provider not in ("gitlab", "github"):
+        raise HTTPException(400, "provider 仅支持 gitlab / github")
+    if not req.access_token.strip():
+        raise HTTPException(400, "access_token 不能为空")
+    if not req.host.strip() or not req.group_id_or_org.strip():
+        raise HTTPException(400, "host 和 group_id_or_org 不能为空")
+
+    conn = await db.scalar(
+        select(TenantGitConnection).where(TenantGitConnection.tenant_id == ctx.tenant_id)
+    )
+    if conn is None:
+        conn = TenantGitConnection(
+            tenant_id=ctx.tenant_id,
+            provider=req.provider,
+            host=req.host.strip(),
+            access_token_enc=encrypt_token(req.access_token),
+            group_id_or_org=req.group_id_or_org.strip(),
+            status="connected",
+        )
+        db.add(conn)
+    else:
+        conn.provider = req.provider
+        conn.host = req.host.strip()
+        conn.access_token_enc = encrypt_token(req.access_token)
+        conn.group_id_or_org = req.group_id_or_org.strip()
+        conn.status = "connected"
+    await db.commit()
+    await db.refresh(conn)
+    return _tenant_to_dict(conn)
+
+
+@tenant_router.delete("/git-connection")
+async def delete_tenant_git_connection(
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    conn = await db.scalar(
+        select(TenantGitConnection).where(TenantGitConnection.tenant_id == ctx.tenant_id)
+    )
+    if conn is None:
+        raise HTTPException(404, "未配置租户 Git 连接")
+    await db.delete(conn)
+    await db.commit()
+    return {"status": "ok"}
 
 
 @app_router.post("/{application_id}/git-init")

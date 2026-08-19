@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 import base64
 import hashlib
@@ -46,6 +48,8 @@ from app.models.ai_chat import (
 
 WorkspaceOpen = Callable[[str, str | None], Awaitable[dict[str, Any]]]
 
+logger = logging.getLogger(__name__)
+
 _EMBED_TOKEN_TYPE = "code_runtime_embed"
 _PROXY_COOKIE_TOKEN_TYPE = "code_runtime_proxy"
 _EMBED_TOKEN_ISSUER = "ai-builder"
@@ -57,6 +61,20 @@ _DESKTOP_RUNTIME_ENVIRONMENT_KEYS = (
     "DOLPHIN_DESKTOP_DATA_DIR",
     "DOLPHIN_AGENT_RUNTIME_PATH",
 )
+
+# `workspace/open` may return as soon as Control Plane has accepted a Sandbox
+# deployment. The public Runtime route can therefore return a short-lived
+# gateway error while the pod is still entering its Ready state. Keep the same
+# launch token and retry that readiness window; calling workspace/open again
+# would instead replace the deployment that is still starting.
+_REMOTE_RUNTIME_BOOTSTRAP_RETRY_DELAYS_SECONDS = (1, 1, 2, 3, 5)
+
+
+def _is_transient_runtime_bootstrap_error(exc: HTTPException) -> bool:
+    return (
+        exc.status_code in {502, 503, 504}
+        and not str((exc.headers or {}).get(RUNTIME_AUTH_ERROR_HEADER) or "").strip()
+    )
 
 
 async def _remember_runtime_agent_session(
@@ -1271,7 +1289,9 @@ async def open_code_session(
         clean_builder_url = builder_url
         runtime_base_url = derive_runtime_base_url(builder_url)
     else:
-        for bootstrap_attempt in range(2):
+        launch_token_refreshed = False
+        transient_bootstrap_attempt = 0
+        while True:
             try:
                 bootstrap_kwargs = (
                     {"runtime_base_url": opened.get("runtimeBaseUrl")}
@@ -1293,8 +1313,9 @@ async def open_code_session(
                 ).strip()
                 if (
                     auth_error == "sandbox_launch_token_expired"
-                    and bootstrap_attempt == 0
+                    and not launch_token_refreshed
                 ):
+                    launch_token_refreshed = True
                     opened = await workspace_open_once()
                     set_remote_phase("initializing")
                     builder_url = str(
@@ -1306,14 +1327,29 @@ async def open_code_session(
                             detail="Code Control Plane 未返回 builder URL",
                         )
                     continue
+                if (
+                    _is_transient_runtime_bootstrap_error(exc)
+                    and transient_bootstrap_attempt
+                    < len(_REMOTE_RUNTIME_BOOTSTRAP_RETRY_DELAYS_SECONDS)
+                ):
+                    retry_delay = _REMOTE_RUNTIME_BOOTSTRAP_RETRY_DELAYS_SECONDS[
+                        transient_bootstrap_attempt
+                    ]
+                    transient_bootstrap_attempt += 1
+                    logger.info(
+                        "Runtime bootstrap pending status=%s retry_in_seconds=%s",
+                        exc.status_code,
+                        retry_delay,
+                    )
+                    await asyncio.sleep(retry_delay)
+                    continue
                 raise
             except ValueError as exc:
                 raise HTTPException(
                     status_code=502,
                     detail="Code Control Plane 未返回 runtime entry token",
                 ) from exc
-        if bootstrap is None:
-            raise HTTPException(status_code=503, detail="Code runtime 暂时不可用")
+            break
         clean_builder_url = bootstrap.clean_builder_url
         runtime_base_url = bootstrap.runtime_base_url
 

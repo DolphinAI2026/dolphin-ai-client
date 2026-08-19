@@ -47,6 +47,10 @@ PUBLIC_URL="${PUBLIC_URL:-https://${DEV_HOST}/ai-builder/login}"
 APAAS_BASE_URL="${APAAS_BASE_URL:-}"
 DEV_DATABASE_NAME="${DEV_DATABASE_NAME:-apaas_builder_dev}"
 DEV_MCP_API_KEYS="${DEV_MCP_API_KEYS:-dev-mcp-api-key-local}"
+SYSTEM_GIT_DEFAULT_PROVIDER="${SYSTEM_GIT_DEFAULT_PROVIDER:-}"
+SYSTEM_GIT_DEFAULT_HOST="${SYSTEM_GIT_DEFAULT_HOST:-}"
+SYSTEM_GIT_DEFAULT_ACCESS_TOKEN="${SYSTEM_GIT_DEFAULT_ACCESS_TOKEN:-}"
+SYSTEM_GIT_DEFAULT_GROUP_OR_ORG="${SYSTEM_GIT_DEFAULT_GROUP_OR_ORG:-}"
 
 SOURCE_NGINX_CM="${SOURCE_NGINX_CM:-${PROD_APP_NAME}-nginx}"
 NGINX_CM="${NGINX_CM:-${APP_NAME}-nginx}"
@@ -143,6 +147,10 @@ PUBLIC_URL='${PUBLIC_URL}'
 APAAS_BASE_URL='${APAAS_BASE_URL}'
 DEV_DATABASE_NAME='${DEV_DATABASE_NAME}'
 DEV_MCP_API_KEYS='${DEV_MCP_API_KEYS:-dev-mcp-api-key-local}'
+SYSTEM_GIT_DEFAULT_PROVIDER='${SYSTEM_GIT_DEFAULT_PROVIDER}'
+SYSTEM_GIT_DEFAULT_HOST='${SYSTEM_GIT_DEFAULT_HOST}'
+SYSTEM_GIT_DEFAULT_ACCESS_TOKEN='${SYSTEM_GIT_DEFAULT_ACCESS_TOKEN}'
+SYSTEM_GIT_DEFAULT_GROUP_OR_ORG='${SYSTEM_GIT_DEFAULT_GROUP_OR_ORG}'
 SOURCE_NGINX_CM='${SOURCE_NGINX_CM}'
 NGINX_CM='${NGINX_CM}'
 SOURCE_BACKEND_SECRET='${SOURCE_BACKEND_SECRET}'
@@ -188,6 +196,20 @@ if grep -q '^MCP_API_KEYS=' /tmp/apaas-builder-backend.env; then
 else
   printf 'MCP_API_KEYS=%s\\n' "\$DEV_MCP_API_KEYS" >> /tmp/apaas-builder-backend.env
 fi
+set_backend_env_value() {
+  key="\$1"
+  value="\$2"
+  [ -n "\$value" ] || return 0
+  if grep -q "^\${key}=" /tmp/apaas-builder-backend.env; then
+    sed -i "s#^\${key}=.*#\${key}=\${value}#" /tmp/apaas-builder-backend.env
+  else
+    printf '%s=%s\\n' "\$key" "\$value" >> /tmp/apaas-builder-backend.env
+  fi
+}
+set_backend_env_value SYSTEM_GIT_DEFAULT_PROVIDER "\$SYSTEM_GIT_DEFAULT_PROVIDER"
+set_backend_env_value SYSTEM_GIT_DEFAULT_HOST "\$SYSTEM_GIT_DEFAULT_HOST"
+set_backend_env_value SYSTEM_GIT_DEFAULT_ACCESS_TOKEN "\$SYSTEM_GIT_DEFAULT_ACCESS_TOKEN"
+set_backend_env_value SYSTEM_GIT_DEFAULT_GROUP_OR_ORG "\$SYSTEM_GIT_DEFAULT_GROUP_OR_ORG"
 kubectl -n "\$NAMESPACE" create secret generic "\$BACKEND_SECRET" \\
   --from-file=backend.env=/tmp/apaas-builder-backend.env \\
   --dry-run=client -o yaml \\

@@ -172,7 +172,7 @@ const sections = computed<SettingSection[]>(() => [
     icon: 'settings',
     items: [
       { key: 'apaas', label: 'aPaaS 租户与账号', description: '在 Control Plane 管理组织的 aPaaS 接入。', icon: 'building', tone: 'blue', externalPath: '/apaas-access', visible: () => isDesktop || user.isTenantAdmin, status: '打开 Control Plane', statusTone: 'muted' },
-      { key: 'git', label: 'Git 认证与账号', description: isDesktop ? '本地应用目录仍在工作区维护；远程 Git 凭据由远程控制台维护。' : 'Builder 服务侧凭据，在工作区和项目中管理 GitHub / GitLab 连接。', icon: 'link', tone: 'orange', path: '/workspace-catalog', status: isDesktop ? '本地工作区 / 远程凭据分开' : '从工作区目录进入连接管理', statusTone: 'muted' },
+      { key: 'git', label: 'Git 平台连接', description: '配置当前组织的默认 GitLab / GitHub 连接，供系统助手创建和推送系统资产仓库。', icon: 'link', tone: 'orange', path: '/settings/git', visible: () => user.isTenantAdmin, status: '租户级默认连接', statusTone: 'muted' },
       { key: 'k8s', label: '运行环境', description: '在 Control Plane 管理远程运行环境和发布凭据。', icon: 'database', tone: 'green', externalPath: '/environments', status: '打开 Control Plane', statusTone: 'muted' },
       { key: 'members', label: '组织账号与成员', description: '在 Control Plane 管理组织成员和权限。', icon: 'users', tone: 'slate', externalPath: '/admin-users', visible: () => user.isTenantAdmin || isDesktop, status: '打开 Control Plane', statusTone: 'muted' },
     ],

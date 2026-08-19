@@ -7,10 +7,11 @@
 """
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import select
 
-from app.deps import AuthContext
+from app.deps import AuthContext, require_tenant_admin
 from app.models import Project, ProjectMember, User
-from app.models.collaboration import GitConnection
+from app.models.collaboration import GitConnection, TenantGitConnection
 from app.models.tenant import Tenant, UserTenant
 from app.git.connection import encrypt_token, decrypt_token, make_provider
 from app.git.provider.gitlab import GitLabProvider
@@ -20,6 +21,9 @@ from app.routes.git_connection import (
     connect_git_pat,
     delete_git_connection,
     get_git_connection,
+    delete_tenant_git_connection,
+    get_tenant_git_connection,
+    upsert_tenant_git_connection,
 )
 
 
@@ -207,3 +211,44 @@ async def test_delete_requires_owner(db_session):
     # owner 可以
     result = await delete_git_connection(s["project"].id, owner_ctx, db_session)
     assert result == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_tenant_connection_persists_encrypted_token_and_never_returns_it(db_session):
+    s = await _seed(db_session)
+    ctx = _ctx_for(s["owner"], s["tenant"].id)
+
+    result = await upsert_tenant_git_connection(
+        ConnectGitPATRequest(
+            provider="gitlab", host="https://git.example.com",
+            access_token="glpat-global-secret", group_id_or_org="platform/capabilities",
+        ), ctx, db_session,
+    )
+
+    assert result["scope"] == "tenant"
+    assert result["group_id_or_org"] == "platform/capabilities"
+    assert "access_token" not in result
+    stored = (await db_session.execute(
+        select(TenantGitConnection).where(TenantGitConnection.tenant_id == s["tenant"].id)
+    )).scalar_one()
+    assert stored.access_token_enc != "glpat-global-secret"
+    assert decrypt_token(stored.access_token_enc) == "glpat-global-secret"
+
+    fetched = await get_tenant_git_connection(ctx, db_session)
+    assert fetched["id"] == result["id"]
+    assert "access_token_enc" not in fetched
+
+    deleted = await delete_tenant_git_connection(ctx, db_session)
+    assert deleted == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_tenant_connection_requires_tenant_admin(db_session):
+    s = await _seed(db_session)
+    member_ctx = AuthContext(
+        user=s["contributor"], tenant_id=s["tenant"].id,
+        tenant_role="member", org_permissions={},
+    )
+    with pytest.raises(HTTPException) as exc:
+        await require_tenant_admin(member_ctx)
+    assert exc.value.status_code == 403

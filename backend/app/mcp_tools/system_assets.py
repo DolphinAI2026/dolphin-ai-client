@@ -26,10 +26,11 @@ from sqlalchemy import select
 from app.builder_ai_management import _internal_headers, _management_base_url
 from app.code_runtime.auth import control_plane_access_token, remote_builder_access_token
 from app.code_runtime.service import control_plane_base_url
+from app.config import settings
 from app.database import AsyncSessionLocal
 from app.mcp_envelope import _err, _ok
 from app.models import Project, User
-from app.models.collaboration import GitConnection
+from app.models.collaboration import GitConnection, TenantGitConnection
 
 
 SYSTEM_ASSET_TOOL_NAMES = frozenset({
@@ -316,6 +317,7 @@ _SYSTEM_ASSISTANT_MCP_CONTRACTS: dict[str, dict[str, Any]] = {
     "create_system_capability_git_repository": {
         "parameters": [
             {"name": "git_connection_id", "required": True, "description": "必须先调用 list_system_git_connections，从返回的 id 选择，不能猜测。"},
+            {"name": "git_connection_scope", "required": True, "allowed_values": ["tenant", "project", "deployment_default"], "description": "必须使用清单返回的 connection_scope，避免不同来源的连接 ID 冲突。"},
             {"name": "branch", "required": False, "description": "默认为当前分支；必须是有效 Git 分支名。"},
             {"name": "confirmed", "required": False, "allowed_values": [False, True]},
         ],
@@ -325,6 +327,7 @@ _SYSTEM_ASSISTANT_MCP_CONTRACTS: dict[str, dict[str, Any]] = {
             {"name": "asset_type", "required": True, "allowed_values": ["seed_project", "capability"]},
             {"name": "repository_path", "required": True, "description": "用户明确提供的不存在或空的绝对目录。"},
             {"name": "git_connection_id", "required": True, "description": "必须先调用 list_system_git_connections，从返回的 id 选择。"},
+            {"name": "git_connection_scope", "required": True, "allowed_values": ["tenant", "project", "deployment_default"], "description": "必须使用清单返回的 connection_scope。"},
             {"name": "code", "required": True, "description": "新资产的机器编码，同时默认用作新 Git 仓库名。"},
             {"name": "name", "required": True, "description": "新资产显示名称。"},
             {"name": "branch", "required": False, "description": "默认 main；必须是有效 Git 分支名。"},
@@ -342,6 +345,7 @@ _SYSTEM_ASSISTANT_MCP_CONTRACTS: dict[str, dict[str, Any]] = {
         "parameters": [
             {"name": "branch", "required": False, "description": "默认为当前分支；必须是有效 Git 分支名。"},
             {"name": "git_connection_id", "required": False, "description": "如指定，必须来自 list_system_git_connections。"},
+            {"name": "git_connection_scope", "required": False, "allowed_values": ["tenant", "project", "deployment_default"], "description": "传 git_connection_id 时必须同步传入清单返回的 scope。"},
             {"name": "confirmed", "required": False, "allowed_values": [False, True]},
         ],
     },
@@ -510,6 +514,40 @@ def _capability_repository_name(root: Path, requested_name: str | None = None) -
     return raw_name
 
 
+@dataclass(frozen=True)
+class DeploymentGitConnection:
+    """只存在于部署配置中的 Git 默认连接，绝不写入数据库或响应。"""
+    id: int
+    provider: str
+    host: str
+    access_token_enc: str
+    group_id_or_org: str
+    status: str = "connected"
+
+
+async def _deployment_git_connection(_tenant_id: int) -> DeploymentGitConnection | None:
+    """Return an encrypted in-memory deployment fallback for an unconfigured tenant."""
+    required = (
+        settings.system_git_default_provider,
+        settings.system_git_default_host,
+        settings.system_git_default_access_token,
+        settings.system_git_default_group_or_org,
+    )
+    if not all(str(value or "").strip() for value in required):
+        return None
+    provider = str(settings.system_git_default_provider).strip().lower()
+    if provider not in {"gitlab", "github"}:
+        return None
+    from app.git.connection import encrypt_token
+    return DeploymentGitConnection(
+        id=0,
+        provider=provider,
+        host=str(settings.system_git_default_host).strip(),
+        access_token_enc=encrypt_token(str(settings.system_git_default_access_token)),
+        group_id_or_org=str(settings.system_git_default_group_or_org).strip(),
+    )
+
+
 def _clean_repository_remote(host: str, repo_full_path: str) -> str:
     base = str(host or "").rstrip("/")
     path = str(repo_full_path or "").strip("/")
@@ -605,7 +643,8 @@ async def _system_git_connection(
     tenant_id: int,
     user_id: int,
     git_connection_id: int | None,
-) -> GitConnection | None:
+    git_connection_scope: str | None = None,
+) -> GitConnection | TenantGitConnection | DeploymentGitConnection | None:
     """Load a platform-configured Git credential without exposing its token."""
     if git_connection_id is None:
         return None
@@ -614,14 +653,40 @@ async def _system_git_connection(
         connection_id = int(git_connection_id)
     except (TypeError, ValueError):
         raise SystemGitError("SYSTEM_GIT_CONNECTION_INVALID", "git_connection_id 必须是正整数")
-    if connection_id < 1:
-        raise SystemGitError("SYSTEM_GIT_CONNECTION_INVALID", "git_connection_id 必须是正整数")
+    scope = str(git_connection_scope or "auto").strip().lower()
+    if scope not in {"auto", "tenant", "project", "deployment_default"}:
+        raise SystemGitError("SYSTEM_GIT_CONNECTION_SCOPE_INVALID", "git_connection_scope 只能是 tenant、project 或 deployment_default")
+    if connection_id < 0 or (connection_id == 0 and scope != "deployment_default"):
+        raise SystemGitError("SYSTEM_GIT_CONNECTION_INVALID", "git_connection_id 必须是正整数；部署默认连接使用 ID 0")
+    if scope == "deployment_default":
+        if connection_id != 0:
+            raise SystemGitError("SYSTEM_GIT_CONNECTION_INVALID", "部署默认连接必须使用 ID 0")
+        connection = await _deployment_git_connection(resolved_tenant_id)
+        if connection is None:
+            raise SystemGitError("SYSTEM_GIT_CONNECTION_NOT_FOUND", "当前租户未配置部署默认 GitConnection")
+        return connection
     async with AsyncSessionLocal() as db:
-        connection = await db.scalar(
-            select(GitConnection)
-            .join(Project, Project.id == GitConnection.project_id)
-            .where(GitConnection.id == connection_id, Project.tenant_id == resolved_tenant_id)
+        tenant_connection = None
+        project_connection = None
+        if scope in {"auto", "tenant"}:
+            tenant_connection = await db.scalar(
+                select(TenantGitConnection).where(
+                    TenantGitConnection.id == connection_id,
+                    TenantGitConnection.tenant_id == resolved_tenant_id,
+                )
+            )
+        if scope in {"auto", "project"}:
+            project_connection = await db.scalar(
+                select(GitConnection)
+                .join(Project, Project.id == GitConnection.project_id)
+                .where(GitConnection.id == connection_id, Project.tenant_id == resolved_tenant_id)
+            )
+    if tenant_connection is not None and project_connection is not None:
+        raise SystemGitError(
+            "SYSTEM_GIT_CONNECTION_SCOPE_REQUIRED",
+            "同一 ID 同时存在租户和项目 GitConnection；请从清单中携带 connection_scope",
         )
+    connection = tenant_connection or project_connection
     if connection is None:
         raise SystemGitError("SYSTEM_GIT_CONNECTION_NOT_FOUND", "未找到当前租户可用的 GitConnection")
     if str(connection.status or "").lower() not in {"connected", "active", "enabled"}:
@@ -629,7 +694,10 @@ async def _system_git_connection(
     return connection
 
 
-def _authenticated_git_remote(connection: GitConnection, remote_url: str) -> str:
+def _authenticated_git_remote(
+    connection: GitConnection | TenantGitConnection | DeploymentGitConnection,
+    remote_url: str,
+) -> str:
     """Create a transient auth URL; callers must never persist or log it."""
     try:
         # GitConnection is written by app.git.connection.encrypt_token.  Use
@@ -830,7 +898,12 @@ async def _reference_rules_for_assets(
     resolved_tenant_id, _resolved_user_id = resolve_identity(tenant_id, user_id)
     try:
         async with AsyncSessionLocal() as db:
-            connections = (await db.execute(
+            tenant_connections = (await db.execute(
+                select(TenantGitConnection)
+                .where(TenantGitConnection.tenant_id == resolved_tenant_id)
+                .order_by(TenantGitConnection.id.asc())
+            )).scalars().all()
+            project_connections = (await db.execute(
                 select(GitConnection)
                 .join(Project, Project.id == GitConnection.project_id)
                 .where(Project.tenant_id == resolved_tenant_id)
@@ -838,8 +911,12 @@ async def _reference_rules_for_assets(
             )).scalars().all()
     except Exception:
         return [], "参考工程规则来源暂不可用；已保留资产元数据和创建 schema。"
+    deployment_connection = await _deployment_git_connection(resolved_tenant_id)
+    candidates = [*tenant_connections, *project_connections]
+    if deployment_connection is not None and not tenant_connections:
+        candidates.append(deployment_connection)
     active = [
-        connection for connection in connections
+        connection for connection in candidates
         if str(connection.status or "").lower() in {"connected", "active", "enabled"}
     ]
     if not active:
@@ -1686,28 +1763,54 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
 
     @mcp.tool()
     async def list_system_git_connections(tenant_id: int = 0, user_id: int = 0) -> dict:
-        """列出当前租户已配置且可供系统资产仓库推送使用的 GitConnection。
+        """列出当前租户可供系统资产仓库推送使用的 GitConnection。
 
-        只返回连接 ID、provider、host、项目和状态，绝不返回访问令牌。
+        租户默认连接优先返回；调用方必须连同 connection_scope 一起使用，绝不返回访问令牌。
         """
         try:
             resolved_tenant_id, _resolved_user_id = resolve_identity(tenant_id, user_id)
             async with AsyncSessionLocal() as db:
-                rows = (await db.execute(
+                tenant_connections = (await db.execute(
+                    select(TenantGitConnection)
+                    .where(TenantGitConnection.tenant_id == resolved_tenant_id)
+                    .order_by(TenantGitConnection.id.asc())
+                )).scalars().all()
+                project_rows = (await db.execute(
                     select(GitConnection, Project)
                     .join(Project, Project.id == GitConnection.project_id)
                     .where(Project.tenant_id == resolved_tenant_id)
                     .order_by(Project.id.asc(), GitConnection.id.asc())
                 )).all()
-            return _ok(connections=[{
+            connections = [{
                 "id": connection.id,
+                "connection_scope": "tenant",
+                "provider": connection.provider,
+                "host": connection.host,
+                "group_id_or_org": connection.group_id_or_org,
+                "status": connection.status,
+            } for connection in tenant_connections]
+            deployment_connection = await _deployment_git_connection(resolved_tenant_id)
+            if deployment_connection is not None and not tenant_connections:
+                connections.append({
+                    "id": deployment_connection.id,
+                    "connection_scope": "deployment_default",
+                    "provider": deployment_connection.provider,
+                    "host": deployment_connection.host,
+                    "group_id_or_org": deployment_connection.group_id_or_org,
+                    "status": deployment_connection.status,
+                    "source": "deployment_config",
+                })
+            connections.extend({
+                "id": connection.id,
+                "connection_scope": "project",
                 "provider": connection.provider,
                 "host": connection.host,
                 "project_id": connection.project_id,
                 "project_name": project.name,
                 "group_id_or_org": connection.group_id_or_org,
                 "status": connection.status,
-            } for connection, project in rows])
+            } for connection, project in project_rows)
+            return _ok(connections=connections)
         except SystemGitError as exc:
             return _err(exc.code, str(exc))
 
@@ -1721,6 +1824,7 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
         description: str | None = None,
         repository_name: str | None = None,
         branch: str = "main",
+        git_connection_scope: str | None = None,
         confirmed: bool = False,
         tenant_id: int = 0,
         user_id: int = 0,
@@ -1743,7 +1847,9 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
             if not target_branch or not _GIT_BRANCH_RE.fullmatch(target_branch) or target_branch.startswith("-"):
                 return _err("SYSTEM_GIT_BRANCH_INVALID", "branch 必须是有效的非空 Git 分支名")
             root = _new_system_git_root(repository_path)
-            connection = await _system_git_connection(resolve_identity, tenant_id, user_id, git_connection_id)
+            connection = await _system_git_connection(
+                resolve_identity, tenant_id, user_id, git_connection_id, git_connection_scope,
+            )
             if connection is None:
                 return _err("SYSTEM_GIT_CONNECTION_REQUIRED", "必须选择平台已配置的 GitConnection")
             group = str(connection.group_id_or_org or "").strip().strip("/")
@@ -1754,6 +1860,8 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
             initial_files = ["README.md", ".gitignore"] + (["capability.json"] if kind == "capability" else ["AGENTS.md"])
             preview = {
                 "asset_type": kind,
+                "git_connection_id": connection.id,
+                "git_connection_scope": git_connection_scope or "auto",
                 "repository_path": str(root),
                 "repository_name": project_name,
                 "repository_full_path": full_path,
@@ -1815,6 +1923,7 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
                 "asset_type": kind,
                 "repository_created": created,
                 "git_connection_id": connection.id,
+                "git_connection_scope": git_connection_scope or "auto",
                 "provider": connection.provider,
                 "repository_full_path": full_path,
                 "repository_url": clean_remote.removesuffix(".git"),
@@ -1844,6 +1953,7 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
         git_connection_id: int,
         repository_name: str | None = None,
         branch: str | None = None,
+        git_connection_scope: str | None = None,
         confirmed: bool = False,
         tenant_id: int = 0,
         user_id: int = 0,
@@ -1869,7 +1979,7 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
             if not target_branch or not _GIT_BRANCH_RE.fullmatch(target_branch) or target_branch.startswith("-"):
                 return _err("SYSTEM_GIT_BRANCH_INVALID", "branch 必须是有效的非空 Git 分支名")
             connection = await _system_git_connection(
-                resolve_identity, tenant_id, user_id, git_connection_id,
+                resolve_identity, tenant_id, user_id, git_connection_id, git_connection_scope,
             )
             if connection is None:  # for type checkers; the ID is required above
                 return _err("SYSTEM_GIT_CONNECTION_REQUIRED", "必须选择平台已配置的 GitConnection")
@@ -1887,6 +1997,7 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
                 "repository_path": str(root),
                 "capability": _safe(capability),
                 "git_connection_id": connection.id,
+                "git_connection_scope": git_connection_scope or "auto",
                 "provider": connection.provider,
                 "git_group": group,
                 "repository_name": project_name,
@@ -1960,6 +2071,7 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
             result = _system_git_snapshot(str(root))
             result.update({
                 "git_connection_id": connection.id,
+                "git_connection_scope": git_connection_scope or "auto",
                 "provider": connection.provider,
                 "repository_full_path": full_path,
                 "repository_url": clean_remote.removesuffix(".git"),
@@ -1976,6 +2088,7 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
         repository_path: str,
         remote_url: str,
         git_connection_id: int | None = None,
+        git_connection_scope: str | None = None,
         replace_existing: bool = False,
         confirmed: bool = False,
         tenant_id: int = 0,
@@ -2009,7 +2122,7 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
             else:
                 _run_git(root, "remote", "add", "origin", target)
             connection = await _system_git_connection(
-                resolve_identity, tenant_id, user_id, git_connection_id,
+                resolve_identity, tenant_id, user_id, git_connection_id, git_connection_scope,
             )
             if connection is not None:
                 authenticated_url = _authenticated_git_remote(connection, target)
@@ -2019,6 +2132,7 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
                     del authenticated_url
             result = _system_git_snapshot(str(root))
             result["git_connection_id"] = connection.id if connection is not None else None
+            result["git_connection_scope"] = git_connection_scope or "auto"
             result["remote_verified"] = connection is not None
             return _ok(result=result)
         except SystemGitError as exc:
@@ -2029,6 +2143,7 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
         repository_path: str,
         branch: str | None = None,
         git_connection_id: int | None = None,
+        git_connection_scope: str | None = None,
         confirmed: bool = False,
         tenant_id: int = 0,
         user_id: int = 0,
@@ -2052,10 +2167,11 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
                     "is_clean": snapshot.get("is_clean"),
                     "changed_files": snapshot.get("changed_files"),
                     "git_connection_id": git_connection_id,
+                    "git_connection_scope": git_connection_scope,
                 })
             root = Path(str(snapshot["repository_path"]))
             connection = await _system_git_connection(
-                resolve_identity, tenant_id, user_id, git_connection_id,
+                resolve_identity, tenant_id, user_id, git_connection_id, git_connection_scope,
             )
             if connection is None:
                 output = _run_git(root, "push", "-u", "origin", target_branch)
@@ -2074,6 +2190,7 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
             result = _system_git_snapshot(str(root))
             result["push_output"] = output[-1000:]
             result["git_connection_id"] = connection.id if connection is not None else None
+            result["git_connection_scope"] = git_connection_scope or "auto"
             return _ok(result=result)
         except SystemGitError as exc:
             return _err(exc.code, str(exc))
