@@ -862,7 +862,10 @@ def test_code_runtime_proxy_only_buffers_vite_dev_asset_paths():
 
 
 def test_code_runtime_proxy_cache_busts_builder_module_references():
-    from app.routes.code_runtime import _cache_bust_builder_asset_references
+    from app.routes.code_runtime import (
+        _buffered_builder_asset_cache_control,
+        _cache_bust_builder_asset_references,
+    )
 
     content = (
         b'<script src="./assets/index-12345678.js"></script>'
@@ -873,10 +876,14 @@ def test_code_runtime_proxy_cache_busts_builder_module_references():
 
     rewritten = _cache_bust_builder_asset_references(content)
 
-    assert b'./assets/index-12345678.js?dolphin_cache_key=runtime-proxy-v3' in rewritten
-    assert b'./chunk-ABCDEFGH.js?dolphin_cache_key=runtime-proxy-v3' in rewritten
-    assert b'./lazy-87654321.js?dolphin_cache_key=runtime-proxy-v3' in rewritten
+    assert b'./assets/index-12345678.js?dolphin_cache_key=runtime-proxy-v4' in rewritten
+    assert b'./chunk-ABCDEFGH.js?dolphin_cache_key=runtime-proxy-v4' in rewritten
+    assert b'./lazy-87654321.js?dolphin_cache_key=runtime-proxy-v4' in rewritten
     assert b'"./readme.md"' in rewritten
+    assert _buffered_builder_asset_cache_control(is_builder_asset=True) == (
+        "public, max-age=31536000, immutable"
+    )
+    assert _buffered_builder_asset_cache_control(is_builder_asset=False) == "no-store"
 
 
 def test_code_runtime_proxy_does_not_special_case_runtime_relative_document_paths():

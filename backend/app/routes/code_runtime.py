@@ -2499,7 +2499,7 @@ def _rewrite_runtime_dev_asset_paths(
 
 
 _DEV_ASSET_PREFIXES = ("src/", "@vite/", "@react-refresh", "node_modules/", "@id/", "@fs/")
-_BUILDER_ASSET_CACHE_KEY = b"runtime-proxy-v3"
+_BUILDER_ASSET_CACHE_KEY = b"runtime-proxy-v4"
 _BUILDER_ASSET_REFERENCE = re.compile(
     rb"(?P<quote>[\"'])(?P<path>\./(?:assets/)?[^\"'?#\s]+\.(?:js|css))(?P=quote)"
 )
@@ -2518,6 +2518,15 @@ def _cache_bust_builder_asset_references(content: bytes) -> bytes:
         )
 
     return _BUILDER_ASSET_REFERENCE.sub(replace, content)
+
+
+def _buffered_builder_asset_cache_control(*, is_builder_asset: bool) -> str:
+    if is_builder_asset:
+        # Asset URLs receive a proxy-owned cache key in the Builder document.
+        # They are therefore immutable for that key while still allowing a
+        # repair release to invalidate previously malformed responses.
+        return "public, max-age=31536000, immutable"
+    return "no-store"
 
 
 def _should_buffer_dev_asset_path(path: str) -> bool:
@@ -3120,6 +3129,20 @@ async def list_browser_authenticated_agent_sessions(
         normalized_sessions,
         other_scoped_ids=other_scoped_ids,
     )
+    # Conversations created inside the embedded runtime do not pass through
+    # the outer rail's create endpoint.  Persist every live item observed here
+    # so a later rail refresh can retain all siblings even if the runtime only
+    # exposes its current conversation after a reconnect.
+    for item in normalized_sessions:
+        await _remember_runtime_agent_session(
+            db,
+            session,
+            binding,
+            str(item.get("runtimeSessionId") or "").strip(),
+            item,
+        )
+    if normalized_sessions:
+        await db.commit()
     current_runtime_id = str(binding.runtime_session_id or "").strip()
     if current_runtime_id and not any(
         str(item.get("runtimeSessionId") or "").strip() == current_runtime_id
@@ -3543,7 +3566,9 @@ async def proxy_code_runtime(
                 forwarded_prefix,
             )
             if is_buffered_builder_asset:
-                response_headers["cache-control"] = "no-store"
+                response_headers["cache-control"] = _buffered_builder_asset_cache_control(
+                    is_builder_asset=is_builder_asset,
+                )
             response = Response(
                 content=content,
                 status_code=upstream.status_code,

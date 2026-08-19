@@ -137,11 +137,11 @@ export async function hydrateCodeRailHistorySessions(
     try {
       const result = await loadSessions(shellSessionId)
       if (!Array.isArray(result?.sessions)) return app
-      // Runtime can temporarily expose only its current session after a
-      // reconnect.  Its response augments the persisted rail index; it must
-      // never replace that index, or older agent sessions disappear from the
-      // sidebar.  Put live items first so the active session remains fresh,
-      // then retain every persisted sibling that the runtime omitted.
+      // A Code runtime can create conversations inside the embedded Builder,
+      // without going through the outer rail's create endpoint.  Refresh even
+      // when the persisted index is populated, then merge instead of replacing
+      // it: reconnecting runtimes can temporarily expose only the current
+      // conversation, while the index retains its older siblings.
       const persisted = app.sessions || []
       const live = result.sessions
       const liveIds = new Set(live.map(session => text(session.runtimeSessionId)))

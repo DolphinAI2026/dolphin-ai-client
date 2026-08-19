@@ -148,7 +148,7 @@ describe('RailSidebar unified session source (SP2b)', () => {
     expect(group.items.every(item => item.appCode === 'materials-flow')).toBe(true)
   })
 
-  it('keeps persisted agent sessions when the runtime only returns its current session', async () => {
+  it('uses persisted agent sessions without probing a Runtime again', async () => {
     const history: CodeRailHistoryResponse = {
       apps: [{
         shell_session_id: 'remote-shell',
@@ -163,14 +163,19 @@ describe('RailSidebar unified session source (SP2b)', () => {
       }],
     }
 
-    const hydrated = await hydrateCodeRailHistorySessions(history, async () => ({
-      sessions: [{ runtimeSessionId: 'runtime-current', title: 'Runtime 当前会话', lastActiveAt: '2026-08-19T04:00:00Z' }],
-    }))
+    let runtimeProbes = 0
+    const hydrated = await hydrateCodeRailHistorySessions(history, async () => {
+      runtimeProbes += 1
+      return {
+        sessions: [{ runtimeSessionId: 'runtime-current', title: 'Runtime 当前会话', lastActiveAt: '2026-08-19T04:00:00Z' }],
+      }
+    })
 
     expect(hydrated.apps[0]?.sessions.map(session => session.runtimeSessionId)).toEqual([
       'runtime-current', 'runtime-history',
     ])
-    expect(hydrated.apps[0]?.sessions[0]?.title).toBe('Runtime 当前会话')
+    expect(hydrated.apps[0]?.sessions[0]?.title).toBe('当前会话')
+    expect(runtimeProbes).toBe(0)
   })
 
   it('treats legacy local application ids as local when a stale API response lacks the location', () => {
@@ -290,7 +295,7 @@ describe('RailSidebar unified session source (SP2b)', () => {
     expect(railSidebarSource).toContain('codeRuntimeApi.listAgentSessions')
   })
 
-  it('uses live runtime sessions while retaining an unavailable shell snapshot', async () => {
+  it('merges live runtime sessions with persisted siblings for every shell', async () => {
     const history: CodeRailHistoryResponse = {
       apps: [
         { shell_session_id: 'shell-live', external_application_id: 'crm', sessions: [] },
@@ -299,13 +304,13 @@ describe('RailSidebar unified session source (SP2b)', () => {
     } as CodeRailHistoryResponse
 
     const hydrated = await hydrateCodeRailHistorySessions(history, async (shellSessionId) => {
-      if (shellSessionId === 'shell-fallback') throw new Error('runtime unavailable')
-      return { sessions: [{ runtimeSessionId: 'runtime-new' }] }
+      if (shellSessionId === 'shell-live') return { sessions: [{ runtimeSessionId: 'runtime-new' }] }
+      return { sessions: [{ runtimeSessionId: 'runtime-newer' }] }
     })
 
     expect(hydrated.apps.map(app => app.sessions.map(session => session.runtimeSessionId))).toEqual([
       ['runtime-new'],
-      ['runtime-old'],
+      ['runtime-newer', 'runtime-old'],
     ])
   })
 
