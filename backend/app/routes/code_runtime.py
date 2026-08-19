@@ -1377,6 +1377,7 @@ def _sync_runtime_agent_session_identity(
     session: AIChatSession,
     binding: CodeRuntimeBinding,
 ) -> None:
+    existing.control_plane_tenant_id = session.control_plane_tenant_id
     existing.tenant_id = session.tenant_id
     existing.user_id = session.user_id
     existing.app_id = int(session.app_id) if session.app_id else None
@@ -1400,6 +1401,7 @@ async def _update_runtime_agent_session(
         update(CodeRuntimeAgentSession)
         .where(*row_matches)
         .values(
+            control_plane_tenant_id=session.control_plane_tenant_id,
             tenant_id=session.tenant_id,
             user_id=session.user_id,
             app_id=int(session.app_id) if session.app_id else None,
@@ -1606,6 +1608,21 @@ async def list_code_runtime_rail_history(
         shell_session_ids = [int(session.id) for session, _binding in rows]
         snapshot_rows = []
         if shell_session_ids:
+            # Early remote Code sessions predate the agent-snapshot tenant
+            # identity. Their rows belong to an already authorized shell but
+            # would be hidden by the control-plane tenant scope below.
+            control_plane_tenant_id = _control_plane_code_tenant_id(ctx)
+            if control_plane_tenant_id:
+                await db.execute(
+                    update(CodeRuntimeAgentSession)
+                    .where(
+                        CodeRuntimeAgentSession.session_id.in_(shell_session_ids),
+                        CodeRuntimeAgentSession.control_plane_tenant_id.is_(None),
+                    )
+                    .values(control_plane_tenant_id=control_plane_tenant_id)
+                    .execution_options(synchronize_session=False)
+                )
+                await db.flush()
             snapshot_rows = (
                 await db.execute(
                     select(CodeRuntimeAgentSession)

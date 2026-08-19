@@ -2674,6 +2674,66 @@ async def test_list_code_runtime_rail_history_accepts_all_source_and_includes_sh
 
 
 @pytest.mark.asyncio
+async def test_rail_history_repairs_control_plane_snapshot_identity(db_session):
+    from app.routes.code_runtime import list_code_runtime_rail_history
+
+    session = AIChatSession(
+        tenant_id=0,
+        user_id=11,
+        control_plane_tenant_id="cp-huabao",
+        title="审批中心 Code",
+        mode="code",
+        status="active",
+        external_application_id="approval-center",
+        external_app_name="审批中心",
+    )
+    db_session.add(session)
+    await db_session.flush()
+    db_session.add_all([
+        CodeRuntimeBinding(
+            tenant_id=0,
+            user_id=11,
+            control_plane_tenant_id="cp-huabao",
+            session_id=session.id,
+            external_application_id="approval-center",
+            runtime_base_url="http://runtime.local/workspaces/approval-center",
+            builder_url="http://runtime.local/workspaces/approval-center/builder",
+            runtime_session_id="runtime-approval-history",
+            status="ready",
+        ),
+        CodeRuntimeAgentSession(
+            tenant_id=0,
+            user_id=11,
+            session_id=session.id,
+            external_application_id="approval-center",
+            runtime_session_id="runtime-approval-history",
+            title="历史会话",
+            # Simulate a row written before the control-plane identity fix.
+            control_plane_tenant_id=None,
+        ),
+    ])
+    await db_session.commit()
+
+    ctx = SimpleNamespace(
+        tenant_id=0,
+        tenant_role="member",
+        control_plane_tenant_id="cp-huabao",
+        user=SimpleNamespace(id=11, account_source="control_plane"),
+    )
+    result = await list_code_runtime_rail_history(_request(), ctx, db_session, source="all")
+
+    assert result["apps"][0]["sessions"][0]["runtimeSessionId"] == "runtime-approval-history"
+    snapshot = (
+        await db_session.execute(
+            select(CodeRuntimeAgentSession).where(
+                CodeRuntimeAgentSession.runtime_session_id == "runtime-approval-history"
+            )
+        )
+    ).scalar_one()
+    assert snapshot.control_plane_tenant_id == "cp-huabao"
+
+
+@pytest.mark.asyncio
 async def test_desktop_rail_history_uses_remote_builder_shells_and_caches_openable_ids(
     db_session,
     monkeypatch,
