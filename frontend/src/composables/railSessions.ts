@@ -265,7 +265,12 @@ export function isRailSessionActive(
 ): boolean {
   const item = typeof session === 'object' ? session : { id: session }
   if (mode === 'code' && isCodeAgentRailSession(item)) {
-    const activeAgent = route.query.agent
+    // vue-router keeps repeated query parameters as an array.  The Code page
+    // already takes the first value; the rail must use the same identity or a
+    // visibly selected runtime conversation intermittently loses its active
+    // state after navigation/reload.
+    const rawAgent = route.query.agent
+    const activeAgent = Array.isArray(rawAgent) ? rawAgent[0] : rawAgent
     return route.path === `/code/${item.shellSessionId}`
       && (activeAgent === item.runtimeSessionId || (!activeAgent && Boolean(item.current)))
   }

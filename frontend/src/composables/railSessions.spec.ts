@@ -307,6 +307,10 @@ describe('rail session active state', () => {
       path: '/code/e9a6aa2a-9043-4bb5-bb5d-6d764c5fbfa3',
       query: { agent: 'runtime-1' },
     })).toBe(false)
+    expect(isRailSessionActive('code', item, {
+      path: '/code/e9a6aa2a-9043-4bb5-bb5d-6d764c5fbfa3',
+      query: { agent: ['runtime-2', 'stale-runtime'] },
+    })).toBe(true)
     expect(isRailSessionActive('code', item, { path: '/code/11', query: { agent: 'runtime-2' } })).toBe(false)
   })
 })
