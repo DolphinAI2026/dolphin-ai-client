@@ -813,6 +813,23 @@ def test_code_runtime_proxy_rewrites_unicode_content_disposition_header():
     assert copied["content-type"] == "text/markdown"
 
 
+def test_code_runtime_proxy_keeps_content_encoding_for_raw_streams():
+    from app.routes.code_runtime import _copyable_response_headers
+
+    copied = _copyable_response_headers(
+        {
+            "content-encoding": "gzip",
+            "content-length": "123",
+            "content-type": "text/javascript",
+        },
+        preserve_content_encoding=True,
+    )
+
+    assert copied["content-encoding"] == "gzip"
+    assert "content-length" not in copied
+    assert copied["content-type"] == "text/javascript"
+
+
 def test_code_runtime_proxy_rewrites_vite_dev_asset_paths():
     from app.routes.code_runtime import _rewrite_runtime_dev_asset_paths
 

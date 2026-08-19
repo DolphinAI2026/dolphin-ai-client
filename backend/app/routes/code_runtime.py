@@ -2217,13 +2217,16 @@ def _copyable_response_headers(
     binding: CodeRuntimeBinding | None = None,
     session_id: int | None = None,
     forwarded_prefix: str = "",
+    *,
+    preserve_content_encoding: bool = False,
 ) -> dict[str, str]:
     excluded = {
         "connection",
-        "content-encoding",
         "content-length",
         "transfer-encoding",
     }
+    if not preserve_content_encoding:
+        excluded.add("content-encoding")
     copied: dict[str, str] = {}
     for key, value in headers.items():
         lowered = key.lower()
@@ -3524,7 +3527,13 @@ async def proxy_code_runtime(
     response = StreamingResponse(
         upstream.aiter_raw(),
         status_code=upstream.status_code,
-        headers=_copyable_response_headers(upstream.headers, binding, session_id, forwarded_prefix),
+        headers=_copyable_response_headers(
+            upstream.headers,
+            binding,
+            session_id,
+            forwarded_prefix,
+            preserve_content_encoding=True,
+        ),
         background=BackgroundTask(_close_upstream, upstream, attempt.client),
     )
     return _decorate_runtime_response(
