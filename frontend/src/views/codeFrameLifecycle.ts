@@ -287,10 +287,13 @@ export function activateCachedCodeFrame(
     return state
   }
 
-  // A different agent conversation can share the currently mounted shell.
-  // Looking only at `hot` made a same-sandbox switch rebuild the iframe even
-  // after the agent activation API had already selected the target session.
-  const reusableFrames: CodeFrame[] = state.active
+  // The active iframe is safe to reuse only for the exact same route.  Agent
+  // activation changes Runtime state on the server, but an already mounted
+  // Builder document does not subscribe to that state change; promoting it
+  // for a different agent would leave old conversation content on screen.
+  // Keep the old frame visible while a fresh, already-authenticated document
+  // loads for the target agent instead.
+  const reusableFrames: CodeFrame[] = options.requireRouteMatch && state.active
     ? [state.active, ...state.hot]
     : [...state.hot]
   const cached = reusableFrames.find(frame => (

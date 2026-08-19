@@ -205,7 +205,7 @@ describe('code frame lifecycle', () => {
     expect(state.request).toBeNull()
   })
 
-  it('reuses the active shell when only the agent conversation changes', () => {
+  it('keeps the active shell visible while a different agent route loads its own document', () => {
     let state = activateInitialFrame()
     const activeKey = state.active!.key
 
@@ -221,9 +221,9 @@ describe('code frame lifecycle', () => {
     })
 
     expect(state.active).toMatchObject({ key: activeKey, sessionRef: 'session-1', phase: 'active' })
-    expect(state.active?.route).toEqual(routeLocation('session-1', 'agent-2'))
+    expect(state.active?.route).toEqual(routeLocation('session-1', 'agent-1'))
     expect(state.pending).toBeNull()
-    expect(state.request).toBeNull()
+    expect(state.request).toMatchObject({ requestId: 2, route: routeLocation('session-1', 'agent-2') })
     expect(getCodeFrames(state)).toHaveLength(1)
   })
 
