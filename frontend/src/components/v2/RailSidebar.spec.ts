@@ -148,6 +148,31 @@ describe('RailSidebar unified session source (SP2b)', () => {
     expect(group.items.every(item => item.appCode === 'materials-flow')).toBe(true)
   })
 
+  it('keeps persisted agent sessions when the runtime only returns its current session', async () => {
+    const history: CodeRailHistoryResponse = {
+      apps: [{
+        shell_session_id: 'remote-shell',
+        external_application_id: 'code-app-177',
+        logical_application_id: 'materials-flow',
+        execution_location: 'remote',
+        app_name: '领料电子流',
+        sessions: [
+          { runtimeSessionId: 'runtime-current', title: '当前会话', lastActiveAt: '2026-08-19T03:00:00Z' },
+          { runtimeSessionId: 'runtime-history', title: '历史会话', lastActiveAt: '2026-08-18T03:00:00Z' },
+        ],
+      }],
+    }
+
+    const hydrated = await hydrateCodeRailHistorySessions(history, async () => ({
+      sessions: [{ runtimeSessionId: 'runtime-current', title: 'Runtime 当前会话', lastActiveAt: '2026-08-19T04:00:00Z' }],
+    }))
+
+    expect(hydrated.apps[0]?.sessions.map(session => session.runtimeSessionId)).toEqual([
+      'runtime-current', 'runtime-history',
+    ])
+    expect(hydrated.apps[0]?.sessions[0]?.title).toBe('Runtime 当前会话')
+  })
+
   it('treats legacy local application ids as local when a stale API response lacks the location', () => {
     const [group] = groupCodeRailHistoryByApplication({
       apps: [{

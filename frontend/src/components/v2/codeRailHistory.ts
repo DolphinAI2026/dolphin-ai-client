@@ -136,7 +136,20 @@ export async function hydrateCodeRailHistorySessions(
     if (!shellSessionId) return app
     try {
       const result = await loadSessions(shellSessionId)
-      return Array.isArray(result?.sessions) ? { ...app, sessions: result.sessions } : app
+      if (!Array.isArray(result?.sessions)) return app
+      // Runtime can temporarily expose only its current session after a
+      // reconnect.  Its response augments the persisted rail index; it must
+      // never replace that index, or older agent sessions disappear from the
+      // sidebar.  Put live items first so the active session remains fresh,
+      // then retain every persisted sibling that the runtime omitted.
+      const persisted = app.sessions || []
+      const live = result.sessions
+      const liveIds = new Set(live.map(session => text(session.runtimeSessionId)))
+      const merged = [
+        ...live,
+        ...persisted.filter(session => !liveIds.has(text(session.runtimeSessionId))),
+      ]
+      return { ...app, sessions: merged }
     } catch {
       return app
     }
