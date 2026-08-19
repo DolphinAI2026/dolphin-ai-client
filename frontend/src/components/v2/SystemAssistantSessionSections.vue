@@ -8,6 +8,14 @@ const props = defineProps<{
   systemSessions: RailSession[]
   applicationGroups: CodeRailSessionGroup[]
   activeSystemSessionId?: string
+  /**
+   * Keep the Code-route identity explicit at this rendering boundary.  The
+   * outer rail also supplies its shared matcher, but a history row must still
+   * be able to render selected when that callback is refreshed a tick later
+   * than the route after iframe navigation.
+   */
+  activeApplicationShellSessionId?: string
+  activeApplicationRuntimeSessionId?: string
   isApplicationSessionActive?: (session: RailSession) => boolean
 }>()
 
@@ -76,6 +84,13 @@ function toggleApplicationSessions(group: CodeRailSessionGroup) {
 
 function sessionRunning(session: RailSession): boolean {
   return ['running', 'processing'].includes(String(session.status || '').toLowerCase())
+}
+
+function applicationSessionActive(session: CodeRailSession): boolean {
+  if (props.isApplicationSessionActive?.(session)) return true
+  return session.source === 'code-agent'
+    && String(session.shellSessionId || '') === String(props.activeApplicationShellSessionId || '')
+    && String(session.runtimeSessionId || '') === String(props.activeApplicationRuntimeSessionId || '')
 }
 
 function toggleSessionMenu(session: RailSession) {
@@ -211,7 +226,7 @@ function deleteSession(session: RailSession) {
               :key="session.id"
               type="button"
               class="sas-item app-item"
-              :class="{ active: isApplicationSessionActive?.(session) }"
+              :class="{ active: applicationSessionActive(session) }"
               :title="session.title || '未命名会话'"
               @click="emit('open-application-session', session)"
             >

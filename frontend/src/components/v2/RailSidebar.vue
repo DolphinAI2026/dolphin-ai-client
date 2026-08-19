@@ -103,6 +103,15 @@ const currentMode = computed<AppMode>(() => {
     : routeMode
 })
 const isSystemAssistantRoute = computed(() => route.path === '/code/system-assistant')
+const activeCodeShellSessionId = computed(() => {
+  if (currentMode.value !== 'code') return ''
+  const match = route.path.match(/^\/code\/([^/]+)$/)
+  return match ? decodeURIComponent(match[1]) : ''
+})
+const activeCodeRuntimeSessionId = computed(() => {
+  const rawAgent = route.query.agent
+  return String(Array.isArray(rawAgent) ? rawAgent[0] || '' : rawAgent || '')
+})
 
 // 会话历史 —— 收进左栏单一导航(参考 Claude Code), 页面内层 sidebar 隐掉。
 // 统一使用 aiChatApi 会话; Code 模式只展示 mode=code 的应用会话。
@@ -898,6 +907,8 @@ function renderIcon(name: string): string {
         :system-sessions="systemAssistantSessions"
         :application-groups="systemAssistantApplicationGroups"
         :active-system-session-id="String(route.query.session || '')"
+        :active-application-shell-session-id="activeCodeShellSessionId"
+        :active-application-runtime-session-id="activeCodeRuntimeSessionId"
         :is-application-session-active="sessionActive"
         @new-system-session="createSystemAssistantSession"
         @open-system-session="openSession"

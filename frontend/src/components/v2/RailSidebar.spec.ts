@@ -327,6 +327,8 @@ describe('RailSidebar unified session source (SP2b)', () => {
 
   it('keeps the session history scrollable and passes the active-session matcher to Code history', () => {
     expect(railSidebarSource).toContain(':is-application-session-active="sessionActive"')
+    expect(railSidebarSource).toContain(':active-application-shell-session-id="activeCodeShellSessionId"')
+    expect(railSidebarSource).toContain(':active-application-runtime-session-id="activeCodeRuntimeSessionId"')
     expect(railSidebarSource).toContain('flex: 1 1 0; min-height: 0;')
     expect(railSidebarSource).toContain(':deep(.sas-sections) { flex: 1 1 auto; min-height: 0; }')
     expect(railSidebarSource).toContain('box-shadow: inset 3px 0 0 #2f65d5')

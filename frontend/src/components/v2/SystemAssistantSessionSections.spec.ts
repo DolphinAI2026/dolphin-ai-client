@@ -4,7 +4,10 @@ import sectionsSource from './SystemAssistantSessionSections.vue?raw'
 describe('SystemAssistantSessionSections', () => {
   it('applies the shared active matcher to application sessions', () => {
     expect(sectionsSource).toContain('isApplicationSessionActive?: (session: RailSession) => boolean')
-    expect(sectionsSource).toContain(':class="{ active: isApplicationSessionActive?.(session) }"')
+    expect(sectionsSource).toContain('function applicationSessionActive(session: CodeRailSession): boolean')
+    expect(sectionsSource).toContain('activeApplicationShellSessionId?: string')
+    expect(sectionsSource).toContain('activeApplicationRuntimeSessionId?: string')
+    expect(sectionsSource).toContain(':class="{ active: applicationSessionActive(session) }"')
   })
 
   it('lets a long conversation history scroll inside the rail', () => {
