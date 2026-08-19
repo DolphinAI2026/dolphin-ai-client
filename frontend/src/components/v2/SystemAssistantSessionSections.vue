@@ -64,10 +64,6 @@ function groupHasLocation(group: CodeRailSessionGroup, location: 'local' | 'remo
   return group.availableLocations.includes(location)
 }
 
-function compactSessionLocation(session: CodeRailSession): string {
-  return session.executionLocation === 'local' ? '本机' : ''
-}
-
 function visibleApplicationSessions(group: CodeRailSessionGroup): CodeRailSession[] {
   if (expandedApplicationGroups.value.has(applicationGroupKey(group))) return group.items
   const recent = group.items.slice(0, APPLICATION_VISIBLE_SESSION_LIMIT)
@@ -223,7 +219,14 @@ function archiveApplicationSession(session: CodeRailSession) {
               >
                 <AppIcon name="globe" :size="12" />
               </span>
-              <span v-if="groupHasLocation(group, 'local')" class="sas-location-tags">本机</span>
+              <span
+                v-if="groupHasLocation(group, 'local')"
+                class="sas-location-icon"
+                title="本机项目"
+                aria-label="本机项目"
+              >
+                <AppIcon name="laptop" :size="12" />
+              </span>
               <span class="sas-count">{{ group.items.length }}</span>
             </button>
             <button
@@ -261,7 +264,13 @@ function archiveApplicationSession(session: CodeRailSession) {
             >
               <span class="sas-state" :class="{ running: sessionRunning(session) }" />
               <span class="sas-title">{{ session.title || '未命名会话' }}</span>
-              <span v-if="compactSessionLocation(session)" class="sas-location">{{ compactSessionLocation(session) }}</span>
+              <span
+                class="sas-location-icon"
+                :title="session.executionLocation === 'local' ? '本机项目' : '远程环境'"
+                :aria-label="session.executionLocation === 'local' ? '本机项目' : '远程环境'"
+              >
+                <AppIcon :name="session.executionLocation === 'local' ? 'laptop' : 'globe'" :size="12" />
+              </span>
               <div class="sas-manage" @click.stop>
                 <button
                   type="button"
@@ -345,7 +354,6 @@ function archiveApplicationSession(session: CodeRailSession) {
 .sas-app-toggle { flex: 1; gap: 5px; padding: 5px 6px; overflow: hidden; color: #65758a; font: inherit; font-size: 11px; text-align: left; }
 .sas-app-identity { min-width: 0; flex: 1 1 auto; overflow: hidden; }
 .sas-app-name { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sas-location-tags, .sas-location { flex: 0 0 auto; color: #9aa5b5; font-size: 10px; }
 .sas-location-icon { display: inline-flex; flex: 0 0 auto; align-items: center; color: #92a0b3; }
 .sas-location { max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sas-app-new { width: 23px; height: 23px; margin-right: 1px; opacity: 0; }

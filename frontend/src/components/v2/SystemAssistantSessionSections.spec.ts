@@ -31,12 +31,12 @@ describe('SystemAssistantSessionSections', () => {
     expect(sectionsSource).toContain('收起较早会话')
   })
 
-  it('keeps application names prominent and compacts location metadata', () => {
+  it('keeps application names prominent and renders location metadata as icons', () => {
     expect(sectionsSource).toContain('class="sas-app-name"')
     expect(sectionsSource).not.toContain('class="sas-app-code"')
-    expect(sectionsSource).toContain('function compactSessionLocation(session: CodeRailSession)')
     expect(sectionsSource).toContain('name="globe"')
-    expect(sectionsSource).toContain('本机')
+    expect(sectionsSource).toContain('name="laptop"')
+    expect(sectionsSource).toContain("session.executionLocation === 'local' ? 'laptop' : 'globe'")
   })
 
   it('gives every system-assistant history row a subtle surface contrast', () => {
