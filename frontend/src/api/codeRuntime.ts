@@ -360,4 +360,12 @@ export const codeRuntimeApi = {
       `/code/sessions/${encodedShellSessionId}/agent-sessions/${encodeURIComponent(runtimeSessionId)}`, { headers: controlPlaneCodeAuthorization() },
     )
   },
+  archiveAgentSession(shellSessionId: string, runtimeSessionId: string) {
+    const encodedShellSessionId = encodeURIComponent(shellSessionId)
+    return request.post<any, { ok: boolean; archived: boolean }>(
+      `/code/sessions/${encodedShellSessionId}/agent-sessions/${encodeURIComponent(runtimeSessionId)}/archive`,
+      undefined,
+      { headers: controlPlaneCodeAuthorization() },
+    )
+  },
 }

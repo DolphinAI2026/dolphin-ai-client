@@ -1836,6 +1836,31 @@ async def delete_code_runtime_agent_session(
     return payload if isinstance(payload, dict) else {"ok": True}
 
 
+@router.post("/sessions/{session_id}/agent-sessions/{runtime_session_id}/archive")
+async def archive_code_runtime_agent_session(
+    session_id: str,
+    runtime_session_id: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Hide one Code conversation from the host rail without deleting its project or runtime data."""
+    session, _binding = await _authorized_code_runtime_binding(db, session_id, ctx)
+    scoped = (
+        await db.execute(
+            select(CodeRuntimeAgentSession).where(
+                CodeRuntimeAgentSession.session_id == session.id,
+                CodeRuntimeAgentSession.runtime_session_id == str(runtime_session_id),
+                CodeRuntimeAgentSession.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if not scoped:
+        raise HTTPException(status_code=404, detail="会话不存在、已归档或无权限")
+    scoped.deleted_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"ok": True, "archived": True}
+
+
 def _embed_cookie_name(session_id: CodeSessionRef) -> str:
     return f"dolphin_code_runtime_{str(session_id).strip()}"
 

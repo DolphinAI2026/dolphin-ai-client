@@ -23,9 +23,10 @@ const emit = defineEmits<{
   (event: 'new-system-session'): void
   (event: 'open-system-session', session: RailSession): void
   (event: 'rename-system-session', session: RailSession): void
-  (event: 'delete-system-session', session: RailSession): void
+  (event: 'archive-system-session', session: RailSession): void
   (event: 'open-application-session', session: RailSession): void
   (event: 'new-application-session', shellSessionId: string): void
+  (event: 'archive-application-session', session: CodeRailSession): void
 }>()
 
 const collapsed = ref(new Set<string>())
@@ -109,9 +110,14 @@ function renameSession(session: RailSession) {
   emit('rename-system-session', session)
 }
 
-function deleteSession(session: RailSession) {
+function archiveSystemSession(session: RailSession) {
   sessionMenuOpenId.value = null
-  emit('delete-system-session', session)
+  emit('archive-system-session', session)
+}
+
+function archiveApplicationSession(session: CodeRailSession) {
+  sessionMenuOpenId.value = null
+  emit('archive-application-session', session)
 }
 </script>
 
@@ -162,9 +168,9 @@ function deleteSession(session: RailSession) {
                 <AppIcon name="edit" :size="14" />
                 重命名
               </button>
-              <button type="button" class="danger" role="menuitem" @click="deleteSession(session)">
-                <AppIcon name="x" :size="14" />
-                删除
+              <button type="button" role="menuitem" @click="archiveSystemSession(session)">
+                <AppIcon name="archive" :size="14" />
+                归档会话
               </button>
             </div>
           </div>
@@ -227,19 +233,40 @@ function deleteSession(session: RailSession) {
             </button>
           </div>
           <div v-if="!collapsed.has(applicationGroupKey(group))" class="sas-items app-items">
-            <button
+            <div
               v-for="session in visibleApplicationSessions(group)"
               :key="session.id"
-              type="button"
+              role="button"
+              tabindex="0"
               class="sas-item app-item"
               :class="{ active: applicationSessionActive(session) }"
               :title="session.title || '未命名会话'"
               @click="emit('open-application-session', session)"
+              @keydown.enter="emit('open-application-session', session)"
+              @keydown.space.prevent="emit('open-application-session', session)"
             >
               <span class="sas-state" :class="{ running: sessionRunning(session) }" />
               <span class="sas-title">{{ session.title || '未命名会话' }}</span>
               <span class="sas-location">{{ session.locationSummary }}</span>
-            </button>
+              <div class="sas-manage" @click.stop>
+                <button
+                  type="button"
+                  class="sas-more"
+                  title="管理应用会话"
+                  aria-label="管理应用会话"
+                  :aria-expanded="sessionMenuOpenId === String(session.id)"
+                  @click="toggleSessionMenu(session)"
+                >
+                  <AppIcon name="more" :size="14" />
+                </button>
+                <div v-if="sessionMenuOpenId === String(session.id)" class="sas-menu" role="menu">
+                  <button type="button" role="menuitem" @click="archiveApplicationSession(session)">
+                    <AppIcon name="archive" :size="14" />
+                    归档会话
+                  </button>
+                </div>
+              </div>
+            </div>
             <div v-if="hiddenApplicationSessionCount(group)" class="sas-more-row">
               <button type="button" class="sas-more-sessions" @click="toggleApplicationSessions(group)">
                 展开更多
@@ -263,9 +290,11 @@ function deleteSession(session: RailSession) {
 </template>
 
 <style scoped>
-.sas-sections { min-height: 0; display: flex; flex: 1 1 auto; flex-direction: column; gap: 8px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #cfd7e3 transparent; }
-.sas-sections::-webkit-scrollbar { width: 5px; }
-.sas-sections::-webkit-scrollbar-thumb { background: #cfd7e3; border-radius: 999px; }
+.sas-sections { min-height: 0; display: flex; flex: 1 1 auto; flex-direction: column; gap: 8px; overflow-y: scroll; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-width: auto; scrollbar-color: #b9c6d8 #edf1f6; }
+.sas-sections::-webkit-scrollbar { width: 8px; }
+.sas-sections::-webkit-scrollbar-track { background: #edf1f6; border-radius: 999px; }
+.sas-sections::-webkit-scrollbar-thumb { background: #b9c6d8; border: 2px solid #edf1f6; border-radius: 999px; }
+.sas-sections::-webkit-scrollbar-thumb:hover { background: #8ea4c2; }
 .sas-section + .sas-section { padding-top: 8px; border-top: 1px solid #e7ecf3; }
 .sas-section-header, .sas-app-header { display: flex; align-items: center; min-width: 0; }
 .sas-section-header { min-height: 28px; padding: 0 4px 4px; }
@@ -289,7 +318,7 @@ function deleteSession(session: RailSession) {
 .sas-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sas-manage { position: relative; flex: 0 0 auto; }
 .sas-more { width: 22px; height: 22px; display: grid; place-items: center; padding: 0; opacity: 0; color: #758298; background: transparent; border: 0; border-radius: 6px; cursor: pointer; }
-.sas-item:hover .sas-more, .sas-item.active .sas-more, .sas-more[aria-expanded="true"] { opacity: 1; }
+.sas-item:hover .sas-more, .sas-item.active .sas-more, .sas-more:focus-visible, .sas-more[aria-expanded="true"] { opacity: 1; }
 .sas-more:hover { color: #1f56c7; background: #fff; }
 .sas-menu { position: absolute; right: 0; top: 26px; z-index: 30; width: 112px; padding: 4px; border: 1px solid #dfe5ee; border-radius: 8px; background: #fff; box-shadow: 0 8px 24px rgba(28, 43, 68, .14); }
 .sas-menu button { width: 100%; min-height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 8px; color: #46556b; background: transparent; border: 0; border-radius: 6px; font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
@@ -314,8 +343,9 @@ function deleteSession(session: RailSession) {
 .sas-more-sessions:hover { color: #2458bd; background: #edf3ff; }
 html[data-theme="dark"] .sas-section + .sas-section { border-color: #273243; }
 html[data-theme="dark"] .sas-section-toggle, html[data-theme="dark"] .sas-app-toggle, html[data-theme="dark"] .sas-item { color: #9eacc0; }
-html[data-theme="dark"] .sas-sections { scrollbar-color: #3b485a transparent; }
-html[data-theme="dark"] .sas-sections::-webkit-scrollbar-thumb { background: #3b485a; }
+html[data-theme="dark"] .sas-sections { scrollbar-color: #526177 #202a38; }
+html[data-theme="dark"] .sas-sections::-webkit-scrollbar-track { background: #202a38; }
+html[data-theme="dark"] .sas-sections::-webkit-scrollbar-thumb { background: #526177; border-color: #202a38; }
 html[data-theme="dark"] .sas-item { background: #182230; border-color: #263448; }
 html[data-theme="dark"] .sas-item:hover { color: #cbd8eb; background: #1d2838; border-color: #344966; }
 html[data-theme="dark"] .sas-item.active { color: #d5e4ff; background: #283b5c; border-color: #3c5680; box-shadow: inset 3px 0 0 #7da5f8; }

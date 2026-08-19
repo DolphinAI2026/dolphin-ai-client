@@ -276,6 +276,25 @@ async def test_list_sessions_can_filter_assistant_profile_without_changing_mode(
     assert result["sessions"][0]["mode"] == "cowork"
 
 
+@pytest.mark.asyncio
+async def test_list_sessions_hides_archived_conversations(db_session):
+    tenant = Tenant(tenant_name="archived_session_t", tenant_code="archived_session_t")
+    db_session.add(tenant)
+    await db_session.flush()
+    user = User(username="archived_session_user", hashed_password="x")
+    db_session.add(user)
+    await db_session.flush()
+    db_session.add_all([
+        AIChatSession(tenant_id=tenant.id, user_id=user.id, title="进行中的会话", status="active"),
+        AIChatSession(tenant_id=tenant.id, user_id=user.id, title="已归档会话", status="archived"),
+    ])
+    await db_session.commit()
+
+    result = await list_sessions(_ctx(user, tenant.id), db_session)
+
+    assert [item["title"] for item in result["sessions"]] == ["进行中的会话"]
+
+
 def test_unknown_assistant_profile_is_rejected_by_create_request():
     with pytest.raises(ValidationError, match="assistant_profile"):
         CreateSessionRequest(assistant_profile="system_assistant_v2")

@@ -489,23 +489,26 @@ async function createCodeAgentSession(
     creatingCodeAgentSession.value = false
   }
 }
-async function deleteRailSession(s: RailSession) {
+async function archiveRailSession(s: RailSession) {
   try {
     await ElMessageBox.confirm(
-      `删除会话「${s.title || '未命名会话'}」后无法恢复。`,
-      '删除会话',
-      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
+      `归档会话「${s.title || '未命名会话'}」不会影响所属应用或项目。`,
+      '归档会话',
+      { confirmButtonText: '归档', cancelButtonText: '取消', type: 'warning' },
     )
   } catch {
     return
   }
   try {
     if (currentMode.value === 'code' && s.source === 'code-agent' && s.shellSessionId && s.runtimeSessionId) {
-      await codeRuntimeApi.deleteAgentSession(s.shellSessionId, s.runtimeSessionId)
+      await codeRuntimeApi.archiveAgentSession(s.shellSessionId, s.runtimeSessionId)
     } else {
-      await aiChatApi.deleteSession(Number(s.id))
+      await aiChatApi.updateSession(Number(s.id), { status: 'archived' })
     }
-  } catch { /* ignore */ }
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || error?.message || '归档会话失败')
+    return
+  }
   await loadRailSessions()
   if (sessionActive(s)) {
     if (isSystemAssistantRoute.value) {
@@ -913,9 +916,10 @@ function renderIcon(name: string): string {
         @new-system-session="createSystemAssistantSession"
         @open-system-session="openSession"
         @rename-system-session="renameSystemAssistantSession"
-        @delete-system-session="deleteRailSession"
+        @archive-system-session="archiveRailSession"
         @open-application-session="openSession"
         @new-application-session="createCodeAgentSession"
+        @archive-application-session="archiveRailSession"
       />
 
       <!-- 普通应用会话继续按日期或应用分组。 -->
@@ -979,8 +983,8 @@ function renderIcon(name: string): string {
                 />
                 <span class="rail-sess-title">{{ s.title || '未命名会话' }}</span>
                 <span v-if="currentMode === 'code' && 'locationSummary' in s" class="rail-sess-location">{{ s.locationSummary }}</span>
-                <button class="rail-sess-del" type="button" title="删除会话" aria-label="删除会话" @click.stop="deleteRailSession(s)">
-                  <span v-html="renderIcon('trash')" />
+                <button class="rail-sess-del" type="button" title="归档会话" aria-label="归档会话" @click.stop="archiveRailSession(s)">
+                  <span v-html="renderIcon('archive')" />
                 </button>
               </div>
             </template>
@@ -2187,7 +2191,7 @@ html[data-theme="dark"] .rail-item { color: #a8b5c8; }
 .rail-mode-switch { margin: 8px 10px 6px; padding: 3px; gap: 3px; border-color: #e1e7f0; border-radius: 9px; background: #eef2f7; }
 .rail-mode-btn { height: 28px; border-radius: 7px; }
 .rail-mode-btn.active { color: #1f56c7; background: #fff; box-shadow: 0 2px 7px rgba(25,52,96,.09); }
-.rail-scroll { gap: 2px; padding: 5px 10px 0; overflow: hidden; }
+.rail-scroll { gap: 2px; padding: 5px 10px 0; overflow: visible; }
 .rail-scroll::before { content: '工作区'; display: block; flex: 0 0 auto; padding: 3px 9px 5px; color: #9aa6b7; font-size: 10px; font-weight: 700; letter-spacing: .08em; }
 .rail-item { flex: 0 0 auto; min-height: 36px; gap: 10px; padding: 0 10px; border-radius: 8px; color: #56657a; font-size: 13px; transition: background .16s ease, color .16s ease, transform .16s ease; }
 .rail-item:hover { color: #274d92; background: #edf3ff; transform: translateX(1px); }

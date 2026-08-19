@@ -2929,6 +2929,59 @@ async def test_list_ai_chat_sessions_returns_external_code_app_fields(db_session
 
 
 @pytest.mark.asyncio
+async def test_archive_code_runtime_agent_session_hides_only_the_conversation(db_session):
+    from sqlalchemy import select
+
+    from app.routes.code_runtime import archive_code_runtime_agent_session
+
+    shell = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        title="CRM Code",
+        mode="code",
+        status="active",
+        external_application_id="crm",
+    )
+    db_session.add(shell)
+    await db_session.flush()
+    db_session.add_all([
+        CodeRuntimeBinding(
+            tenant_id=7,
+            user_id=11,
+            session_id=shell.id,
+            external_application_id="crm",
+            runtime_base_url="http://runtime.local/workspaces/crm",
+            builder_url="http://runtime.local/workspaces/crm/builder",
+            runtime_service_session_enc=_runtime_service_session_enc(),
+            status="ready",
+        ),
+        CodeRuntimeAgentSession(
+            tenant_id=7,
+            user_id=11,
+            session_id=shell.id,
+            external_application_id="crm",
+            runtime_session_id="runtime-archive-me",
+            title="修复登录问题",
+            state="waiting_input",
+        ),
+    ])
+    await db_session.commit()
+
+    result = await archive_code_runtime_agent_session(
+        str(shell.id), "runtime-archive-me", _ctx(), db_session,
+    )
+
+    archived = (await db_session.execute(
+        select(CodeRuntimeAgentSession).where(
+            CodeRuntimeAgentSession.runtime_session_id == "runtime-archive-me"
+        )
+    )).scalar_one()
+    assert result == {"ok": True, "archived": True}
+    assert archived.deleted_at is not None
+    assert shell.status == "active"
+
+
+@pytest.mark.asyncio
 async def test_list_code_runtime_rail_history_returns_opened_app_agent_sessions(db_session):
     from datetime import datetime
 

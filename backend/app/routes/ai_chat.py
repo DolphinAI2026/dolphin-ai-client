@@ -571,6 +571,9 @@ async def list_sessions(
             AIChatSession.control_plane_tenant_id == current_cp_tenant,
         )
     )
+    # Archived conversations remain accessible by direct URL, but should not
+    # compete with active work in the rail/session picker.
+    query = query.where(AIChatSession.status != "archived")
     query = query.order_by(desc(AIChatSession.updated_at)).limit(limit)
     res = await db.execute(query)
     sessions = res.scalars().all()
