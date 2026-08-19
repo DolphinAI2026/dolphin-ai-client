@@ -368,4 +368,20 @@ export const codeRuntimeApi = {
       { headers: controlPlaneCodeAuthorization() },
     )
   },
+  renameAgentSession(shellSessionId: string, runtimeSessionId: string, title: string) {
+    const encodedShellSessionId = encodeURIComponent(shellSessionId)
+    return request.patch<any, { ok: boolean; title: string }>(
+      `/code/sessions/${encodedShellSessionId}/agent-sessions/${encodeURIComponent(runtimeSessionId)}`,
+      { title },
+      { headers: controlPlaneCodeAuthorization() },
+    )
+  },
+  generateAgentSessionTitle(shellSessionId: string, runtimeSessionId: string) {
+    const encodedShellSessionId = encodeURIComponent(shellSessionId)
+    return request.post<any, { ok: boolean; title: string; source_message_count: number }>(
+      `/code/sessions/${encodedShellSessionId}/agent-sessions/${encodeURIComponent(runtimeSessionId)}/title/generate`,
+      undefined,
+      { headers: controlPlaneCodeAuthorization() },
+    )
+  },
 }

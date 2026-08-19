@@ -18,6 +18,9 @@ describe('Code runtime browser-authenticated session APIs', () => {
     expect(apiSource).toContain(
       '`/code/sessions/${encodedShellSessionId}/agent-sessions/${encodeURIComponent(runtimeSessionId)}`',
     )
+    expect(apiSource).toContain('renameAgentSession(shellSessionId')
+    expect(apiSource).toContain('generateAgentSessionTitle(shellSessionId')
+    expect(apiSource).toContain('/title/generate')
   })
 
   it('keeps the outer session rail compatible with backends that predate source=all', () => {

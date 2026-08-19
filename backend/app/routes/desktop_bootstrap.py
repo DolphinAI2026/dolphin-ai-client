@@ -71,7 +71,17 @@ async def desktop_bootstrap(
             "builder": {"enabled": builder_enabled, "base_url": _product_url(request, getattr(settings, "desktop_builder_base_url", ""))},
             "code": {"enabled": code_enabled, "base_url": _product_url(request, getattr(settings, "desktop_code_base_url", ""))},
         },
-        "remote_capabilities": {"models": True, "mcp": True, "skills": True, "knowledge_bases": True},
+        "remote_capabilities": {
+            "models": True,
+            "mcp": True,
+            "skills": True,
+            "knowledge_bases": True,
+            # Non-sensitive capability declaration only. The Control Plane
+            # keeps the GitLab administrator credential server-side and the
+            # desktop sidecar receives an ephemeral user credential per Git
+            # command after the user confirms the action.
+            "system_git": code_enabled,
+        },
         "local_ai": {
             "enabled": True,
             "allowed_kinds": ["model", "mcp", "skill", "knowledge_base"],

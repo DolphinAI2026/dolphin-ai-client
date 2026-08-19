@@ -225,6 +225,11 @@ let pendingReadyTimer: {
   requestId: number
   frameKey: string
 } | undefined
+let loadedFrameFallbackTimer: {
+  handle: number
+  requestId: number
+  frameKey: string
+} | undefined
 let routeRestoreTarget: CodeFrameRouteLocation | null = null
 
 const outboundShellMessageTypes = [
@@ -705,6 +710,7 @@ function isFrameInteractive(frame: CodeFrame) {
 
 function onCodeFrameLoad(frameKey: string) {
   frameLifecycle.value = markCodeFrameLoaded(frameLifecycle.value, frameKey)
+  scheduleLoadedFrameFallback(frameKey)
 }
 
 function onCodeFrameError(frameKey: string) {
@@ -719,9 +725,38 @@ function onCodeFrameError(frameKey: string) {
 }
 
 function clearPendingReadyTimer() {
-  if (!pendingReadyTimer) return
-  window.clearTimeout(pendingReadyTimer.handle)
-  pendingReadyTimer = undefined
+  if (pendingReadyTimer) {
+    window.clearTimeout(pendingReadyTimer.handle)
+    pendingReadyTimer = undefined
+  }
+  clearLoadedFrameFallback()
+}
+
+function clearLoadedFrameFallback() {
+  if (!loadedFrameFallbackTimer) return
+  window.clearTimeout(loadedFrameFallbackTimer.handle)
+  loadedFrameFallbackTimer = undefined
+}
+
+function scheduleLoadedFrameFallback(frameKey: string) {
+  clearLoadedFrameFallback()
+  const pending = frameLifecycle.value.pending
+  if (!pending || pending.key !== frameKey || !pending.loaded) return
+  const requestId = pending.requestId
+  const handle = window.setTimeout(() => {
+    if (loadedFrameFallbackTimer?.handle === handle) loadedFrameFallbackTimer = undefined
+    const current = frameLifecycle.value.pending
+    if (!current || current.key !== frameKey || current.requestId !== requestId || !current.loaded) return
+    // A healthy Runtime document may be an older Builder that does not emit the
+    // optional shell-ready message. The iframe's load event is still proof that
+    // the authenticated document and its assets arrived, so never leave it
+    // transparent for the full readiness timeout.
+    frameLifecycle.value = promoteReadyCodeFrame(frameLifecycle.value, frameKey)
+    errorMessage.value = ''
+    resetWorkspaceOpening()
+    scheduleOuterCodeRailRefresh(500)
+  }, 1200)
+  loadedFrameFallbackTimer = { handle, requestId, frameKey }
 }
 
 function startPendingReadyTimer(frame: CodeFrame) {

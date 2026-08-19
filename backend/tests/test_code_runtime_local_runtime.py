@@ -1028,8 +1028,24 @@ async def test_control_plane_catalog_builds_local_proxy_document_and_caches_meta
     assert document["defaultProviderId"] == "litellm"
     assert document["providers"][0]["apiBaseUrl"].endswith("/model-proxy/11/v1")
     assert document["providers"][0]["token"] == "local-proxy-token"
+    assert len(document["providers"]) == 2
+    assert document["providers"][1]["providerId"].startswith("local.")
+    assert document["providers"][1]["wireApi"] == "responses"
     assert identity == ("openai", document["providers"][0]["apiBaseUrl"], "local-proxy-token")
     assert list(tmp_path.glob("control-plane-*.json"))
+
+
+def test_provider_identity_uses_default_provider_from_multi_provider_document():
+    remote_identity = ("openai", "http://127.0.0.1:8000/v1", "remote-token")
+    local_identity = ("openai", "https://models.example.invalid/v1", "local-token")
+    document = model_provider_module._merge_provider_documents(
+        model_provider_module._document("remote", remote_identity, "remote-model", ["remote-model"]),
+        model_provider_module._document(
+            "local", local_identity, "local-model", ["local-model"], wire_api="chat"
+        ),
+    )
+
+    assert model_provider_module.provider_identity_from_document(document) == remote_identity
 
 
 def test_from_environment_uses_explicit_runtime_data_dir(monkeypatch, tmp_path):

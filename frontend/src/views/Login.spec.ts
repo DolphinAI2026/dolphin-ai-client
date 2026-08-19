@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { createApp, defineComponent, h, nextTick } from 'vue'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import loginSource from './Login.vue?raw'
 import tenantSelectSource from './TenantSelect.vue?raw'
 import userStoreSource from '@/stores/user.ts?raw'
@@ -137,6 +137,18 @@ async function flushPromises() {
   await nextTick()
 }
 
+function installStorage() {
+  const values = new Map<string, string>()
+  vi.stubGlobal('localStorage', {
+    clear: () => values.clear(),
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => values.set(key, value),
+    removeItem: (key: string) => values.delete(key),
+  })
+}
+
+beforeEach(() => installStorage())
+
 const currentUuid = '11111111-1111-4111-8111-111111111111'
 const targetUuid = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const tenants = [
@@ -201,6 +213,7 @@ describe('Login captcha fallback', () => {
     loginHarness.token = null
     localStorage.clear()
     document.body.innerHTML = ''
+    vi.unstubAllGlobals()
   })
 
   it('restores the captcha input after a failed probe and the first login failure', async () => {
@@ -278,6 +291,7 @@ describe('standalone Web Console redirect recovery', () => {
     loginHarness.token = null
     localStorage.clear()
     document.body.innerHTML = ''
+    vi.unstubAllGlobals()
   })
 
   it('restores a failed management-session handoff without asking for credentials again', async () => {

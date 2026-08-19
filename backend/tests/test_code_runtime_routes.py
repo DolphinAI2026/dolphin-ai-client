@@ -218,6 +218,89 @@ async def test_remember_runtime_agent_session_persists_rail_snapshot(db_session)
 
 
 @pytest.mark.asyncio
+async def test_live_runtime_title_refresh_updates_only_the_first_message_title(db_session):
+    from app.routes.code_runtime import _remember_runtime_agent_session
+
+    session, binding, _rows = await _seed_browser_runtime(db_session)
+    await _remember_runtime_agent_session(
+        db_session,
+        session,
+        binding,
+        "runtime-first-title",
+        {"title": "未命名会话", "updatedAt": "2026-07-18T02:00:00Z"},
+    )
+    await db_session.commit()
+
+    # The live Runtime index can keep an older timestamp even though it has
+    # just filled the title from the first user message.
+    await _remember_runtime_agent_session(
+        db_session,
+        session,
+        binding,
+        "runtime-first-title",
+        {"title": "修复登录回调", "updatedAt": "2026-07-18T01:00:00Z"},
+        refresh_title_even_if_stale=True,
+    )
+    await db_session.commit()
+
+    row = (await db_session.execute(select(CodeRuntimeAgentSession).where(
+        CodeRuntimeAgentSession.runtime_session_id == "runtime-first-title"
+    ))).scalar_one()
+    assert row.title == "修复登录回调"
+    assert row.title_override is False
+
+
+@pytest.mark.asyncio
+async def test_explicit_code_agent_title_is_not_overwritten_by_runtime_snapshot(db_session):
+    from app.routes.code_runtime import _remember_runtime_agent_session
+
+    session, binding, _rows = await _seed_browser_runtime(db_session)
+    record = CodeRuntimeAgentSession(
+        tenant_id=session.tenant_id,
+        user_id=session.user_id,
+        session_id=session.id,
+        external_application_id=binding.external_application_id,
+        runtime_session_id="runtime-explicit-title",
+        title="支付回调排查",
+        title_override=True,
+    )
+    db_session.add(record)
+    await db_session.commit()
+
+    await _remember_runtime_agent_session(
+        db_session,
+        session,
+        binding,
+        "runtime-explicit-title",
+        {"title": "第一条用户消息", "updatedAt": "2026-07-18T03:00:00Z"},
+        refresh_title_even_if_stale=True,
+    )
+    await db_session.commit()
+
+    await db_session.refresh(record)
+    assert record.title == "支付回调排查"
+    assert record.title_override is True
+
+
+def test_recent_runtime_user_messages_uses_at_most_the_latest_five_user_turns():
+    from app.routes.code_runtime import _recent_runtime_user_messages
+
+    timeline = {
+        "events": [
+            {"type": "timeline.turn.started", "payload": {"text": f"用户目标 {index}"}}
+            for index in range(1, 7)
+        ] + [{
+            "type": "timeline.turn.started",
+            "payload": {"text": "你正在接手一项正在进行的工作。\n\n内部交接"},
+        }],
+    }
+
+    assert _recent_runtime_user_messages(timeline) == [
+        "用户目标 2", "用户目标 3", "用户目标 4", "用户目标 5", "用户目标 6",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_desktop_model_proxy_forwards_scoped_request_to_control_plane(
     db_session,
     monkeypatch,
@@ -2596,6 +2679,41 @@ async def test_create_code_session_from_external_app_reuses_existing_app_shell_s
     ).scalars().all()
     assert second["id"] == first["id"]
     assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_local_external_app_session_uses_device_workspace_scope_and_repairs_legacy_tenant(
+    db_session,
+    monkeypatch,
+):
+    from app.code_runtime import local_runtime as local_runtime_module
+    from app.routes.code_runtime import (
+        CreateExternalCodeSessionRequest,
+        create_code_session_from_external_app,
+    )
+
+    monkeypatch.setattr(local_runtime_module.runtime, "is_desktop", lambda: True)
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(id=11, account_source="control_plane"),
+        tenant_id=7,
+        tenant_role="member",
+        control_plane_tenant_id="tenant-7",
+    )
+    request = CreateExternalCodeSessionRequest(
+        external_application_id="local-workspace-app",
+        app_name="本地项目",
+    )
+
+    created = await create_code_session_from_external_app(request, ctx, db_session)
+    session = await db_session.get(AIChatSession, created["id"])
+    assert session.tenant_id == 0
+
+    session.tenant_id = 7
+    await db_session.commit()
+    repaired = await create_code_session_from_external_app(request, ctx, db_session)
+    repaired_session = await db_session.get(AIChatSession, repaired["id"])
+    assert repaired["id"] == created["id"]
+    assert repaired_session.tenant_id == 0
 
 
 @pytest.mark.asyncio

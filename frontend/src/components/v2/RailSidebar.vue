@@ -74,6 +74,7 @@ import {
   codeRailHistorySessions,
   groupCodeRailHistoryByApplication,
   hydrateCodeRailHistorySessions,
+  type CodeRailSession,
   type CodeRailSessionGroup,
 } from './codeRailHistory'
 import ruijingWhaleMarkUrl from '@/assets/brand/ruijing-whale-mark.svg'
@@ -425,6 +426,64 @@ async function renameSystemAssistantSession(session: RailSession) {
   } catch (error: any) {
     if (error === 'cancel' || error === 'close') return
     ElMessage.error(error?.response?.data?.detail || error?.message || '重命名失败')
+  }
+}
+
+function updateCodeRailSessionTitle(session: CodeRailSession, title: string) {
+  const normalized = String(title || '').trim()
+  if (!normalized || !session.shellSessionId || !session.runtimeSessionId || !codeRailHistory.value) return
+  codeRailHistory.value = {
+    ...codeRailHistory.value,
+    apps: codeRailHistory.value.apps.map((app) => (
+      String(app.shell_session_id || '') !== String(session.shellSessionId)
+        ? app
+        : {
+            ...app,
+            sessions: (app.sessions || []).map((item) => (
+              String(item.runtimeSessionId || '') === String(session.runtimeSessionId)
+                ? { ...item, title: normalized }
+                : item
+            )),
+          }
+    )),
+  }
+}
+
+async function renameCodeAgentSession(session: CodeRailSession) {
+  if (!session.shellSessionId || !session.runtimeSessionId) return
+  try {
+    const { value } = await ElMessageBox.prompt('输入新的会话名称', '重命名会话', {
+      inputValue: session.title || '',
+      inputPlaceholder: '会话名称',
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValidator: value => Boolean(String(value || '').trim()) || '请输入会话名称',
+    })
+    const title = String(value || '').trim()
+    if (!title || title === session.title) return
+    const result = await codeRuntimeApi.renameAgentSession(
+      session.shellSessionId,
+      session.runtimeSessionId,
+      title,
+    )
+    updateCodeRailSessionTitle(session, result.title || title)
+  } catch (error: any) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error?.response?.data?.detail || error?.message || '重命名失败')
+  }
+}
+
+async function generateCodeAgentSessionTitle(session: CodeRailSession) {
+  if (!session.shellSessionId || !session.runtimeSessionId) return
+  try {
+    const result = await codeRuntimeApi.generateAgentSessionTitle(
+      session.shellSessionId,
+      session.runtimeSessionId,
+    )
+    updateCodeRailSessionTitle(session, result.title)
+    ElMessage.success('已根据最近的消息生成标题')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || error?.message || '生成标题失败')
   }
 }
 
@@ -966,6 +1025,8 @@ function renderIcon(name: string): string {
         @archive-system-session="archiveRailSession"
         @open-application-session="openSession"
         @new-application-session="createCodeAgentSession"
+        @rename-application-session="renameCodeAgentSession"
+        @generate-application-session-title="generateCodeAgentSessionTitle"
         @archive-application-session="archiveRailSession"
         @hide-application="hideCodeRailApplication"
         @restore-applications="restoreCodeRailApplications"

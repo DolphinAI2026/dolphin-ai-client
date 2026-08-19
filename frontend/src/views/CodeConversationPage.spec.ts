@@ -88,6 +88,14 @@ describe('CodeConversationPage', () => {
     expect(pageSource).toContain('frame.key')
   })
 
+  it('reveals a successfully loaded Builder frame when an older runtime omits builder.ready', () => {
+    expect(pageSource).toContain('scheduleLoadedFrameFallback')
+    expect(pageSource).toContain('loadedFrameFallbackTimer')
+    expect(pageSource).toContain('pending.loaded')
+    expect(pageSource).toContain('promoteReadyCodeFrame(frameLifecycle.value, frameKey)')
+    expect(pageSource).toContain('}, 1200)')
+  })
+
   it('commits only the promoted pending shell preference after trusted readiness', () => {
     expect(pageSource).toContain('commitPendingCodeApplicationLocationPreferenceByShellSessionRef')
     expect(pageSource).toContain('promoteReadyCodeFrame(previousState, frame.key)')

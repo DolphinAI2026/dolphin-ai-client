@@ -13,9 +13,20 @@ vi.mock('@/api/auth', () => ({
 
 import { recoverWebConsoleRedirect } from './webConsoleSession'
 
+function installStorage() {
+  const values = new Map<string, string>()
+  vi.stubGlobal('localStorage', {
+    clear: () => values.clear(),
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => values.set(key, value),
+    removeItem: (key: string) => values.delete(key),
+  })
+}
+
 describe('standalone Web Console session recovery', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    installStorage()
     localStorage.clear()
   })
 

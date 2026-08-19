@@ -27,6 +27,8 @@ const emit = defineEmits<{
   (event: 'archive-system-session', session: RailSession): void
   (event: 'open-application-session', session: RailSession): void
   (event: 'new-application-session', shellSessionId: string): void
+  (event: 'rename-application-session', session: CodeRailSession): void
+  (event: 'generate-application-session-title', session: CodeRailSession): void
   (event: 'archive-application-session', session: CodeRailSession): void
   (event: 'hide-application', logicalApplicationId: string): void
   (event: 'restore-applications'): void
@@ -118,6 +120,16 @@ function archiveSystemSession(session: RailSession) {
 function archiveApplicationSession(session: CodeRailSession) {
   sessionMenuOpenId.value = null
   emit('archive-application-session', session)
+}
+
+function renameApplicationSession(session: CodeRailSession) {
+  sessionMenuOpenId.value = null
+  emit('rename-application-session', session)
+}
+
+function generateApplicationSessionTitle(session: CodeRailSession) {
+  sessionMenuOpenId.value = null
+  emit('generate-application-session-title', session)
 }
 </script>
 
@@ -271,7 +283,7 @@ function archiveApplicationSession(session: CodeRailSession) {
               >
                 <AppIcon :name="session.executionLocation === 'local' ? 'laptop' : 'globe'" :size="12" />
               </span>
-              <div class="sas-manage" @click.stop>
+              <div v-if="session.source === 'code-agent'" class="sas-manage" @click.stop>
                 <button
                   type="button"
                   class="sas-more"
@@ -283,6 +295,14 @@ function archiveApplicationSession(session: CodeRailSession) {
                   <AppIcon name="more" :size="14" />
                 </button>
                 <div v-if="sessionMenuOpenId === String(session.id)" class="sas-menu" role="menu">
+                  <button type="button" role="menuitem" @click="renameApplicationSession(session)">
+                    <AppIcon name="edit" :size="14" />
+                    重命名
+                  </button>
+                  <button type="button" role="menuitem" @click="generateApplicationSessionTitle(session)">
+                    <AppIcon name="sparkles" :size="14" />
+                    AI 生成标题
+                  </button>
                   <button type="button" role="menuitem" @click="archiveApplicationSession(session)">
                     <AppIcon name="archive" :size="14" />
                     归档会话
@@ -343,7 +363,7 @@ function archiveApplicationSession(session: CodeRailSession) {
 .sas-more { width: 22px; height: 22px; display: grid; place-items: center; padding: 0; opacity: 0; color: #758298; background: transparent; border: 0; border-radius: 6px; cursor: pointer; }
 .sas-item:hover .sas-more, .sas-item.active .sas-more, .sas-more:focus-visible, .sas-more[aria-expanded="true"] { opacity: 1; }
 .sas-more:hover { color: #1f56c7; background: #fff; }
-.sas-menu { position: absolute; right: 0; top: 26px; z-index: 30; width: 112px; padding: 4px; border: 1px solid #dfe5ee; border-radius: 8px; background: #fff; box-shadow: 0 8px 24px rgba(28, 43, 68, .14); }
+.sas-menu { position: absolute; right: 0; top: 26px; z-index: 30; width: 128px; padding: 4px; border: 1px solid #dfe5ee; border-radius: 8px; background: #fff; box-shadow: 0 8px 24px rgba(28, 43, 68, .14); }
 .sas-menu button { width: 100%; min-height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 8px; color: #46556b; background: transparent; border: 0; border-radius: 6px; font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
 .sas-menu button:hover { color: #1f56c7; background: #edf3ff; }
 .sas-menu button.danger { color: #bb3f3f; }

@@ -49,6 +49,7 @@ export interface DesktopDiscoveryDocument {
     mcp: boolean
     skills: boolean
     knowledge_bases: boolean
+    system_git?: boolean
   }
   local_ai: { enabled: boolean; allowed_kinds: string[]; bridge_protocol_version: number }
 }
@@ -235,7 +236,7 @@ function previewDiscovery(url: string): DesktopDiscoveryDocument {
       builder: { enabled: true, base_url: baseUrl },
       code: { enabled: !standaloneBuilder, base_url: standaloneBuilder ? null : baseUrl },
     },
-    remote_capabilities: { models: true, mcp: true, skills: true, knowledge_bases: true },
+    remote_capabilities: { models: true, mcp: true, skills: true, knowledge_bases: true, system_git: true },
     local_ai: {
       enabled: true,
       allowed_kinds: ['models', 'mcp', 'skills', 'knowledge_bases'],

@@ -11,7 +11,8 @@ describe('Builder model picker usage', () => {
 
   it('renders default and configured model options in the shared picker', () => {
     expect(pickerSource).toContain('默认模型')
-    expect(pickerSource).toContain('option.is_default ? defaultLabel : option.config_name')
+    expect(pickerSource).toContain('function optionLabel(option: BuilderModelOption): string')
+    expect(pickerSource).toContain('option.is_default && !props.showDefaultConfigName')
     expect(pickerSource).toContain("option.is_default ? '当前默认配置'")
     expect(pickerSource).toContain('v-for="option in options"')
     expect(pickerSource).toContain('role="listbox"')

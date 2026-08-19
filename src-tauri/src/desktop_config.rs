@@ -83,6 +83,8 @@ pub struct DesktopRemoteCapabilities {
     pub skills: bool,
     #[serde(default)]
     pub knowledge_bases: bool,
+    #[serde(default)]
+    pub system_git: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import subprocess
 import weakref
@@ -317,7 +318,7 @@ _SYSTEM_ASSISTANT_MCP_CONTRACTS: dict[str, dict[str, Any]] = {
     "create_system_capability_git_repository": {
         "parameters": [
             {"name": "git_connection_id", "required": True, "description": "必须先调用 list_system_git_connections，从返回的 id 选择，不能猜测。"},
-            {"name": "git_connection_scope", "required": True, "allowed_values": ["tenant", "project", "deployment_default"], "description": "必须使用清单返回的 connection_scope，避免不同来源的连接 ID 冲突。"},
+            {"name": "git_connection_scope", "required": True, "allowed_values": ["tenant", "project", "deployment_default", "control_plane_default"], "description": "必须使用清单返回的 connection_scope；control_plane_default 的凭据只在本次 Git 命令内存中使用。"},
             {"name": "branch", "required": False, "description": "默认为当前分支；必须是有效 Git 分支名。"},
             {"name": "confirmed", "required": False, "allowed_values": [False, True]},
         ],
@@ -327,7 +328,7 @@ _SYSTEM_ASSISTANT_MCP_CONTRACTS: dict[str, dict[str, Any]] = {
             {"name": "asset_type", "required": True, "allowed_values": ["seed_project", "capability"]},
             {"name": "repository_path", "required": True, "description": "用户明确提供的不存在或空的绝对目录。"},
             {"name": "git_connection_id", "required": True, "description": "必须先调用 list_system_git_connections，从返回的 id 选择。"},
-            {"name": "git_connection_scope", "required": True, "allowed_values": ["tenant", "project", "deployment_default"], "description": "必须使用清单返回的 connection_scope。"},
+            {"name": "git_connection_scope", "required": True, "allowed_values": ["tenant", "project", "deployment_default", "control_plane_default"], "description": "必须使用清单返回的 connection_scope。"},
             {"name": "code", "required": True, "description": "新资产的机器编码，同时默认用作新 Git 仓库名。"},
             {"name": "name", "required": True, "description": "新资产显示名称。"},
             {"name": "branch", "required": False, "description": "默认 main；必须是有效 Git 分支名。"},
@@ -345,7 +346,7 @@ _SYSTEM_ASSISTANT_MCP_CONTRACTS: dict[str, dict[str, Any]] = {
         "parameters": [
             {"name": "branch", "required": False, "description": "默认为当前分支；必须是有效 Git 分支名。"},
             {"name": "git_connection_id", "required": False, "description": "如指定，必须来自 list_system_git_connections。"},
-            {"name": "git_connection_scope", "required": False, "allowed_values": ["tenant", "project", "deployment_default"], "description": "传 git_connection_id 时必须同步传入清单返回的 scope。"},
+            {"name": "git_connection_scope", "required": False, "allowed_values": ["tenant", "project", "deployment_default", "control_plane_default"], "description": "传 git_connection_id 时必须同步传入清单返回的 scope。"},
             {"name": "confirmed", "required": False, "allowed_values": [False, True]},
         ],
     },
@@ -525,6 +526,100 @@ class DeploymentGitConnection:
     status: str = "connected"
 
 
+@dataclass(frozen=True)
+class ControlPlaneGitConnection:
+    """Metadata for the server-managed desktop Git connection (no token)."""
+    id: int
+    provider: str
+    host: str
+    group_id_or_org: str
+    default_branch: str
+    status: str = "connected"
+
+
+@dataclass(frozen=True)
+class ControlPlaneGitRepositoryAccess:
+    """One in-process, user-scoped Git credential from the Control Plane."""
+    connection: DeploymentGitConnection
+    provider_project_id: str
+    path_with_namespace: str
+    repository_url: str
+    branch: str
+
+
+async def _control_plane_git_connection(
+    resolve_identity: Callable[[int | None, int | None], tuple[int, int]],
+    tenant_id: int,
+    user_id: int,
+) -> ControlPlaneGitConnection | None:
+    """Read non-sensitive desktop Git metadata from the authenticated Control Plane."""
+    if str(os.getenv("DOLPHIN_SYSTEM_GIT_ENABLED", "")).strip().lower() not in {"1", "true", "yes"}:
+        return None
+    try:
+        gateway = await _gateway(resolve_identity, tenant_id, user_id)
+        result = await gateway.request(
+            asset_type="seed_project", method="GET", path="/api/system-assets/git/connection",
+        )
+    except AssetGatewayError:
+        return None
+    if not isinstance(result, dict):
+        return None
+    try:
+        if str(result.get("connectionScope") or result.get("connection_scope") or "").strip() != "control_plane_default":
+            return None
+        provider = str(result.get("provider") or "").strip().lower()
+        host = str(result.get("host") or "").strip().rstrip("/")
+        group = str(result.get("groupIdOrOrg") or result.get("group_id_or_org") or "").strip().strip("/")
+        branch = str(result.get("defaultBranch") or result.get("default_branch") or "main").strip()
+        if provider != "gitlab" or not host.startswith("https://") or not group or not branch:
+            return None
+        return ControlPlaneGitConnection(0, provider, host, group, branch)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _control_plane_git_repository_access(
+    resolve_identity: Callable[[int | None, int | None], tuple[int, int]],
+    tenant_id: int,
+    user_id: int,
+    *,
+    action: str,
+    repository_name: str | None = None,
+    path_with_namespace: str | None = None,
+) -> ControlPlaneGitRepositoryAccess:
+    """Request a user-scoped credential without ever putting it in MCP output."""
+    if action not in {"create", "credentials"}:
+        raise SystemGitError("SYSTEM_GIT_BROKER_REQUEST_INVALID", "Git 受控授权请求无效")
+    gateway = await _gateway(resolve_identity, tenant_id, user_id)
+    if action == "create":
+        path, body = "/api/system-assets/git/repositories", {"repositoryName": repository_name}
+    else:
+        path, body = "/api/system-assets/git/credentials", {"pathWithNamespace": path_with_namespace}
+    result = await gateway.request(asset_type="seed_project", method="POST", path=path, body=body)
+    try:
+        provider = str(result.get("provider") or "").strip().lower()
+        project_id = str(result.get("providerProjectId") or result.get("provider_project_id") or "").strip()
+        full_path = str(result.get("pathWithNamespace") or result.get("path_with_namespace") or "").strip().strip("/")
+        remote_url = str(result.get("repositoryUrl") or result.get("repository_url") or "").strip()
+        branch = str(result.get("branch") or "main").strip()
+        token = str(result.get("accessToken") or result.get("access_token") or "").strip()
+        if provider != "gitlab" or not project_id or not full_path or not remote_url or not branch or not token:
+            raise ValueError("missing remote Git access fields")
+        host = remote_url.removesuffix(".git").rsplit("/", 1)[0]
+        group = full_path.rsplit("/", 1)[0]
+        from app.git.connection import encrypt_token
+        connection = DeploymentGitConnection(0, provider, host, encrypt_token(token), group)
+        return ControlPlaneGitRepositoryAccess(connection, project_id, full_path, remote_url, branch)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise SystemGitError("SYSTEM_GIT_BROKER_INVALID_RESPONSE", "系统 Git 服务返回无效授权响应") from exc
+    finally:
+        # The token only exists in the local response object until it is encrypted
+        # for the paired, in-process git helper. It is never returned to the model.
+        if isinstance(result, dict):
+            result.pop("accessToken", None)
+            result.pop("access_token", None)
+
+
 async def _deployment_git_connection(_tenant_id: int) -> DeploymentGitConnection | None:
     """Return an encrypted in-memory deployment fallback for an unconfigured tenant."""
     required = (
@@ -554,6 +649,18 @@ def _clean_repository_remote(host: str, repo_full_path: str) -> str:
     if not base.startswith("https://") or not path or any(part in {".", ".."} for part in path.split("/")):
         raise SystemGitError("SYSTEM_GIT_REMOTE_INVALID", "GitConnection 的 host 或仓库路径无效")
     return f"{base}/{path}.git"
+
+
+def _repository_path_from_clean_remote(host: str, remote_url: str) -> str:
+    """Recover a controlled repository path without accepting another Git host."""
+    base = str(host or "").rstrip("/") + "/"
+    clean = str(remote_url or "").strip().removesuffix(".git")
+    if not clean.startswith(base):
+        raise SystemGitError("SYSTEM_GIT_REMOTE_INVALID", "远端仓库不属于当前平台 Git 主机")
+    path = clean[len(base):].strip("/")
+    if not path or any(part in {"", ".", ".."} for part in path.split("/")):
+        raise SystemGitError("SYSTEM_GIT_REMOTE_INVALID", "远端仓库路径无效")
+    return path
 
 
 def _new_system_git_root(repository_path: str) -> Path:
@@ -644,7 +751,7 @@ async def _system_git_connection(
     user_id: int,
     git_connection_id: int | None,
     git_connection_scope: str | None = None,
-) -> GitConnection | TenantGitConnection | DeploymentGitConnection | None:
+) -> GitConnection | TenantGitConnection | DeploymentGitConnection | ControlPlaneGitConnection | None:
     """Load a platform-configured Git credential without exposing its token."""
     if git_connection_id is None:
         return None
@@ -654,10 +761,19 @@ async def _system_git_connection(
     except (TypeError, ValueError):
         raise SystemGitError("SYSTEM_GIT_CONNECTION_INVALID", "git_connection_id 必须是正整数")
     scope = str(git_connection_scope or "auto").strip().lower()
-    if scope not in {"auto", "tenant", "project", "deployment_default"}:
-        raise SystemGitError("SYSTEM_GIT_CONNECTION_SCOPE_INVALID", "git_connection_scope 只能是 tenant、project 或 deployment_default")
-    if connection_id < 0 or (connection_id == 0 and scope != "deployment_default"):
-        raise SystemGitError("SYSTEM_GIT_CONNECTION_INVALID", "git_connection_id 必须是正整数；部署默认连接使用 ID 0")
+    if scope not in {"auto", "tenant", "project", "deployment_default", "control_plane_default"}:
+        raise SystemGitError("SYSTEM_GIT_CONNECTION_SCOPE_INVALID", "git_connection_scope 只能是 tenant、project、deployment_default 或 control_plane_default")
+    if connection_id < 0 or (connection_id == 0 and scope not in {"deployment_default", "control_plane_default"}):
+        raise SystemGitError("SYSTEM_GIT_CONNECTION_INVALID", "git_connection_id 必须是正整数；部署或控制面默认连接使用 ID 0")
+    if scope == "control_plane_default":
+        if connection_id != 0:
+            raise SystemGitError("SYSTEM_GIT_CONNECTION_INVALID", "控制面默认连接必须使用 ID 0")
+        connection = await _control_plane_git_connection(resolve_identity, tenant_id, user_id)
+        if connection is None:
+            raise SystemGitError("SYSTEM_GIT_CONNECTION_NOT_FOUND", "当前控制面未配置系统资产 Git 连接")
+        # This is metadata-only; callers must obtain a one-time token through
+        # _control_plane_git_repository_access immediately before Git I/O.
+        return connection
     if scope == "deployment_default":
         if connection_id != 0:
             raise SystemGitError("SYSTEM_GIT_CONNECTION_INVALID", "部署默认连接必须使用 ID 0")
@@ -1800,6 +1916,25 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
                     "status": deployment_connection.status,
                     "source": "deployment_config",
                 })
+            # Desktop sidecars intentionally have no GitLab administrator token.
+            # When the tenant did not configure a private connection, discover
+            # the Control Plane's server-managed connection instead.  Its
+            # one-time user credential is requested only immediately before a
+            # confirmed Git operation and never appears in this response.
+            control_plane_connection = await _control_plane_git_connection(
+                resolve_identity, tenant_id, user_id,
+            )
+            if control_plane_connection is not None and not tenant_connections:
+                connections.append({
+                    "id": control_plane_connection.id,
+                    "connection_scope": "control_plane_default",
+                    "provider": control_plane_connection.provider,
+                    "host": control_plane_connection.host,
+                    "group_id_or_org": control_plane_connection.group_id_or_org,
+                    "default_branch": control_plane_connection.default_branch,
+                    "status": control_plane_connection.status,
+                    "source": "control_plane",
+                })
             connections.extend({
                 "id": connection.id,
                 "connection_scope": "project",
@@ -1886,22 +2021,32 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
             if not confirmed:
                 return _confirmation_preview("create_system_asset_starter_repository", kind, full_path, preview)
 
-            from app.git.connection import make_provider
-            provider = make_provider(connection)
-            existing = await provider.get_repo(full_path)
-            created = existing is None
-            if created:
-                full_path = await provider.create_repo(
-                    group_or_org=group,
-                    name=project_name,
-                    description=f"System {kind}: {display_name}",
-                    initialize_with_readme=False,
+            if isinstance(connection, ControlPlaneGitConnection):
+                access = await _control_plane_git_repository_access(
+                    resolve_identity, tenant_id, user_id, action="create", repository_name=project_name,
                 )
-                clean_remote = _clean_repository_remote(connection.host, full_path)
+                connection = access.connection
+                full_path = access.path_with_namespace
+                clean_remote = access.repository_url
+                provider_project_id = access.provider_project_id
+                created = True
+            else:
+                from app.git.connection import make_provider
+                provider = make_provider(connection)
                 existing = await provider.get_repo(full_path)
-            provider_project_id = existing.get("id") if isinstance(existing, dict) else None
-            if provider_project_id is None:
-                raise SystemGitError("SYSTEM_GIT_PROVIDER_PROJECT_ID_UNAVAILABLE", "Git 平台没有返回仓库 Project ID")
+                created = existing is None
+                if created:
+                    full_path = await provider.create_repo(
+                        group_or_org=group,
+                        name=project_name,
+                        description=f"System {kind}: {display_name}",
+                        initialize_with_readme=False,
+                    )
+                    clean_remote = _clean_repository_remote(connection.host, full_path)
+                    existing = await provider.get_repo(full_path)
+                provider_project_id = existing.get("id") if isinstance(existing, dict) else None
+                if provider_project_id is None:
+                    raise SystemGitError("SYSTEM_GIT_PROVIDER_PROJECT_ID_UNAVAILABLE", "Git 平台没有返回仓库 Project ID")
             authenticated_url = _authenticated_git_remote(connection, clean_remote)
             try:
                 if _run_git(root.parent, "ls-remote", authenticated_url):
@@ -2020,30 +2165,42 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
                 )
 
             try:
-                from app.git.connection import make_provider
-                provider = make_provider(connection)
-                existing = await provider.get_repo(full_path)
-                created = existing is None
-                if created:
-                    # The local repository already has the capability commits.
-                    # An initialized README would create unrelated history and
-                    # make its first push fail, so this must be an empty repo.
-                    full_path = await provider.create_repo(
-                        group_or_org=group,
-                        name=project_name,
-                        description=f"System capability: {capability.get('name') or project_name}",
-                        initialize_with_readme=False,
+                if isinstance(connection, ControlPlaneGitConnection):
+                    access = await _control_plane_git_repository_access(
+                        resolve_identity, tenant_id, user_id, action="create", repository_name=project_name,
                     )
-                    clean_remote = _clean_repository_remote(connection.host, full_path)
+                    connection = access.connection
+                    full_path = access.path_with_namespace
+                    clean_remote = access.repository_url
+                    provider_project_id = access.provider_project_id
+                    created = True
+                else:
+                    from app.git.connection import make_provider
+                    provider = make_provider(connection)
                     existing = await provider.get_repo(full_path)
-                provider_project_id = existing.get("id") if isinstance(existing, dict) else None
-                if provider_project_id is None:
-                    raise SystemGitError(
-                        "SYSTEM_GIT_PROVIDER_PROJECT_ID_UNAVAILABLE",
-                        "Git 平台没有返回仓库 Project ID；未绑定本地仓库，请稍后重试",
-                    )
+                    created = existing is None
+                    if created:
+                        # The local repository already has the capability commits.
+                        # An initialized README would create unrelated history and
+                        # make its first push fail, so this must be an empty repo.
+                        full_path = await provider.create_repo(
+                            group_or_org=group,
+                            name=project_name,
+                            description=f"System capability: {capability.get('name') or project_name}",
+                            initialize_with_readme=False,
+                        )
+                        clean_remote = _clean_repository_remote(connection.host, full_path)
+                        existing = await provider.get_repo(full_path)
+                    provider_project_id = existing.get("id") if isinstance(existing, dict) else None
+                    if provider_project_id is None:
+                        raise SystemGitError(
+                            "SYSTEM_GIT_PROVIDER_PROJECT_ID_UNAVAILABLE",
+                            "Git 平台没有返回仓库 Project ID；未绑定本地仓库，请稍后重试",
+                        )
             except SystemGitError:
                 raise
+            except AssetGatewayError as exc:
+                raise SystemGitError(exc.code, str(exc)) from exc
             except Exception as exc:  # noqa: BLE001 - do not leak provider internals or credentials
                 raise SystemGitError(
                     "SYSTEM_GIT_PROVIDER_REQUEST_FAILED",
@@ -2125,6 +2282,15 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
                 resolve_identity, tenant_id, user_id, git_connection_id, git_connection_scope,
             )
             if connection is not None:
+                if isinstance(connection, ControlPlaneGitConnection):
+                    access = await _control_plane_git_repository_access(
+                        resolve_identity,
+                        tenant_id,
+                        user_id,
+                        action="credentials",
+                        path_with_namespace=_repository_path_from_clean_remote(connection.host, target),
+                    )
+                    connection = access.connection
                 authenticated_url = _authenticated_git_remote(connection, target)
                 try:
                     _run_git(root, "ls-remote", authenticated_url)
@@ -2176,6 +2342,15 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
             if connection is None:
                 output = _run_git(root, "push", "-u", "origin", target_branch)
             else:
+                if isinstance(connection, ControlPlaneGitConnection):
+                    access = await _control_plane_git_repository_access(
+                        resolve_identity,
+                        tenant_id,
+                        user_id,
+                        action="credentials",
+                        path_with_namespace=_repository_path_from_clean_remote(connection.host, origin),
+                    )
+                    connection = access.connection
                 authenticated_url = _authenticated_git_remote(connection, origin)
                 try:
                     # ``-c`` applies only to this Git process: origin remains the

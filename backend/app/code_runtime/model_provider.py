@@ -130,6 +130,40 @@ def _document(
     }
 
 
+def _merge_provider_documents(
+    primary: dict[str, Any],
+    secondary: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep the primary default while exposing both independent providers.
+
+    Desktop users can have an organization model catalog and locally configured
+    OpenAI-compatible models at the same time.  They must remain separate
+    providers: their endpoint, credential, and Codex wire protocol can differ.
+    """
+    primary_providers = primary.get("providers")
+    secondary_providers = secondary.get("providers")
+    default_provider_id = _text(primary.get("defaultProviderId"))
+    if (
+        not default_provider_id
+        or not isinstance(primary_providers, list)
+        or not isinstance(secondary_providers, list)
+        or not all(isinstance(provider, dict) for provider in primary_providers + secondary_providers)
+    ):
+        raise ValueError("invalid runtime model provider document")
+
+    provider_ids = {_text(provider.get("providerId")) for provider in primary_providers}
+    providers = [*primary_providers]
+    for provider in secondary_providers:
+        provider_id = _text(provider.get("providerId"))
+        if not provider_id or provider_id in provider_ids:
+            continue
+        providers.append(provider)
+        provider_ids.add(provider_id)
+    if default_provider_id not in provider_ids:
+        raise ValueError("invalid runtime model provider document")
+    return {"defaultProviderId": default_provider_id, "providers": providers}
+
+
 def _catalog_cache_path(cache_dir: Path, tenant_id: str) -> Path:
     digest = hashlib.sha256(tenant_id.encode()).hexdigest()[:20]
     return cache_dir / f"control-plane-{digest}.json"
@@ -256,7 +290,18 @@ async def provider_document(
         if catalog is not None:
             provider_id, default_model, models = _catalog_provider(catalog)
             identity = ("openai", _text(local_proxy_url).rstrip("/"), _text(local_proxy_token))
-            return _document(provider_id, identity, default_model, models), identity
+            remote_document = _document(provider_id, identity, default_model, models)
+            # Do not let a reachable Control Plane hide models configured in
+            # the desktop app.  The runtime's provider file supports multiple
+            # providers, and the local provider may deliberately use `chat`
+            # while the Control Plane proxy uses `responses`.
+            try:
+                local = await _local_provider(db, int(ctx.tenant_id), None)
+            except HTTPException:
+                local = None
+            if local is not None:
+                return _merge_provider_documents(remote_document, local[0]), identity
+            return remote_document, identity
 
     local = await _local_provider(db, int(ctx.tenant_id), None)
     if local is not None:
@@ -266,9 +311,19 @@ async def provider_document(
 
 def provider_identity_from_document(document: dict[str, Any]) -> tuple[str, str, str]:
     providers = document.get("providers")
-    if not isinstance(providers, list) or len(providers) != 1 or not isinstance(providers[0], dict):
+    default_provider_id = _text(document.get("defaultProviderId"))
+    if not isinstance(providers, list) or not default_provider_id:
         raise ValueError("invalid runtime model provider document")
-    provider = providers[0]
+    provider = next(
+        (
+            item
+            for item in providers
+            if isinstance(item, dict) and _text(item.get("providerId")) == default_provider_id
+        ),
+        None,
+    )
+    if provider is None:
+        raise ValueError("invalid runtime model provider document")
     view = type("PersistedModel", (), {
         "provider": provider.get("runtimeProviderKind"),
         "base_url": provider.get("apiBaseUrl"),

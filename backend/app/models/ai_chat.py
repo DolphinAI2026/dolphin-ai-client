@@ -218,6 +218,12 @@ class CodeRuntimeAgentSession(Base):
     conversation_purpose_revision: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     title: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    # An outer-rail rename (manual or explicitly requested AI title) must not
+    # be overwritten when the embedded runtime later reports its first-message
+    # fallback title again.
+    title_override: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
     summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     state: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     model: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)

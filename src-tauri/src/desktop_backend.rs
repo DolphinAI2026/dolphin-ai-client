@@ -446,6 +446,11 @@ impl SidecarLaunch {
             .and_then(|discovery| discovery.auth.api_base_url.clone())
             .filter(|url| !url.trim().is_empty())
             .unwrap_or_else(|| config.login.base_url.clone());
+        let system_git_enabled = config
+            .discovery
+            .as_ref()
+            .map(|discovery| discovery.remote_capabilities.system_git)
+            .unwrap_or(false);
         Self {
             args: vec![
                 "--port".into(),
@@ -471,6 +476,10 @@ impl SidecarLaunch {
                     manager_token.into(),
                 ),
                 ("DOLPHIN_CODE_CONTROL_PLANE_URL".into(), code_base_url),
+                (
+                    "DOLPHIN_SYSTEM_GIT_ENABLED".into(),
+                    system_git_enabled.to_string(),
+                ),
             ]
             .into_iter()
             .collect(),

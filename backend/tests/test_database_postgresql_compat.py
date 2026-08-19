@@ -93,6 +93,7 @@ def test_code_runtime_agent_session_snapshot_has_startup_migrations():
 
     source = inspect.getsource(database.init_db)
     assert "ALTER TABLE code_runtime_agent_sessions ADD COLUMN title" in source
+    assert "ALTER TABLE code_runtime_agent_sessions ADD COLUMN title_override" in source
     assert "ALTER TABLE code_runtime_agent_sessions ADD COLUMN last_active_at" in source
     assert "ALTER TABLE code_runtime_agent_sessions ADD COLUMN codex_session_resumable" in source
 
