@@ -246,13 +246,17 @@ export function promoteReadyCodeFrame(state: CodeFrameLifecycle, frameKey: strin
     return state
   }
 
-  // A shell session owns at most one mounted iframe. Reopening another agent
-  // route for the same shell replaces that frame instead of retaining a stale
-  // duplicate with the same runtime identity.
+  // Agent routes share one sandbox shell but not one chat state.  Keep a hot
+  // frame for each distinct route so returning to an already visited agent
+  // does not rebuild the Builder document.  Only an older frame for this exact
+  // route is replaced by the newly promoted document.
   const previousFrames = [
     ...state.hot,
     ...(state.active ? [state.active] : []),
-  ].filter(frame => frame.sessionRef !== pending.sessionRef)
+  ].filter(frame => (
+    frame.sessionRef !== pending.sessionRef
+    || !codeFrameRoutesEqual(frame.route, pending.route)
+  ))
 
   return {
     ...state,

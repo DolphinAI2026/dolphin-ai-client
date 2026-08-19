@@ -512,33 +512,18 @@ async function openCurrentSession() {
   errorMessage.value = ''
   locationRecovery.value = null
 
-  // An exact cached route is already authenticated inside its mounted iframe.
-  // Promote it synchronously so a normal back-and-forth sandbox switch does
-  // not wait for Control Plane or rebuild the Runtime document.
-  const exactCachedState = activateCachedCodeFrame(frameLifecycle.value, {
-    requestId: requestSeq,
-    sessionRef,
-    requireRouteMatch: true,
-  })
-  if (exactCachedState !== frameLifecycle.value) {
-    frameLifecycle.value = exactCachedState
-    loading.value = false
-    if (openInFlightKey === openKey) openInFlightKey = ''
-    refreshOuterCodeRail()
-    return
-  }
-
   try {
     const runtimeAgentId = currentRuntimeAgentId()
-    const reusableCachedState = activateCachedCodeFrame(frameLifecycle.value, {
+    const exactCachedState = activateCachedCodeFrame(frameLifecycle.value, {
       requestId: requestSeq,
       sessionRef,
-      requireRouteMatch: false,
+      requireRouteMatch: true,
     })
-    if (reusableCachedState !== frameLifecycle.value) {
-      // The mounted Runtime shell already owns a valid sandbox session. When
-      // only the inner agent changes, activate it directly and keep the shell
-      // iframe mounted instead of reopening the workspace through Control Plane.
+    if (exactCachedState !== frameLifecycle.value) {
+      // A cached document already owns the target Agent's history.  Activation
+      // is still required because Runtime's current-session mapping is shared
+      // by the sandbox; without it, a later current-scoped request could apply
+      // to the previously selected Agent.
       if (runtimeAgentId) {
         try {
           const activated = await activateCurrentCodeAgentSession(
@@ -557,7 +542,7 @@ async function openCurrentSession() {
         }
       }
       if (requestSeq !== openRequestSeq) return
-      frameLifecycle.value = reusableCachedState
+      frameLifecycle.value = exactCachedState
       refreshOuterCodeRail()
       return
     }
@@ -618,12 +603,13 @@ async function openCurrentSession() {
       Number(opened.browser_hot_frames || 2),
     )
 
-    // A different agent route still needs the activation API above, but the
-    // shell iframe itself can be reused after activation instead of reloaded.
+    // This is mostly a race guard: a hot frame can become available while the
+    // workspace open request is in flight.  Never promote a route-mismatched
+    // frame, because its Builder document contains another Agent's history.
     const cachedState = activateCachedCodeFrame(frameLifecycle.value, {
       requestId: requestSeq,
       sessionRef,
-      requireRouteMatch: false,
+      requireRouteMatch: true,
     })
     if (cachedState !== frameLifecycle.value) {
       frameLifecycle.value = cachedState

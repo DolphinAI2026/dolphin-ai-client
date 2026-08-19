@@ -227,6 +227,43 @@ describe('code frame lifecycle', () => {
     expect(getCodeFrames(state)).toHaveLength(1)
   })
 
+  it('keeps a hot frame for another agent route in the same sandbox session', () => {
+    let state = activateInitialFrame()
+    const firstAgentKey = state.active!.key
+
+    state = beginCodeFrameOpen(state, {
+      requestId: 2,
+      sessionRef: 'session-1',
+      route: routeLocation('session-1', 'agent-2'),
+    })
+    state = queuePendingCodeFrame(state, {
+      requestId: 2,
+      sessionRef: 'session-1',
+      url: '/api/code-runtime/session-1/embed',
+      baseUrl,
+    })
+    state = promoteReadyCodeFrame(state, state.pending!.key)
+
+    expect(state.active?.route).toEqual(routeLocation('session-1', 'agent-2'))
+    expect(state.hot).toMatchObject([
+      { key: firstAgentKey, sessionRef: 'session-1', route: routeLocation('session-1', 'agent-1') },
+    ])
+
+    state = beginCodeFrameOpen(state, {
+      requestId: 3,
+      sessionRef: 'session-1',
+      route: routeLocation('session-1', 'agent-1'),
+    })
+    state = activateCachedCodeFrame(state, {
+      requestId: 3,
+      sessionRef: 'session-1',
+      requireRouteMatch: true,
+    })
+
+    expect(state.active?.key).toBe(firstAgentKey)
+    expect(state.request).toBeNull()
+  })
+
   it('retains five total frames in performance mode without changing frame semantics', () => {
     let state = setCodeFrameCacheLimit(createCodeFrameLifecycle(), 5)
 

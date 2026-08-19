@@ -226,7 +226,7 @@ describe('CodeConversationPage', () => {
     expect(restoreSource).toContain('clearRouteRestoreTarget(target)')
   })
 
-  it('opens the sandbox before activating the route agent so restore is not overwritten', () => {
+  it('activates a route agent after opening a fresh sandbox document', () => {
     const openSource = pageSource.slice(
       pageSource.indexOf('async function openCurrentSession()'),
       pageSource.indexOf('function queuePendingFrame'),
@@ -241,7 +241,7 @@ describe('CodeConversationPage', () => {
     expect(openedActivationIndex).toBeLessThan(openSource.indexOf('queuePendingFrame(opened.embed_url)'))
   })
 
-  it('routes cached and opened agent activation through one serial coordinator', () => {
+  it('routes cached and freshly opened agent activation through one serial coordinator', () => {
     const openSource = pageSource.slice(
       pageSource.indexOf('async function openCurrentSession()'),
       pageSource.indexOf('function queuePendingFrame'),
@@ -259,6 +259,22 @@ describe('CodeConversationPage', () => {
     )
     expect(openSource.match(/activateCurrentCodeAgentSession/g)).toHaveLength(2)
     expect(openSource).not.toContain('codeRuntimeApi.activateAgentSession')
+  })
+
+  it('only promotes a cached frame after synchronizing the target agent mapping', () => {
+    const openSource = pageSource.slice(
+      pageSource.indexOf('async function openCurrentSession()'),
+      pageSource.indexOf('function queuePendingFrame'),
+    )
+    const cachedLookupIndex = openSource.indexOf('const exactCachedState = activateCachedCodeFrame')
+    const cachedActivationIndex = openSource.indexOf('await activateCurrentCodeAgentSession(', cachedLookupIndex)
+    const cachedPromotionIndex = openSource.indexOf('frameLifecycle.value = exactCachedState', cachedLookupIndex)
+
+    expect(cachedLookupIndex).toBeGreaterThan(-1)
+    expect(cachedActivationIndex).toBeGreaterThan(cachedLookupIndex)
+    expect(cachedPromotionIndex).toBeGreaterThan(cachedActivationIndex)
+    expect(openSource).toContain('requireRouteMatch: true')
+    expect(openSource).not.toContain('requireRouteMatch: false')
   })
 
   it('ignores stale open completion before stopping polling, activating, or replacing the current frame', async () => {
