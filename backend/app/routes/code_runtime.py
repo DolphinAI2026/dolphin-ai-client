@@ -4,6 +4,7 @@ import asyncio
 import gzip
 import hashlib
 import json
+import re
 import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -2498,6 +2499,25 @@ def _rewrite_runtime_dev_asset_paths(
 
 
 _DEV_ASSET_PREFIXES = ("src/", "@vite/", "@react-refresh", "node_modules/", "@id/", "@fs/")
+_BUILDER_ASSET_CACHE_KEY = b"runtime-proxy-v3"
+_BUILDER_ASSET_REFERENCE = re.compile(
+    rb"(?P<quote>[\"'])(?P<path>\./(?:assets/)?[^\"'?#\s]+\.(?:js|css))(?P=quote)"
+)
+
+
+def _cache_bust_builder_asset_references(content: bytes) -> bytes:
+    """Invalidate legacy, incorrectly encoded Builder assets after a proxy repair."""
+
+    def replace(match: re.Match[bytes]) -> bytes:
+        return (
+            match.group("quote")
+            + match.group("path")
+            + b"?dolphin_cache_key="
+            + _BUILDER_ASSET_CACHE_KEY
+            + match.group("quote")
+        )
+
+    return _BUILDER_ASSET_REFERENCE.sub(replace, content)
 
 
 def _should_buffer_dev_asset_path(path: str) -> bool:
@@ -3511,15 +3531,23 @@ async def proxy_code_runtime(
                     session_id,
                     forwarded_prefix,
                 )
+            if is_builder_html or (
+                is_buffered_builder_asset
+                and _should_rewrite_buffered_response(path, content_type)
+            ):
+                content = _cache_bust_builder_asset_references(content)
+            response_headers = _copyable_response_headers(
+                upstream.headers,
+                binding,
+                session_id,
+                forwarded_prefix,
+            )
+            if is_buffered_builder_asset:
+                response_headers["cache-control"] = "no-store"
             response = Response(
                 content=content,
                 status_code=upstream.status_code,
-                headers=_copyable_response_headers(
-                    upstream.headers,
-                    binding,
-                    session_id,
-                    forwarded_prefix,
-                ),
+                headers=response_headers,
                 media_type=content_type.split(";", 1)[0] if content_type else None,
             )
             return _decorate_runtime_response(

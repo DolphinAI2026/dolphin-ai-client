@@ -861,6 +861,24 @@ def test_code_runtime_proxy_only_buffers_vite_dev_asset_paths():
     assert not _should_buffer_dev_asset_path("api/agent/sessions/current")
 
 
+def test_code_runtime_proxy_cache_busts_builder_module_references():
+    from app.routes.code_runtime import _cache_bust_builder_asset_references
+
+    content = (
+        b'<script src="./assets/index-12345678.js"></script>'
+        b'import { app } from "./chunk-ABCDEFGH.js";'
+        b'import("./lazy-87654321.js")'
+        b'"./readme.md"'
+    )
+
+    rewritten = _cache_bust_builder_asset_references(content)
+
+    assert b'./assets/index-12345678.js?dolphin_cache_key=runtime-proxy-v3' in rewritten
+    assert b'./chunk-ABCDEFGH.js?dolphin_cache_key=runtime-proxy-v3' in rewritten
+    assert b'./lazy-87654321.js?dolphin_cache_key=runtime-proxy-v3' in rewritten
+    assert b'"./readme.md"' in rewritten
+
+
 def test_code_runtime_proxy_does_not_special_case_runtime_relative_document_paths():
     from app.routes.code_runtime import _should_buffer_dev_asset_path
 
