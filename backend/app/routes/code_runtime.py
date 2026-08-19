@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import hashlib
 import json
 import time
@@ -3398,6 +3399,7 @@ async def proxy_code_runtime(
         and _should_buffer_dev_asset_path(path)
     )
     is_builder_asset = request.method == "GET" and path.lstrip("/").startswith("builder/assets/")
+    is_buffered_builder_asset = is_buffered_dev_asset or is_builder_asset
     headers = _runtime_request_headers(
         request,
         session_id,
@@ -3415,7 +3417,7 @@ async def proxy_code_runtime(
         target=target,
         headers=headers,
         body=body,
-        timeout=60.0 if is_builder_html or is_buffered_dev_asset else None,
+        timeout=60.0 if is_builder_html or is_buffered_builder_asset else None,
     )
     if attempt.recoverable_auth_error and not is_desktop_agent_runtime_target(
         binding.execution_target
@@ -3450,7 +3452,7 @@ async def proxy_code_runtime(
             target=target,
             headers=headers,
             body=body,
-            timeout=60.0 if is_builder_html or is_buffered_dev_asset else None,
+            timeout=60.0 if is_builder_html or is_buffered_builder_asset else None,
         )
         sandbox_auth_metrics.record_replay(
             request.method,
@@ -3479,10 +3481,12 @@ async def proxy_code_runtime(
         finally:
             await _close_upstream_attempt(attempt)
 
-    if is_builder_html or is_buffered_dev_asset:
+    if is_builder_html or is_buffered_builder_asset:
         try:
             content_type = upstream.headers.get("content-type", "")
             content = await upstream.aread()
+            if upstream.headers.get("content-encoding", "").lower() == "gzip":
+                content = gzip.decompress(content)
             if is_builder_html and "text/html" in content_type:
                 content = _inject_shell_config(
                     content,
@@ -3498,7 +3502,7 @@ async def proxy_code_runtime(
                     session_id,
                     forwarded_prefix,
                 )
-            elif is_buffered_dev_asset and _should_rewrite_buffered_response(
+            elif is_buffered_builder_asset and _should_rewrite_buffered_response(
                 path,
                 content_type,
             ):
