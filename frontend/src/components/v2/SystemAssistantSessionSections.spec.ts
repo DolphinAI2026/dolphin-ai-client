@@ -31,11 +31,12 @@ describe('SystemAssistantSessionSections', () => {
     expect(sectionsSource).toContain('收起较早会话')
   })
 
-  it('shows the application code alongside same-name application groups', () => {
-    expect(sectionsSource).toContain('function applicationCode(group: CodeRailSessionGroup)')
-    expect(sectionsSource).toContain("String(session.appCode || '').trim()")
-    expect(sectionsSource).not.toContain('externalApplicationId || \'\'')
-    expect(sectionsSource).toContain('class="sas-app-code"')
+  it('keeps application names prominent and compacts location metadata', () => {
+    expect(sectionsSource).toContain('class="sas-app-name"')
+    expect(sectionsSource).not.toContain('class="sas-app-code"')
+    expect(sectionsSource).toContain('function compactSessionLocation(session: CodeRailSession)')
+    expect(sectionsSource).toContain('name="globe"')
+    expect(sectionsSource).toContain('本机')
   })
 
   it('gives every system-assistant history row a subtle surface contrast', () => {
