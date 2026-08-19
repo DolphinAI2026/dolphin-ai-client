@@ -148,7 +148,7 @@ describe('RailSidebar unified session source (SP2b)', () => {
     expect(group.items.every(item => item.appCode === 'materials-flow')).toBe(true)
   })
 
-  it('uses persisted agent sessions without probing a Runtime again', async () => {
+  it('refreshes persisted agent sessions from the Runtime without dropping history', async () => {
     const history: CodeRailHistoryResponse = {
       apps: [{
         shell_session_id: 'remote-shell',
@@ -174,8 +174,8 @@ describe('RailSidebar unified session source (SP2b)', () => {
     expect(hydrated.apps[0]?.sessions.map(session => session.runtimeSessionId)).toEqual([
       'runtime-current', 'runtime-history',
     ])
-    expect(hydrated.apps[0]?.sessions[0]?.title).toBe('当前会话')
-    expect(runtimeProbes).toBe(0)
+    expect(hydrated.apps[0]?.sessions[0]?.title).toBe('Runtime 当前会话')
+    expect(runtimeProbes).toBe(1)
   })
 
   it('treats legacy local application ids as local when a stale API response lacks the location', () => {
