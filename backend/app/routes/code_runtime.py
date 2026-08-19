@@ -3389,13 +3389,6 @@ async def proxy_code_runtime(
         # Hidden hot frames abort in-flight polling when shell visibility
         # changes. That is an expected client cancellation, not an ASGI error.
         return Response(status_code=499)
-    headers = _runtime_request_headers(
-        request,
-        session_id,
-        binding,
-        allow_query_token=True,
-        runtime_cookie=authorization.runtime_cookie,
-    )
     is_builder_html = (
         request.method == "GET"
         and path.rstrip("/") in {"builder", "builder/index.html"}
@@ -3404,6 +3397,19 @@ async def proxy_code_runtime(
         request.method == "GET"
         and _should_buffer_dev_asset_path(path)
     )
+    is_builder_asset = request.method == "GET" and path.lstrip("/").startswith("builder/assets/")
+    headers = _runtime_request_headers(
+        request,
+        session_id,
+        binding,
+        allow_query_token=True,
+        runtime_cookie=authorization.runtime_cookie,
+    )
+    if is_builder_html or is_builder_asset:
+        # Builder HTML and production assets are sometimes routed through more
+        # than one proxy. Fetching them uncompressed avoids mismatched nested
+        # Content-Encoding headers that leave browsers parsing gzip bytes as JS.
+        headers["accept-encoding"] = "identity"
     attempt = await _send_upstream_once(
         method=request.method,
         target=target,
