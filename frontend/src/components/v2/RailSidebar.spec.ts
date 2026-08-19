@@ -289,10 +289,11 @@ describe('RailSidebar unified session source (SP2b)', () => {
     expect(railSidebarSource).toContain("query: { ...route.query, app_id: String(appId) }")
   })
 
-  it('keeps the application-scoped sessions returned by Code rail history', () => {
+  it('keeps persisted Code history and only probes the active sandbox for live additions', () => {
     expect(railSidebarSource).toContain('codeRuntimeApi.listRailHistory()')
     expect(railSidebarSource).toContain('hydrateCodeRailHistorySessions')
     expect(railSidebarSource).toContain('codeRuntimeApi.listAgentSessions')
+    expect(railSidebarSource).toContain('shouldLoad: app => Boolean(activeShellSessionId)')
   })
 
   it('merges live runtime sessions with persisted siblings for every shell', async () => {
@@ -312,6 +313,29 @@ describe('RailSidebar unified session source (SP2b)', () => {
       ['runtime-new'],
       ['runtime-newer', 'runtime-old'],
     ])
+  })
+
+  it('skips inactive sandbox probes while preserving their persisted history', async () => {
+    const history: CodeRailHistoryResponse = {
+      apps: [
+        { shell_session_id: 'shell-active', external_application_id: 'crm', sessions: [] },
+        { shell_session_id: 'shell-inactive', external_application_id: 'erp', sessions: [{ runtimeSessionId: 'runtime-old' }] },
+      ],
+    } as CodeRailHistoryResponse
+    const probedShells: string[] = []
+
+    const hydrated = await hydrateCodeRailHistorySessions(
+      history,
+      async (shellSessionId) => {
+        probedShells.push(shellSessionId)
+        return { sessions: [{ runtimeSessionId: 'runtime-new' }] }
+      },
+      { shouldLoad: app => app.shell_session_id === 'shell-active' },
+    )
+
+    expect(probedShells).toEqual(['shell-active'])
+    expect(hydrated.apps[0]?.sessions.map(session => session.runtimeSessionId)).toEqual(['runtime-new'])
+    expect(hydrated.apps[1]?.sessions.map(session => session.runtimeSessionId)).toEqual(['runtime-old'])
   })
 
   it('keeps desktop Code applications and history on the selected local or remote source', () => {

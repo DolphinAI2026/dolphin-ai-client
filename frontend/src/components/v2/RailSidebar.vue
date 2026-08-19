@@ -235,9 +235,18 @@ async function loadRailSessions() {
         ? systemResult.value?.sessions || []
         : systemAssistantSessionData.value
       if (applicationResult.status === 'fulfilled') {
+        const activeShellSessionId = activeCodeShellSessionId.value
         const history = await hydrateCodeRailHistorySessions(
           applicationResult.value,
           codeRuntimeApi.listAgentSessions,
+          {
+            // The host rail owns a persisted index for every application.  A
+            // browser-authenticated Runtime probe only adds value for the
+            // sandbox already open in this tab; probing every historical
+            // sandbox otherwise produces avoidable 401s and slows navigation.
+            shouldLoad: app => Boolean(activeShellSessionId)
+              && String(app.shell_session_id || '') === activeShellSessionId,
+          },
         )
         if (seq !== railSessionsSeq || mode !== currentMode.value) return
         codeRailHistory.value = history

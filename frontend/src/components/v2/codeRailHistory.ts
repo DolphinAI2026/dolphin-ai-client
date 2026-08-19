@@ -130,10 +130,11 @@ export function codeRailHistorySessions(history: CodeRailHistoryResponse | null 
 export async function hydrateCodeRailHistorySessions(
   history: CodeRailHistoryResponse,
   loadSessions: (shellSessionId: string) => Promise<{ sessions: CodeRailHistoryApp['sessions'] }>,
+  options?: { shouldLoad?: (app: CodeRailHistoryApp) => boolean },
 ): Promise<CodeRailHistoryResponse> {
   const apps = await Promise.all(history.apps.map(async (app) => {
     const shellSessionId = text(app.shell_session_id)
-    if (!shellSessionId) return app
+    if (!shellSessionId || options?.shouldLoad?.(app) === false) return app
     try {
       const result = await loadSessions(shellSessionId)
       if (!Array.isArray(result?.sessions)) return app
