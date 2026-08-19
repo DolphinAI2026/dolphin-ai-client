@@ -287,15 +287,21 @@ export function activateCachedCodeFrame(
     return state
   }
 
-  const cached = state.hot.find(frame =>
+  // A different agent conversation can share the currently mounted shell.
+  // Looking only at `hot` made a same-sandbox switch rebuild the iframe even
+  // after the agent activation API had already selected the target session.
+  const reusableFrames: CodeFrame[] = state.active
+    ? [state.active, ...state.hot]
+    : [...state.hot]
+  const cached = reusableFrames.find(frame => (
     frame.sessionRef === options.sessionRef
-    && (!options.requireRouteMatch || codeFrameRoutesEqual(frame.route, request.route)),
-  )
+    && (!options.requireRouteMatch || codeFrameRoutesEqual(frame.route, request.route))
+  ))
   if (!cached) return state
 
   const previousFrames = [
     ...state.hot.filter(frame => frame.key !== cached.key),
-    ...(state.active && state.active.sessionRef !== cached.sessionRef ? [state.active] : []),
+    ...(state.active && state.active.key !== cached.key ? [state.active] : []),
   ]
 
   return {

@@ -11,10 +11,9 @@ describe('SystemAssistantSessionSections', () => {
     expect(sectionsSource).toContain(':class="{ active: applicationSessionActive(session) }"')
   })
 
-  it('lets a long conversation history scroll inside the rail', () => {
-    expect(sectionsSource).toContain('min-height: 0; display: flex; flex: 1 1 auto;')
-    expect(sectionsSource).toContain('overflow-y: scroll')
-    expect(sectionsSource).toContain('scrollbar-gutter: stable')
+  it('leaves scrolling to the single outer rail instead of nesting another scroll area', () => {
+    expect(sectionsSource).toContain('display: flex; flex: 0 0 auto; flex-direction: column;')
+    expect(sectionsSource).not.toContain('overflow-y: scroll')
   })
 
   it('lets users archive a conversation or remove an application group without deleting the project', () => {
@@ -40,7 +39,7 @@ describe('SystemAssistantSessionSections', () => {
   })
 
   it('gives every system-assistant history row a subtle surface contrast', () => {
-    expect(sectionsSource).toContain('background: #f8fafc')
+    expect(sectionsSource).toContain('background: #fbfcfe')
     expect(sectionsSource).toContain('border: 1px solid #edf1f5')
     expect(sectionsSource).toContain('html[data-theme="dark"] .sas-item { background: #182230')
   })

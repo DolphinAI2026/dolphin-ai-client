@@ -330,13 +330,20 @@ describe('RailSidebar unified session source (SP2b)', () => {
     expect(railSidebarSource).toContain('v-else-if="showRecent" class="rail-sessions"')
   })
 
-  it('keeps the session history scrollable and passes the active-session matcher to Code history', () => {
+  it('uses one stable outer scrollbar and passes the active-session matcher to Code history', () => {
     expect(railSidebarSource).toContain(':is-application-session-active="sessionActive"')
     expect(railSidebarSource).toContain(':active-application-shell-session-id="activeCodeShellSessionId"')
     expect(railSidebarSource).toContain(':active-application-runtime-session-id="activeCodeRuntimeSessionId"')
-    expect(railSidebarSource).toContain('flex: 1 1 0; min-height: 0;')
-    expect(railSidebarSource).toContain(':deep(.sas-sections) { flex: 1 1 auto; min-height: 0; }')
+    expect(railSidebarSource).toContain('overflow-y: scroll; overflow-x: hidden; overscroll-behavior: contain; scrollbar-gutter: stable;')
+    expect(railSidebarSource).toContain(':deep(.sas-sections) { flex: 0 0 auto; min-width: 0; }')
     expect(railSidebarSource).toContain('box-shadow: inset 3px 0 0 #2f65d5')
+  })
+
+  it('lets users hide a project without deleting it, and restores it when the app is reopened', () => {
+    expect(railSidebarSource).toContain("apaas-code-rail-hidden-applications-v1")
+    expect(railSidebarSource).toContain('function restoreCodeRailApplications(logicalApplicationId?: string)')
+    expect(railSidebarSource).toContain('watch([activeCodeShellSessionId, allSystemAssistantApplicationGroups]')
+    expect(railSidebarSource).toContain('restoreCodeRailApplications(group.logicalApplicationId)')
   })
 
   it('defaults Code sessions to application grouping', () => {

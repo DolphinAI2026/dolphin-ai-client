@@ -133,6 +133,15 @@ function hideCodeRailApplication(logicalApplicationId: string) {
   next.add(logicalApplicationId)
   hiddenCodeRailApplications.value = next
   try { localStorage.setItem(CODE_RAIL_HIDDEN_APPLICATIONS_KEY, JSON.stringify([...next])) } catch { /* private mode */ }
+  ElMessage.info('已从侧边栏移除；重新打开该应用会自动恢复')
+}
+function restoreCodeRailApplications(logicalApplicationId?: string) {
+  const next = new Set(hiddenCodeRailApplications.value)
+  if (logicalApplicationId) next.delete(logicalApplicationId)
+  else next.clear()
+  if (next.size === hiddenCodeRailApplications.value.size) return
+  hiddenCodeRailApplications.value = next
+  try { localStorage.setItem(CODE_RAIL_HIDDEN_APPLICATIONS_KEY, JSON.stringify([...next])) } catch { /* private mode */ }
 }
 const showRecent = computed(() => !effectiveCollapsed.value)
 let railAppsSeq = 0
@@ -145,10 +154,21 @@ const appNameById = ref<Map<number, string>>(new Map())
 const systemAssistantSessions = computed<RailSession[]>(() =>
   sortRailSessionsByUpdatedAt(normalizeAiSessions(systemAssistantSessionData.value)),
 )
+const allSystemAssistantApplicationGroups = computed<CodeRailSessionGroup[]>(() =>
+  groupCodeRailHistoryByApplication(codeRailHistory.value),
+)
 const systemAssistantApplicationGroups = computed<CodeRailSessionGroup[]>(() =>
-  groupCodeRailHistoryByApplication(codeRailHistory.value)
+  allSystemAssistantApplicationGroups.value
     .filter(group => !hiddenCodeRailApplications.value.has(group.logicalApplicationId)),
 )
+
+watch([activeCodeShellSessionId, allSystemAssistantApplicationGroups], ([shellSessionId, groups]) => {
+  if (!shellSessionId) return
+  const group = groups.find(candidate => candidate.items.some(
+    session => String(session.shellSessionId || '') === shellSessionId,
+  ))
+  if (group) restoreCodeRailApplications(group.logicalApplicationId)
+}, { immediate: true })
 
 // 非系统助手入口仍使用当前模式对应的单一会话源。
 const railSessions = computed<RailSession[]>(() => {
@@ -926,6 +946,7 @@ function renderIcon(name: string): string {
         class="rail-sessions rail-system-assistant-sessions"
         :system-sessions="systemAssistantSessions"
         :application-groups="systemAssistantApplicationGroups"
+        :hidden-application-count="hiddenCodeRailApplications.size"
         :active-system-session-id="String(route.query.session || '')"
         :active-application-shell-session-id="activeCodeShellSessionId"
         :active-application-runtime-session-id="activeCodeRuntimeSessionId"
@@ -938,6 +959,7 @@ function renderIcon(name: string): string {
         @new-application-session="createCodeAgentSession"
         @archive-application-session="archiveRailSession"
         @hide-application="hideCodeRailApplication"
+        @restore-applications="restoreCodeRailApplications"
       />
 
       <!-- 普通应用会话继续按日期或应用分组。 -->
@@ -2209,7 +2231,11 @@ html[data-theme="dark"] .rail-item { color: #a8b5c8; }
 .rail-mode-switch { margin: 8px 10px 6px; padding: 3px; gap: 3px; border-color: #e1e7f0; border-radius: 9px; background: #eef2f7; }
 .rail-mode-btn { height: 28px; border-radius: 7px; }
 .rail-mode-btn.active { color: #1f56c7; background: #fff; box-shadow: 0 2px 7px rgba(25,52,96,.09); }
-.rail-scroll { gap: 2px; padding: 5px 10px 0; overflow: visible; }
+.rail-scroll { gap: 2px; padding: 5px 6px 0 10px; overflow-y: scroll; overflow-x: hidden; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-width: auto; scrollbar-color: #b9c6d8 #edf1f6; }
+.rail-scroll::-webkit-scrollbar { width: 8px; }
+.rail-scroll::-webkit-scrollbar-track { background: #edf1f6; border-radius: 999px; }
+.rail-scroll::-webkit-scrollbar-thumb { background: #b9c6d8; border: 2px solid #edf1f6; border-radius: 999px; }
+.rail-scroll::-webkit-scrollbar-thumb:hover { background: #8ea4c2; }
 .rail-scroll::before { content: '工作区'; display: block; flex: 0 0 auto; padding: 3px 9px 5px; color: #9aa6b7; font-size: 10px; font-weight: 700; letter-spacing: .08em; }
 .rail-item { flex: 0 0 auto; min-height: 36px; gap: 10px; padding: 0 10px; border-radius: 8px; color: #56657a; font-size: 13px; transition: background .16s ease, color .16s ease, transform .16s ease; }
 .rail-item:hover { color: #274d92; background: #edf3ff; transform: translateX(1px); }
@@ -2218,18 +2244,16 @@ html[data-theme="dark"] .rail-item { color: #a8b5c8; }
 .rail-item-icon { width: 18px; height: 18px; color: #7d8ca3; }
 .rail-item.active .rail-item-icon, .rail-item:hover .rail-item-icon { color: #2f65d5; }
 .rail-item-badge { min-width: 20px; height: 20px; background: #dce9ff; color: #2860ca; }
-.rail-sessions { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; margin-top: 7px; padding: 9px 2px 0; overflow: hidden; border-top: 1px solid #e7ecf3; }
-.rail-sessions.rail-system-assistant-sessions { overflow: hidden; }
-.rail-sessions.rail-system-assistant-sessions :deep(.sas-sections) { flex: 1 1 auto; min-height: 0; }
+.rail-sessions { flex: 0 0 auto; min-height: 0; display: flex; flex-direction: column; margin-top: 7px; padding: 9px 2px 8px; overflow: visible; border-top: 1px solid #e7ecf3; }
+.rail-sessions.rail-system-assistant-sessions { overflow: visible; }
+.rail-sessions.rail-system-assistant-sessions :deep(.sas-sections) { flex: 0 0 auto; min-width: 0; }
 .rail-sess-toolbar { flex: 0 0 auto; min-height: 28px; padding: 0 6px 5px; }
 .rail-sess-cap { color: #7f8b9d; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; }
 .rail-sess-new { width: 26px; height: 26px; display: grid; place-items: center; padding: 0; color: #637188; background: transparent; border: 1px solid transparent; border-radius: 7px; cursor: pointer; }
 .rail-sess-new:hover { color: #1f56c7; background: #e9f1ff; border-color: #d4e2fb; }
 .rail-sess-new:focus-visible { outline: 2px solid var(--line-focus, var(--brand-ring)); outline-offset: 1px; }
 .rail-sess-new :deep(svg) { width: 15px; height: 15px; }
-.rail-sess-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 2px 8px 0; scrollbar-width: thin; scrollbar-color: #cfd7e3 transparent; }
-.rail-sess-list::-webkit-scrollbar { width: 5px; }
-.rail-sess-list::-webkit-scrollbar-thumb { background: #cfd7e3; border-radius: 999px; }
+.rail-sess-list { flex: 0 0 auto; min-width: 0; overflow: visible; padding: 0 2px 8px 0; }
 .rail-sess-group { margin: 0 0 5px; }
 .rail-sess-label { min-height: 28px; padding: 4px 5px; color: #68768a; font-size: 12px; }
 .rail-sess-cnt { min-width: 18px; text-align: right; }

@@ -7,6 +7,7 @@ import type { CodeRailSession, CodeRailSessionGroup } from './codeRailHistory'
 const props = defineProps<{
   systemSessions: RailSession[]
   applicationGroups: CodeRailSessionGroup[]
+  hiddenApplicationCount?: number
   activeSystemSessionId?: string
   /**
    * Keep the Code-route identity explicit at this rendering boundary.  The
@@ -28,6 +29,7 @@ const emit = defineEmits<{
   (event: 'new-application-session', shellSessionId: string): void
   (event: 'archive-application-session', session: CodeRailSession): void
   (event: 'hide-application', logicalApplicationId: string): void
+  (event: 'restore-applications'): void
 }>()
 
 const collapsed = ref(new Set<string>())
@@ -235,7 +237,7 @@ function archiveApplicationSession(session: CodeRailSession) {
             <button
               type="button"
               class="sas-app-remove"
-              title="从侧边栏移除项目"
+              title="从侧边栏移除；重新打开应用会自动恢复"
               aria-label="从侧边栏移除项目"
               @click="emit('hide-application', group.logicalApplicationId)"
             >
@@ -293,6 +295,10 @@ function archiveApplicationSession(session: CodeRailSession) {
             </div>
           </div>
         </div>
+        <div v-if="hiddenApplicationCount" class="sas-hidden-applications">
+          <span>已移除 {{ hiddenApplicationCount }} 个项目</span>
+          <button type="button" @click="emit('restore-applications')">全部恢复</button>
+        </div>
         <div v-if="!applicationGroups.length" class="sas-empty">暂无应用会话</div>
       </div>
     </section>
@@ -300,27 +306,23 @@ function archiveApplicationSession(session: CodeRailSession) {
 </template>
 
 <style scoped>
-.sas-sections { min-height: 0; display: flex; flex: 1 1 auto; flex-direction: column; gap: 8px; overflow-y: scroll; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-width: auto; scrollbar-color: #b9c6d8 #edf1f6; }
-.sas-sections::-webkit-scrollbar { width: 8px; }
-.sas-sections::-webkit-scrollbar-track { background: #edf1f6; border-radius: 999px; }
-.sas-sections::-webkit-scrollbar-thumb { background: #b9c6d8; border: 2px solid #edf1f6; border-radius: 999px; }
-.sas-sections::-webkit-scrollbar-thumb:hover { background: #8ea4c2; }
+.sas-sections { min-width: 0; display: flex; flex: 0 0 auto; flex-direction: column; gap: 5px; }
 .sas-section + .sas-section { padding-top: 8px; border-top: 1px solid #e7ecf3; }
 .sas-section-header, .sas-app-header { display: flex; align-items: center; min-width: 0; }
-.sas-section-header { min-height: 28px; padding: 0 4px 4px; }
+.sas-section-header { min-height: 27px; padding: 0 4px 3px; }
 .sas-section-toggle, .sas-app-toggle { min-width: 0; display: flex; align-items: center; border: 0; background: transparent; cursor: pointer; }
-.sas-section-toggle { flex: 1; gap: 6px; padding: 4px 2px; color: #6f7d91; font: inherit; font-size: 10.5px; font-weight: 700; letter-spacing: .04em; text-align: left; }
+.sas-section-toggle { flex: 1; gap: 6px; padding: 4px 2px; color: #708096; font: inherit; font-size: 10.5px; font-weight: 700; letter-spacing: .045em; text-align: left; }
 .sas-section-toggle :deep(.app-icon), .sas-app-toggle :deep(.app-icon) { transition: transform .14s ease; }
 .sas-section-toggle :deep(.app-icon.expanded), .sas-app-toggle :deep(.app-icon.expanded) { transform: rotate(90deg); }
 .sas-count { margin-left: auto; color: #9aa5b5; font-size: 10px; font-weight: 500; letter-spacing: 0; }
 .sas-icon-button, .sas-app-new, .sas-app-remove { display: grid; place-items: center; padding: 0; color: #637188; background: transparent; border: 1px solid transparent; border-radius: 6px; cursor: pointer; }
 .sas-icon-button { width: 26px; height: 26px; }
 .sas-icon-button:hover, .sas-app-new:hover { color: #1f56c7; background: #e9f1ff; border-color: #d4e2fb; }
-.sas-items { display: flex; flex-direction: column; gap: 3px; }
+.sas-items { display: flex; flex-direction: column; gap: 2px; }
 /* Give each history row a quiet surface of its own: the rail and conversation
    canvas are both near-white, so a transparent row made the history hard to
    scan until hover.  Keep the contrast intentionally light. */
-.sas-item { width: 100%; min-width: 0; min-height: 30px; display: flex; align-items: center; gap: 8px; padding: 4px 5px 4px 8px; color: #68768a; background: #f8fafc; border: 1px solid #edf1f5; border-radius: 7px; font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.sas-item { width: 100%; min-width: 0; min-height: 31px; display: flex; align-items: center; gap: 7px; padding: 4px 5px 4px 8px; color: #607086; background: #fbfcfe; border: 1px solid #edf1f5; border-radius: 7px; font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
 .sas-item:hover { color: #2458bd; background: #edf3ff; border-color: #dce8fb; }
 .sas-item.active { color: #1f56c7; background: #e5efff; border-color: #cbdcf7; box-shadow: inset 3px 0 0 #2f65d5; font-weight: 600; }
 .sas-state { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: #c2cad6; }
@@ -335,16 +337,18 @@ function archiveApplicationSession(session: CodeRailSession) {
 .sas-menu button:hover { color: #1f56c7; background: #edf3ff; }
 .sas-menu button.danger { color: #bb3f3f; }
 .sas-menu button.danger:hover { color: #a82f2f; background: #fff0f0; }
-.sas-app-groups { display: flex; flex-direction: column; gap: 4px; }
-.sas-app-header { min-height: 27px; }
-.sas-app-toggle { flex: 1; gap: 5px; padding: 4px 6px; overflow: hidden; color: #758297; font: inherit; font-size: 11px; text-align: left; }
+.sas-app-groups { display: flex; flex-direction: column; gap: 3px; }
+.sas-app-header { min-height: 28px; border-radius: 7px; }
+.sas-app-header:hover { background: #f3f6fa; }
+.sas-app-toggle { flex: 1; gap: 5px; padding: 5px 6px; overflow: hidden; color: #65758a; font: inherit; font-size: 11px; text-align: left; }
 .sas-app-identity { min-width: 0; flex: 1 1 auto; display: flex; align-items: baseline; gap: 4px; overflow: hidden; }
 .sas-app-name, .sas-app-code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sas-app-name { flex: 1 1 auto; }
 .sas-app-code { flex: 0 1 72px; color: #a0abba; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 9px; }
 .sas-location-tags, .sas-location { flex: 0 0 auto; color: #9aa5b5; font-size: 10px; }
 .sas-location { max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sas-app-new { width: 23px; height: 23px; margin-right: 3px; }
+.sas-app-new { width: 23px; height: 23px; margin-right: 1px; opacity: 0; }
+.sas-app-header:hover .sas-app-new, .sas-app-new:focus-visible { opacity: 1; }
 .sas-app-remove { width: 23px; height: 23px; margin-right: 3px; opacity: 0; }
 .sas-app-header:hover .sas-app-remove, .sas-app-remove:focus-visible { opacity: 1; }
 .sas-app-remove:hover { color: #a34b4b; background: #fff1f1; border-color: #f2d7d7; }
@@ -354,11 +358,11 @@ function archiveApplicationSession(session: CodeRailSession) {
 .sas-more-row { display: flex; justify-content: center; padding: 3px 0 4px; }
 .sas-more-sessions { padding: 4px 8px; color: #718096; background: transparent; border: 0; border-radius: 6px; font: inherit; font-size: 11px; cursor: pointer; }
 .sas-more-sessions:hover { color: #2458bd; background: #edf3ff; }
+.sas-hidden-applications { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 3px 0; padding: 6px 7px; color: #7d8999; background: #f4f6f9; border-radius: 7px; font-size: 10.5px; }
+.sas-hidden-applications button { padding: 0; color: #3764bc; background: transparent; border: 0; font: inherit; cursor: pointer; }
+.sas-hidden-applications button:hover { text-decoration: underline; }
 html[data-theme="dark"] .sas-section + .sas-section { border-color: #273243; }
 html[data-theme="dark"] .sas-section-toggle, html[data-theme="dark"] .sas-app-toggle, html[data-theme="dark"] .sas-item { color: #9eacc0; }
-html[data-theme="dark"] .sas-sections { scrollbar-color: #526177 #202a38; }
-html[data-theme="dark"] .sas-sections::-webkit-scrollbar-track { background: #202a38; }
-html[data-theme="dark"] .sas-sections::-webkit-scrollbar-thumb { background: #526177; border-color: #202a38; }
 html[data-theme="dark"] .sas-item { background: #182230; border-color: #263448; }
 html[data-theme="dark"] .sas-item:hover { color: #cbd8eb; background: #1d2838; border-color: #344966; }
 html[data-theme="dark"] .sas-item.active { color: #d5e4ff; background: #283b5c; border-color: #3c5680; box-shadow: inset 3px 0 0 #7da5f8; }

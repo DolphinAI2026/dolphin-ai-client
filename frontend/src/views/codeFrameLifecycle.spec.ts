@@ -205,6 +205,28 @@ describe('code frame lifecycle', () => {
     expect(state.request).toBeNull()
   })
 
+  it('reuses the active shell when only the agent conversation changes', () => {
+    let state = activateInitialFrame()
+    const activeKey = state.active!.key
+
+    state = beginCodeFrameOpen(state, {
+      requestId: 2,
+      sessionRef: 'session-1',
+      route: routeLocation('session-1', 'agent-2'),
+    })
+    state = activateCachedCodeFrame(state, {
+      requestId: 2,
+      sessionRef: 'session-1',
+      requireRouteMatch: false,
+    })
+
+    expect(state.active).toMatchObject({ key: activeKey, sessionRef: 'session-1', phase: 'active' })
+    expect(state.active?.route).toEqual(routeLocation('session-1', 'agent-2'))
+    expect(state.pending).toBeNull()
+    expect(state.request).toBeNull()
+    expect(getCodeFrames(state)).toHaveLength(1)
+  })
+
   it('retains five total frames in performance mode without changing frame semantics', () => {
     let state = setCodeFrameCacheLimit(createCodeFrameLifecycle(), 5)
 
