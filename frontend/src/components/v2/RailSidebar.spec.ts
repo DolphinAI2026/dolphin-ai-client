@@ -106,6 +106,44 @@ describe('RailSidebar unified session source (SP2b)', () => {
     expect(secondary?.locationSessions.local).toBeUndefined()
   })
 
+  it('keeps all shell histories together and preserves the application code', () => {
+    const [group] = groupCodeRailHistoryByApplication({
+      apps: [
+        {
+          shell_session_id: 'older-shell',
+          external_application_id: 'code-app-177',
+          logical_application_id: 'materials-flow',
+          execution_location: 'remote',
+          app_name: '领料电子流',
+          app_code: 'materials-flow',
+          sessions: [
+            { runtimeSessionId: 'runtime-1', title: '第一轮', lastActiveAt: '2026-08-18T01:00:00Z' },
+            { runtimeSessionId: 'runtime-3', title: '第三轮', lastActiveAt: '2026-08-18T03:00:00Z' },
+          ],
+        },
+        {
+          shell_session_id: 'newer-shell',
+          external_application_id: 'code-app-177',
+          logical_application_id: 'materials-flow',
+          execution_location: 'remote',
+          app_name: '领料电子流',
+          app_code: 'materials-flow',
+          sessions: [
+            { runtimeSessionId: 'runtime-2', title: '第二轮', lastActiveAt: '2026-08-18T02:00:00Z' },
+            { runtimeSessionId: 'runtime-4', title: '第四轮', lastActiveAt: '2026-08-18T04:00:00Z' },
+            { runtimeSessionId: 'runtime-5', title: '第五轮', lastActiveAt: '2026-08-18T05:00:00Z' },
+          ],
+        },
+      ],
+    })
+
+    expect(group.logicalApplicationId).toBe('materials-flow')
+    expect(group.items.map(item => item.id)).toEqual([
+      'runtime-5', 'runtime-4', 'runtime-3', 'runtime-2', 'runtime-1',
+    ])
+    expect(group.items.every(item => item.appCode === 'materials-flow')).toBe(true)
+  })
+
   it('treats legacy local application ids as local when a stale API response lacks the location', () => {
     const [group] = groupCodeRailHistoryByApplication({
       apps: [{

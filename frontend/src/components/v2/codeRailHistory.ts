@@ -9,6 +9,7 @@ import type { RailSession, RailSessionGroup } from '@/composables/railSessions'
 export interface CodeRailSession extends RailSession {
   logicalApplicationId: string
   externalApplicationId: string
+  appCode?: string
   executionLocation: CodeExecutionLocation
   sessionPurpose: CodeSessionPurpose
   locationSummary: string
@@ -71,6 +72,7 @@ function appSessions(app: CodeRailHistoryApp): CodeRailSession[] {
   const purpose = sessionPurpose(app.session_purpose)
   const logicalId = logicalApplicationId(app)
   const name = applicationName(app)
+  const appCode = text(app.app_code)
   const locationSummary = formatCodeRailLocationSummary(
     location,
     app.workspace_path,
@@ -87,6 +89,7 @@ function appSessions(app: CodeRailHistoryApp): CodeRailSession[] {
       source: 'code-shell',
       logicalApplicationId: logicalId,
       externalApplicationId: text(app.external_application_id),
+      ...(appCode ? { appCode } : {}),
       executionLocation: location,
       sessionPurpose: purpose,
       locationSummary,
@@ -107,6 +110,7 @@ function appSessions(app: CodeRailHistoryApp): CodeRailSession[] {
       source: 'code-agent' as const,
       logicalApplicationId: logicalId,
       externalApplicationId: text(app.external_application_id),
+      ...(appCode ? { appCode } : {}),
       executionLocation: location,
       sessionPurpose: purpose,
       locationSummary,

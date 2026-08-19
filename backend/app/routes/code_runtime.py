@@ -12,7 +12,7 @@ from urllib.parse import parse_qsl, quote, unquote_plus, urlsplit
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import String, and_, cast, delete, func, literal, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.background import BackgroundTask
@@ -1569,59 +1569,33 @@ async def list_code_runtime_rail_history(
             func.nullif(func.trim(CodeRuntimeBinding.external_application_id), ""),
             func.nullif(func.trim(AIChatSession.external_application_id), ""),
         )
-        representative_shell_key = func.coalesce(
-            external_application_id,
-            literal("session:") + cast(AIChatSession.id, String),
-        )
         source_filters = []
         if source == "local":
             source_filters.append(external_application_id.like("local-%"))
         user_scope = [] if tenant_history else [AIChatSession.user_id == ctx.user.id]
-        representative_shells = (
-            select(
-                AIChatSession.id.label("shell_session_id"),
-                func.row_number().over(
-                    partition_by=(AIChatSession.user_id, representative_shell_key),
-                    order_by=(
-                        AIChatSession.updated_at.desc(),
-                        CodeRuntimeBinding.updated_at.desc(),
-                        AIChatSession.id.desc(),
-                    ),
-                ).label("representative_rank"),
-            )
-            .outerjoin(CodeRuntimeBinding, CodeRuntimeBinding.session_id == AIChatSession.id)
-            .outerjoin(Application, Application.id == AIChatSession.app_id)
-            .where(
-                _code_session_scope(AIChatSession, ctx),
-                *user_scope,
-                AIChatSession.mode == "code",
-                AIChatSession.status != "archived",
-                or_(AIChatSession.app_id.is_(None), Application.app_type == "ai-code"),
-                or_(
-                    Application.app_type == "ai-code",
-                    and_(
-                        AIChatSession.external_application_id.isnot(None),
-                        AIChatSession.external_application_id != "",
-                    ),
-                    and_(
-                        CodeRuntimeBinding.external_application_id.isnot(None),
-                        CodeRuntimeBinding.external_application_id != "",
-                    ),
-                ),
-                *source_filters,
-            )
-            .subquery()
-        )
         rows = (
             await db.execute(
                 select(AIChatSession, CodeRuntimeBinding)
-                .join(
-                    representative_shells,
-                    representative_shells.c.shell_session_id == AIChatSession.id,
-                )
                 .outerjoin(CodeRuntimeBinding, CodeRuntimeBinding.session_id == AIChatSession.id)
+                .outerjoin(Application, Application.id == AIChatSession.app_id)
                 .where(
-                    representative_shells.c.representative_rank == 1,
+                    _code_session_scope(AIChatSession, ctx),
+                    *user_scope,
+                    AIChatSession.mode == "code",
+                    AIChatSession.status != "archived",
+                    or_(AIChatSession.app_id.is_(None), Application.app_type == "ai-code"),
+                    or_(
+                        Application.app_type == "ai-code",
+                        and_(
+                            AIChatSession.external_application_id.isnot(None),
+                            AIChatSession.external_application_id != "",
+                        ),
+                        and_(
+                            CodeRuntimeBinding.external_application_id.isnot(None),
+                            CodeRuntimeBinding.external_application_id != "",
+                        ),
+                    ),
+                    *source_filters,
                 )
                 .order_by(AIChatSession.updated_at.desc(), CodeRuntimeBinding.updated_at.desc(), AIChatSession.id.desc())
             )

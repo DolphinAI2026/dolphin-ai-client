@@ -50,9 +50,9 @@ function applicationGroupKey(group: CodeRailSessionGroup): string {
 
 function applicationCode(group: CodeRailSessionGroup): string {
   const code = group.items
-    .map(session => String(session.externalApplicationId || '').trim())
+    .map(session => String(session.appCode || '').trim())
     .find(Boolean)
-  return code?.replace(/^code-app-/, '') || ''
+  return code || ''
 }
 
 function visibleApplicationSessions(group: CodeRailSessionGroup): CodeRailSession[] {
@@ -186,7 +186,7 @@ function deleteSession(session: RailSession) {
                 <span
                   v-if="applicationCode(group)"
                   class="sas-app-code"
-                  :title="group.items.find(session => session.externalApplicationId)?.externalApplicationId"
+                  :title="applicationCode(group)"
                 >
                   {{ applicationCode(group) }}
                 </span>

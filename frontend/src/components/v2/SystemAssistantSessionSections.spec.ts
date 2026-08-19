@@ -21,7 +21,8 @@ describe('SystemAssistantSessionSections', () => {
 
   it('shows the application code alongside same-name application groups', () => {
     expect(sectionsSource).toContain('function applicationCode(group: CodeRailSessionGroup)')
-    expect(sectionsSource).toContain("code?.replace(/^code-app-/, '') || ''")
+    expect(sectionsSource).toContain("String(session.appCode || '').trim()")
+    expect(sectionsSource).not.toContain('externalApplicationId || \'\'')
     expect(sectionsSource).toContain('class="sas-app-code"')
   })
 

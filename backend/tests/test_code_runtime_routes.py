@@ -2997,7 +2997,7 @@ async def test_list_code_runtime_rail_history_is_database_only(db_session, monke
 
 
 @pytest.mark.asyncio
-async def test_list_code_runtime_rail_history_queries_only_latest_shell_snapshot_per_application(
+async def test_list_code_runtime_rail_history_keeps_all_shell_snapshots_per_application(
     db_session,
     monkeypatch,
 ):
@@ -3049,6 +3049,17 @@ async def test_list_code_runtime_rail_history_queries_only_latest_shell_snapshot
                 last_active_at=updated_at,
             ),
         ])
+    db_session.add(CodeRuntimeAgentSession(
+        tenant_id=7,
+        user_id=11,
+        session_id=shells[-1].id,
+        external_application_id="crm",
+        runtime_session_id="runtime-crm-deleted",
+        title="已删除的 CRM 会话",
+        state="waiting_input",
+        last_active_at=first_updated_at + timedelta(minutes=10),
+        deleted_at=first_updated_at + timedelta(minutes=10),
+    ))
     await db_session.commit()
 
     snapshot_query_sql: list[str] = []
@@ -3067,11 +3078,14 @@ async def test_list_code_runtime_rail_history_queries_only_latest_shell_snapshot
 
     result = await list_code_runtime_rail_history(_request(), _ctx(), db_session)
 
-    assert len(result["apps"]) == 1
-    assert result["apps"][0]["shell_session_id"] == shells[-1].public_id
-    assert [item["runtimeSessionId"] for item in result["apps"][0]["sessions"]] == [
-        "runtime-crm-8"
+    assert [app["shell_session_id"] for app in result["apps"]] == [
+        shell.public_id for shell in reversed(shells)
     ]
+    assert [
+        item["runtimeSessionId"]
+        for app in result["apps"]
+        for item in app["sessions"]
+    ] == [f"runtime-crm-{index}" for index in reversed(range(9))]
     assert len(snapshot_query_sql) == 1
     matched_session_ids = re.search(
         r"code_runtime_agent_sessions\.session_id IN \(([^)]*)\)",
@@ -3081,7 +3095,7 @@ async def test_list_code_runtime_rail_history_queries_only_latest_shell_snapshot
     assert {
         int(session_id.strip())
         for session_id in matched_session_ids.group(1).split(",")
-    } == {shells[-1].id}
+    } == {shell.id for shell in shells}
 
 
 @pytest.mark.asyncio
