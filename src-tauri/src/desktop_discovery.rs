@@ -28,13 +28,20 @@ impl DesktopDiscoveryError {
 }
 
 pub fn discover(raw_url: &str) -> Result<DesktopDiscoveryDocument, DesktopDiscoveryError> {
+    discover_with_timeout(raw_url, Duration::from_secs(12))
+}
+
+pub fn discover_with_timeout(
+    raw_url: &str,
+    timeout: Duration,
+) -> Result<DesktopDiscoveryDocument, DesktopDiscoveryError> {
     let base_url = normalize_login_url(raw_url)
         .map_err(|error| DesktopDiscoveryError::invalid(error.message))?;
     let mut last_status = None;
     for endpoint in discovery_endpoints(&base_url) {
         let response = match ureq::get(&endpoint)
             .set("Accept", "application/json")
-            .timeout(Duration::from_secs(12))
+            .timeout(timeout)
             .call()
         {
             Ok(response) => response,

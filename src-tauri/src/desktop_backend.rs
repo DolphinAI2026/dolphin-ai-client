@@ -3,7 +3,9 @@ use crate::desktop_config::{
     DesktopLoginConfig, DesktopLoginMode, DesktopPaths, DesktopSetupInput,
     SystemAssistantExecutionMode, WorkspaceEntryScope,
 };
-use crate::desktop_discovery::{discover, DesktopDiscoveryError};
+use crate::desktop_discovery::{
+    discover, discover_with_timeout, login_config, DesktopDiscoveryError,
+};
 use crate::local_runtime::api::LocalRuntimeApiServer;
 use crate::local_runtime::process_driver::agent_runtime_executable;
 use serde::{Deserialize, Serialize};
@@ -1442,6 +1444,64 @@ fn stop_resources(sidecar: Option<CommandChild>, runtime: Option<LocalRuntimeApi
     }
 }
 
+fn refresh_discovery_on_start(
+    store: &DesktopConfigStore,
+    config: DesktopConfig,
+) -> (DesktopConfig, Option<DesktopBackendError>) {
+    let document = match discover_with_timeout(&config.discovery_url, Duration::from_secs(4)) {
+        Ok(document) => document,
+        Err(error) => {
+            return (
+                config,
+                Some(DesktopBackendError {
+                    code: "DESKTOP_DISCOVERY_REFRESH_FAILED".into(),
+                    message: format!(
+                        "启动时刷新远程 Discovery 失败，继续使用上次配置：{}",
+                        error.message
+                    ),
+                }),
+            );
+        }
+    };
+    let login = match login_config(&document) {
+        Ok(login) => login,
+        Err(error) => {
+            return (
+                config,
+                Some(DesktopBackendError {
+                    code: "DESKTOP_DISCOVERY_REFRESH_FAILED".into(),
+                    message: format!(
+                        "启动时刷新远程认证配置失败，继续使用上次配置：{}",
+                        error.message
+                    ),
+                }),
+            );
+        }
+    };
+    let input = DesktopSetupInput {
+        root_dir: config.root_dir.to_string_lossy().into_owned(),
+        login,
+        workspace_entry_scope: config.workspace_entry_scope,
+        discovery_url: Some(config.discovery_url.clone()),
+        discovery: Some(document),
+        local_ai_enabled: config.local_ai_enabled,
+        system_assistant_execution_mode: config.system_assistant_execution_mode,
+    };
+    match store.save_current_root(input) {
+        Ok(saved) => (saved.config, None),
+        Err(error) => (
+            config,
+            Some(DesktopBackendError {
+                code: "DESKTOP_DISCOVERY_REFRESH_SAVE_FAILED".into(),
+                message: format!(
+                    "远程 Discovery 已刷新但未能保存，继续使用上次配置：{}",
+                    error.message
+                ),
+            }),
+        ),
+    }
+}
+
 fn run_initialize(app: &AppHandle, generation: u64) {
     let state = app.state::<DesktopBackend>();
     match state.config_store.load() {
@@ -1464,7 +1524,8 @@ fn run_initialize(app: &AppHandle, generation: u64) {
             }
         }
         Ok(Some(saved)) => {
-            let config = saved.config;
+            let (config, discovery_warning) =
+                refresh_discovery_on_start(&state.config_store, saved.config);
             {
                 let mut inner = state.lock();
                 if !inner.lease.is_active_current(generation) {
@@ -1472,6 +1533,14 @@ fn run_initialize(app: &AppHandle, generation: u64) {
                 }
                 inner.setup_scope = DesktopSetupScope::Full;
                 inner.config = Some(config.clone());
+                if let Some(warning) = discovery_warning {
+                    inner.write_diagnostic(
+                        "desktop.log",
+                        DesktopPhase::StartingRuntime,
+                        &warning.code,
+                        &warning.message,
+                    );
+                }
                 inner.transition_to(DesktopPhase::StartingRuntime, "准备桌面服务");
                 inner.error = None;
             }
@@ -1502,13 +1571,21 @@ fn run_save_setup(app: &AppHandle, generation: u64, input: DesktopSetupInput) {
             return;
         }
     };
-    let config = saved.config;
+    let (config, discovery_warning) = refresh_discovery_on_start(&state.config_store, saved.config);
     {
         let mut inner = state.lock();
         if !inner.lease.is_active_current(generation) {
             return;
         }
         inner.config = Some(config.clone());
+        if let Some(warning) = discovery_warning {
+            inner.write_diagnostic(
+                "desktop.log",
+                DesktopPhase::StartingRuntime,
+                &warning.code,
+                &warning.message,
+            );
+        }
         inner.transition_to(DesktopPhase::StartingRuntime, "准备桌面服务");
         inner.error = None;
     }
@@ -1577,13 +1654,21 @@ fn run_retry(app: &AppHandle, generation: u64) {
             return;
         }
     };
-    let config = saved.config;
+    let (config, discovery_warning) = refresh_discovery_on_start(&state.config_store, saved.config);
     let stale_runtime = {
         let mut inner = state.lock();
         if !inner.lease.is_active_current(generation) {
             return;
         }
         inner.config = Some(config.clone());
+        if let Some(warning) = discovery_warning {
+            inner.write_diagnostic(
+                "desktop.log",
+                DesktopPhase::StartingRuntime,
+                &warning.code,
+                &warning.message,
+            );
+        }
         if previous_root.as_ref() != Some(&config.root_dir) {
             inner.runtime.take()
         } else {
@@ -2040,6 +2125,8 @@ mod tests {
     };
     use std::cell::{Cell, RefCell};
     use std::fs;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
     use std::path::PathBuf;
 
     fn unique_backend_test_dir(label: &str) -> PathBuf {
@@ -2100,6 +2187,59 @@ mod tests {
         assert_eq!(PathBuf::from(input.root_dir), config.root_dir);
         assert_eq!(input.login, config.login);
         assert_eq!(input.workspace_entry_scope, WorkspaceEntryScope::Apaas);
+    }
+
+    #[test]
+    fn startup_refreshes_and_persists_remote_capabilities_from_discovery() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let discovery_url = format!("http://{address}");
+        let response_body = format!(
+            r#"{{"schema_version":1,"deployment_id":"test","platform":{{"type":"control_plane","name":"DolphinAI"}},"auth":{{"provider":"control_plane","login_url":"{discovery_url}","api_base_url":"{discovery_url}"}},"products":{{"builder":{{"enabled":false}},"code":{{"enabled":true,"base_url":"{discovery_url}/control-plane"}}}},"remote_capabilities":{{"models":true,"mcp":true,"skills":true,"knowledge_bases":true,"system_git":true}},"local_ai":{{"enabled":true,"allowed_kinds":["model"],"bridge_protocol_version":1}}}}"#
+        );
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 2048];
+            let _ = stream.read(&mut request).unwrap();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body,
+            )
+            .unwrap();
+        });
+        let temp = unique_backend_test_dir("discovery-refresh");
+        let store = DesktopConfigStore::new(temp.join("system"));
+        let mut input = fixture_setup_input();
+        input.root_dir = temp.join("DolphinAI").to_string_lossy().into_owned();
+        input.discovery_url = Some(discovery_url);
+        let saved = store.save(input).unwrap();
+
+        let (refreshed, warning) = refresh_discovery_on_start(&store, saved.config);
+
+        server.join().unwrap();
+        assert!(warning.is_none());
+        assert!(
+            refreshed
+                .discovery
+                .as_ref()
+                .unwrap()
+                .remote_capabilities
+                .system_git
+        );
+        assert!(
+            store
+                .load()
+                .unwrap()
+                .unwrap()
+                .config
+                .discovery
+                .unwrap()
+                .remote_capabilities
+                .system_git
+        );
+        fs::remove_dir_all(temp).unwrap();
     }
 
     #[test]
