@@ -44,6 +44,11 @@ export interface SystemAssistantBootstrap {
   recommended_action: SystemAssistantRecommendedAction
   available_actions: string[]
   source_status: Record<string, SystemAssistantSourceStatus>
+  execution: {
+    configured_mode: 'local' | 'remote'
+    remote_runtime_available: boolean
+    local_directory_access: boolean
+  }
 }
 
 export const systemAssistantApi = {

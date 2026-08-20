@@ -104,6 +104,40 @@
               </div>
             </template>
 
+            <template v-else-if="activeSection === 'system-assistant'">
+              <div class="settings-card system-assistant-execution-card">
+                <div class="card-heading">
+                  <div class="card-heading-icon"><AppIcon name="sparkles" :size="18" /></div>
+                  <div>
+                    <strong>执行位置</strong>
+                    <span>会话、工具和文件访问在哪一侧运行；与所选模型无关。</span>
+                  </div>
+                </div>
+                <el-radio-group v-model="systemAssistantExecutionMode" class="execution-mode-options">
+                  <el-radio value="local">
+                    <strong>本机执行</strong>
+                    <span>可在对话中访问你明确提供的本机绝对目录；不会扫描其他目录。</span>
+                  </el-radio>
+                  <el-radio value="remote" :disabled="!discovery?.remote_capabilities.system_assistant_remote">
+                    <strong>远程执行</strong>
+                    <span>会话和工具由远程系统助手 Runtime 承接，不读取本机目录。</span>
+                  </el-radio>
+                </el-radio-group>
+                <el-alert
+                  v-if="!discovery?.remote_capabilities.system_assistant_remote"
+                  type="info"
+                  :closable="false"
+                  show-icon
+                  title="当前连接的服务尚未部署远程系统助手 Runtime；远端模型、MCP、知识库和 Git 不代表远程执行已可用。"
+                />
+                <p class="desktop-settings-hint">保存后会重启桌面 sidecar；新建系统助手会话会记录当前执行位置，旧会话保持原记录。</p>
+                <p v-if="operationError" class="desktop-settings-error">{{ operationError }}</p>
+                <div class="desktop-section-actions">
+                  <el-button type="primary" :loading="saving" :disabled="!discovery" @click="saveConnection">保存并重启助手</el-button>
+                </div>
+              </div>
+            </template>
+
             <template v-else-if="activeSection === 'local-model'">
               <div class="local-ai-banner">
                 <div class="local-ai-banner-icon"><AppIcon name="laptop" :size="18" /></div>
@@ -215,11 +249,12 @@ import {
   type DesktopStateSnapshot,
 } from '@/utils/desktop'
 
-type SettingsSection = 'remote' | 'local-model' | 'local-skill' | 'local-mcp' | 'local-knowledge' | 'apaas' | 'environment' | 'storage' | 'about'
+type SettingsSection = 'remote' | 'system-assistant' | 'local-model' | 'local-skill' | 'local-mcp' | 'local-knowledge' | 'apaas' | 'environment' | 'storage' | 'about'
 type LocalAIKind = 'model' | 'skill' | 'mcp' | 'knowledge'
 
 const primaryMenu = [
   { id: 'remote' as const, label: '远程服务', icon: 'globe' },
+  { id: 'system-assistant' as const, label: '系统助手', icon: 'sparkles' },
   { id: 'apaas' as const, label: 'aPaaS 环境', icon: 'building' },
   { id: 'environment' as const, label: '环境检查', icon: 'terminal' },
   { id: 'storage' as const, label: '存储与诊断', icon: 'database' },
@@ -233,6 +268,7 @@ const localAiMenu = [
 ]
 const sectionMeta: Record<SettingsSection, { title: string; description: string; icon: string; resourceTitle?: string; resourceHint?: string }> = {
   remote: { title: '远程服务', description: '连接 Control Plane 或仅 aPaaS Builder 服务，并重新发现平台能力。', icon: 'globe' },
+  'system-assistant': { title: '系统助手', description: '选择系统助手会话和工具的执行位置；模型或资产来源不会改变执行位置。', icon: 'sparkles' },
   'local-model': { title: '本地模型', description: '维护 Builder 与 Code 共用的本机模型连接。', icon: 'bot', resourceTitle: '模型目录', resourceHint: '可供本机 Builder 和 Code 使用的模型。' },
   'local-skill': { title: '本地技能', description: '查看本机技能资源、版本和启停状态。', icon: 'sparkles', resourceTitle: '技能库', resourceHint: '仅本机工程可使用的技能资源。' },
   'local-mcp': { title: '本地 MCP', description: '查看本机 MCP Server 配置与可用状态。', icon: 'puzzle', resourceTitle: 'MCP Server', resourceHint: '连接本机工具和外部服务的能力。' },
@@ -250,6 +286,7 @@ const serviceUrl = ref('')
 const discovery = ref<DesktopDiscoveryDocument | null>(null)
 const rootDir = ref('')
 const localAiEnabled = ref(true)
+const systemAssistantExecutionMode = ref<'local' | 'remote'>('local')
 const loading = ref(true)
 const saving = ref(false)
 const discovering = ref(false)
@@ -288,6 +325,7 @@ async function loadSettings() {
     serviceUrl.value = config.discovery_url || config.login.base_url
     discovery.value = config.discovery || null
     localAiEnabled.value = config.local_ai_enabled !== false
+    systemAssistantExecutionMode.value = config.system_assistant_execution_mode || 'local'
   } catch { loadError.value = '无法读取桌面配置，请稍后重试' }
   finally { loading.value = false }
 }
@@ -320,7 +358,7 @@ async function saveConnection() {
   operationError.value = ''
   try {
     const mode = discovery.value.auth.provider === 'apaas' ? 'apaas' : 'control_plane'
-    snapshot.value = await saveDesktopSetup(buildDesktopSetupInput(rootDir.value || snapshot.value?.default_root_dir || '', mode, discovery.value.auth.login_url, 'both', serviceUrl.value.trim(), discovery.value, localAiEnabled.value))
+    snapshot.value = await saveDesktopSetup(buildDesktopSetupInput(rootDir.value || snapshot.value?.default_root_dir || '', mode, discovery.value.auth.login_url, 'both', serviceUrl.value.trim(), discovery.value, localAiEnabled.value, systemAssistantExecutionMode.value))
     if (__DESKTOP_WEB_PREVIEW__ || snapshot.value?.phase === 'ready' || snapshot.value?.phase === 'failed') {
       saving.value = false
     }

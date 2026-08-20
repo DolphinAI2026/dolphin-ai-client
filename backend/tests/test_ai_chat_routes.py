@@ -58,9 +58,29 @@ async def test_system_assistant_session_create_and_detail_keep_legacy_mode(db_se
 
     assert created["assistant_profile"] == "system_assistant"
     assert created["mode"] == "chat"
+    assert created["execution_location"] == "local"
     detail = await get_session(created["id"], ctx, db_session)
     assert detail["session"]["assistant_profile"] == "system_assistant"
     assert detail["session"]["mode"] == "chat"
+
+
+@pytest.mark.asyncio
+async def test_system_assistant_remote_session_requires_advertised_remote_runtime(db_session, monkeypatch):
+    tenant = Tenant(tenant_name="sa_remote_t", tenant_code="sa_remote_t")
+    db_session.add(tenant)
+    await db_session.flush()
+    user = User(username="sa_remote_user", hashed_password="x")
+    db_session.add(user)
+    await db_session.flush()
+
+    monkeypatch.setattr(ai_chat_routes.runtime, "system_assistant_execution_mode", lambda: "remote")
+    monkeypatch.setattr(ai_chat_routes.runtime, "system_assistant_remote_enabled", lambda: False)
+    with pytest.raises(HTTPException, match="SYSTEM_ASSISTANT_REMOTE_RUNTIME_UNAVAILABLE"):
+        await create_session(
+            CreateSessionRequest(assistant_profile="system_assistant"),
+            _ctx(user, tenant.id),
+            db_session,
+        )
 
 
 @pytest.mark.asyncio

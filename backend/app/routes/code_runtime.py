@@ -590,6 +590,9 @@ async def _desktop_remote_rail_history(
         binding = bindings_by_session_id.get(int(session.id))
         apps.append({
             "shell_session_id": shell_id,
+            # Keep the control-plane public id for identity/sync, but expose
+            # the stable local route used by Runtime proxy paths and cookies.
+            "route_id": code_session_route_id(session.id),
             "external_application_id": session.external_application_id or "",
             "app_name": session.external_app_name or session.title,
             "app_code": session.external_app_code,
@@ -1539,6 +1542,70 @@ async def _remember_runtime_agent_session(
     )
 
 
+async def _reconcile_live_runtime_agent_sessions(
+    db: AsyncSession,
+    session: AIChatSession,
+    binding: CodeRuntimeBinding,
+    sessions: list[Any],
+) -> list[dict[str, Any]]:
+    """Persist Runtime-owned conversations and project host title overrides."""
+    other_scoped_ids = await _runtime_session_ids_scoped_to_other_shells(
+        db,
+        session.id,
+    )
+    normalized_sessions = _filter_browser_runtime_sessions(
+        sessions,
+        other_scoped_ids=other_scoped_ids,
+    )
+    for item in normalized_sessions:
+        await _remember_runtime_agent_session(
+            db,
+            session,
+            binding,
+            str(item.get("runtimeSessionId") or "").strip(),
+            item,
+            refresh_title_even_if_stale=True,
+        )
+    if not normalized_sessions:
+        return normalized_sessions
+
+    await db.commit()
+    runtime_ids = [
+        str(item.get("runtimeSessionId") or "").strip()
+        for item in normalized_sessions
+    ]
+    override_rows = (
+        await db.execute(
+            select(
+                CodeRuntimeAgentSession.runtime_session_id,
+                CodeRuntimeAgentSession.title,
+            ).where(
+                CodeRuntimeAgentSession.session_id == session.id,
+                CodeRuntimeAgentSession.runtime_session_id.in_(runtime_ids),
+                CodeRuntimeAgentSession.title_override.is_(True),
+                CodeRuntimeAgentSession.deleted_at.is_(None),
+            )
+        )
+    ).all()
+    title_overrides = {
+        str(runtime_id): str(title).strip()
+        for runtime_id, title in override_rows
+        if str(title or "").strip()
+    }
+    if not title_overrides:
+        return normalized_sessions
+    return [
+        {
+            **item,
+            "title": title_overrides.get(
+                str(item.get("runtimeSessionId") or "").strip(),
+                item.get("title"),
+            ),
+        }
+        for item in normalized_sessions
+    ]
+
+
 def _path_requires_runtime_current_alignment(path: str) -> bool:
     normalized = "/" + str(path or "").lstrip("/")
     return normalized == "/api/agent/sessions/current" or normalized.startswith("/api/agent/sessions/current/")
@@ -1721,6 +1788,9 @@ async def list_code_runtime_rail_history(
 
             app: dict[str, Any] = {
                 "shell_session_id": ensure_code_session_public_id(session),
+                # Runtime proxy calls must use this stable local route (sN).
+                # The public UUID above remains the external shell identity.
+                "route_id": code_session_route_id(session.id),
                 "external_application_id": external_id,
                 "logical_application_id": location["logical_application_id"],
                 "execution_location": location["execution_location"],
@@ -1775,6 +1845,39 @@ async def list_code_runtime_rail_history(
         time.monotonic() - started,
     )
     return result
+
+
+@router.get("/sessions/{session_id}/agent-sessions")
+async def list_code_runtime_agent_sessions(
+    session_id: str,
+    request: Request,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """List Runtime conversations for the authenticated desktop shell.
+
+    The outer rail already has a tenant-scoped user identity, so it must use
+    the server-side Runtime service session.  The browser proxy endpoint keeps
+    its separate Runtime-cookie contract for requests made inside Builder.
+    """
+    session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
+    payload = await _runtime_json_request_for_session(
+        session,
+        binding,
+        "GET",
+        "/api/agent/sessions",
+        request=request,
+        ctx=ctx,
+        db=db,
+    )
+    sessions = payload.get("sessions") if isinstance(payload, dict) else []
+    normalized_sessions = await _reconcile_live_runtime_agent_sessions(
+        db,
+        session,
+        binding,
+        sessions if isinstance(sessions, list) else [],
+    )
+    return {"sessions": normalized_sessions}
 
 
 @router.post("/sessions/{session_id}/agent-sessions")
@@ -1987,6 +2090,19 @@ async def _generate_code_agent_session_title(
     return title
 
 
+def _apply_generated_code_agent_session_title(
+    record: CodeRuntimeAgentSession,
+    title: str,
+    *,
+    persist: bool,
+) -> bool:
+    if not persist:
+        return False
+    record.title = title
+    record.title_override = True
+    return True
+
+
 async def _owned_code_agent_session(
     db: AsyncSession,
     session: AIChatSession,
@@ -2032,6 +2148,7 @@ async def generate_code_runtime_agent_session_title(
     request: Request,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    persist: bool = Query(True),
 ):
     session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
     record = await _owned_code_agent_session(db, session, runtime_session_id)
@@ -2050,10 +2167,14 @@ async def generate_code_runtime_agent_session_title(
     if not source_messages:
         raise HTTPException(status_code=409, detail="当前会话暂无可用于生成标题的用户消息")
     title = await _generate_code_agent_session_title(db, session, source_messages)
-    record.title = title
-    record.title_override = True
-    await db.commit()
-    return {"ok": True, "title": title, "source_message_count": len(source_messages)}
+    if _apply_generated_code_agent_session_title(record, title, persist=persist):
+        await db.commit()
+    return {
+        "ok": True,
+        "title": title,
+        "source_message_count": len(source_messages),
+        "persisted": persist,
+    }
 
 
 def _embed_cookie_name(session_id: CodeSessionRef) -> str:
@@ -3360,62 +3481,16 @@ async def list_browser_authenticated_agent_sessions(
             request.headers.get("x-forwarded-prefix", ""),
         )
     sessions = payload.get("sessions") if isinstance(payload, dict) else []
-    normalized_sessions = sessions if isinstance(sessions, list) else []
-    other_scoped_ids = await _runtime_session_ids_scoped_to_other_shells(db, session.id)
-    normalized_sessions = _filter_browser_runtime_sessions(
-        normalized_sessions,
-        other_scoped_ids=other_scoped_ids,
-    )
     # Conversations created inside the embedded runtime do not pass through
     # the outer rail's create endpoint.  Persist every live item observed here
     # so a later rail refresh can retain all siblings even if the runtime only
     # exposes its current conversation after a reconnect.
-    for item in normalized_sessions:
-        await _remember_runtime_agent_session(
-            db,
-            session,
-            binding,
-            str(item.get("runtimeSessionId") or "").strip(),
-            item,
-            refresh_title_even_if_stale=True,
-        )
-    if normalized_sessions:
-        await db.commit()
-        # The runtime only knows its fallback title from the first user
-        # message.  Project the host-owned override back into this live
-        # response too; otherwise an active iframe would briefly repaint the
-        # old runtime title before the next rail-history load.
-        runtime_ids = [
-            str(item.get("runtimeSessionId") or "").strip()
-            for item in normalized_sessions
-            if str(item.get("runtimeSessionId") or "").strip()
-        ]
-        override_rows = (
-            await db.execute(
-                select(
-                    CodeRuntimeAgentSession.runtime_session_id,
-                    CodeRuntimeAgentSession.title,
-                ).where(
-                    CodeRuntimeAgentSession.session_id == session.id,
-                    CodeRuntimeAgentSession.runtime_session_id.in_(runtime_ids),
-                    CodeRuntimeAgentSession.title_override.is_(True),
-                    CodeRuntimeAgentSession.deleted_at.is_(None),
-                )
-            )
-        ).all()
-        title_overrides = {
-            str(runtime_id): str(title).strip()
-            for runtime_id, title in override_rows
-            if str(title or "").strip()
-        }
-        if title_overrides:
-            normalized_sessions = [
-                {
-                    **item,
-                    "title": title_overrides.get(str(item.get("runtimeSessionId") or "").strip(), item.get("title")),
-                }
-                for item in normalized_sessions
-            ]
+    normalized_sessions = await _reconcile_live_runtime_agent_sessions(
+        db,
+        session,
+        binding,
+        sessions if isinstance(sessions, list) else [],
+    )
     current_runtime_id = str(binding.runtime_session_id or "").strip()
     if current_runtime_id and not any(
         str(item.get("runtimeSessionId") or "").strip() == current_runtime_id

@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import railSidebarSource from './RailSidebar.vue?raw'
 import { railTenantHome } from './RailSidebar.vue'
-import { groupCodeRailHistoryByApplication, hydrateCodeRailHistorySessions } from './codeRailHistory'
+import {
+  codeRailHistoryRouteId,
+  groupCodeRailHistoryByApplication,
+  hydrateCodeRailHistorySessions,
+} from './codeRailHistory'
 import type { CodeRailHistoryResponse } from '@/api/codeRuntime'
 
 type RailSidebarModule = typeof import('./RailSidebar.vue') & {
@@ -178,6 +182,32 @@ describe('RailSidebar unified session source (SP2b)', () => {
     expect(runtimeProbes).toBe(1)
   })
 
+  it('uses the stable route id for desktop Runtime calls while retaining the public shell id', async () => {
+    const history: CodeRailHistoryResponse = {
+      apps: [{
+        shell_session_id: '33333333-3333-3333-3333-333333333333',
+        route_id: 's6',
+        external_application_id: 'remote-crm',
+        logical_application_id: 'crm',
+        execution_location: 'remote',
+        app_name: 'CRM',
+        sessions: [],
+      }],
+    }
+    const probedShells: string[] = []
+
+    const hydrated = await hydrateCodeRailHistorySessions(history, async (shellSessionId) => {
+      probedShells.push(shellSessionId)
+      return { sessions: [{ runtimeSessionId: 'runtime-live', title: '远程会话' }] }
+    })
+    const [group] = groupCodeRailHistoryByApplication(hydrated)
+
+    expect(codeRailHistoryRouteId(history.apps[0])).toBe('s6')
+    expect(probedShells).toEqual(['s6'])
+    expect(group.items[0]?.shellSessionId).toBe('s6')
+    expect(group.items[0]?.source).toBe('code-agent')
+  })
+
   it('treats legacy local application ids as local when a stale API response lacks the location', () => {
     const [group] = groupCodeRailHistoryByApplication({
       apps: [{
@@ -294,6 +324,12 @@ describe('RailSidebar unified session source (SP2b)', () => {
     expect(railSidebarSource).toContain('hydrateCodeRailHistorySessions')
     expect(railSidebarSource).toContain('codeRuntimeApi.listAgentSessions')
     expect(railSidebarSource).toContain('shouldLoad: app => Boolean(activeShellSessionId)')
+  })
+
+  it('loads active Runtime conversations through the authenticated host route', async () => {
+    const apiSource = await import('@/api/codeRuntime.ts?raw') as unknown as { default: string }
+    expect(apiSource.default).toContain('/code/sessions/${encodedShellSessionId}/agent-sessions')
+    expect(apiSource.default).not.toContain('/code-runtime/${shellSessionId}/shell/agent-sessions')
   })
 
   it('merges live runtime sessions with persisted siblings for every shell', async () => {

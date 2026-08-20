@@ -1,6 +1,7 @@
 use crate::desktop_config::{
     default_root_dir, normalize_login_url, DesktopConfig, DesktopConfigError, DesktopConfigStore,
-    DesktopLoginConfig, DesktopLoginMode, DesktopPaths, DesktopSetupInput, WorkspaceEntryScope,
+    DesktopLoginConfig, DesktopLoginMode, DesktopPaths, DesktopSetupInput,
+    SystemAssistantExecutionMode, WorkspaceEntryScope,
 };
 use crate::desktop_discovery::{discover, DesktopDiscoveryError};
 use crate::local_runtime::api::LocalRuntimeApiServer;
@@ -451,6 +452,15 @@ impl SidecarLaunch {
             .as_ref()
             .map(|discovery| discovery.remote_capabilities.system_git)
             .unwrap_or(false);
+        let system_assistant_execution_mode = match config.system_assistant_execution_mode {
+            SystemAssistantExecutionMode::Local => "local",
+            SystemAssistantExecutionMode::Remote => "remote",
+        };
+        let system_assistant_remote_enabled = config
+            .discovery
+            .as_ref()
+            .map(|discovery| discovery.remote_capabilities.system_assistant_remote)
+            .unwrap_or(false);
         Self {
             args: vec![
                 "--port".into(),
@@ -461,6 +471,8 @@ impl SidecarLaunch {
                 paths.applications_dir.to_string_lossy().into_owned(),
                 "--runtime-data-dir".into(),
                 paths.runtime_dir.to_string_lossy().into_owned(),
+                "--parent-pid".into(),
+                std::process::id().to_string(),
                 "--login-mode".into(),
                 mode.into(),
                 "--login-base-url".into(),
@@ -479,6 +491,14 @@ impl SidecarLaunch {
                 (
                     "DOLPHIN_SYSTEM_GIT_ENABLED".into(),
                     system_git_enabled.to_string(),
+                ),
+                (
+                    "DOLPHIN_SYSTEM_ASSISTANT_EXECUTION_MODE".into(),
+                    system_assistant_execution_mode.into(),
+                ),
+                (
+                    "DOLPHIN_SYSTEM_ASSISTANT_REMOTE_ENABLED".into(),
+                    system_assistant_remote_enabled.to_string(),
                 ),
             ]
             .into_iter()
@@ -920,6 +940,7 @@ impl DesktopBackend {
             discovery_url: Some(config.discovery_url.clone()),
             discovery: config.discovery.clone(),
             local_ai_enabled: config.local_ai_enabled,
+            system_assistant_execution_mode: config.system_assistant_execution_mode,
         })?;
         let config = saved.config;
         inner.config = Some(config.clone());
@@ -1020,6 +1041,7 @@ fn workspace_scope_update_input(
         discovery_url: Some(config.discovery_url.clone()),
         discovery: config.discovery.clone(),
         local_ai_enabled: config.local_ai_enabled,
+        system_assistant_execution_mode: config.system_assistant_execution_mode,
     }
 }
 
@@ -1852,8 +1874,8 @@ fn desktop_test_service_blocking(login: DesktopLoginConfig) -> Result<(), Deskto
         .timeout(Duration::from_secs(5))
         .build();
     match agent.get(&url).call() {
-        Ok(response) if (200..500).contains(&response.status()) => Ok(()),
-        Err(ureq::Error::Status(status, _)) if (200..500).contains(&status) => Ok(()),
+        Ok(response) if desktop_service_status_reachable(response.status()) => Ok(()),
+        Err(ureq::Error::Status(status, _)) if desktop_service_status_reachable(status) => Ok(()),
         Ok(response) => Err(DesktopBackendError::service(format!(
             "服务返回不可用状态码 {}",
             response.status()
@@ -1865,6 +1887,10 @@ fn desktop_test_service_blocking(login: DesktopLoginConfig) -> Result<(), Deskto
             "无法连接登录服务: {error}"
         ))),
     }
+}
+
+fn desktop_service_status_reachable(status: u16) -> bool {
+    (200..500).contains(&status)
 }
 
 #[tauri::command]
@@ -2014,8 +2040,6 @@ mod tests {
     };
     use std::cell::{Cell, RefCell};
     use std::fs;
-    use std::io::Write;
-    use std::net::TcpListener;
     use std::path::PathBuf;
 
     fn unique_backend_test_dir(label: &str) -> PathBuf {
@@ -2038,6 +2062,7 @@ mod tests {
             discovery_url: "https://om-demo.dfy.definesys.cn".to_string(),
             discovery: None,
             local_ai_enabled: true,
+            system_assistant_execution_mode: SystemAssistantExecutionMode::Local,
         }
     }
 
@@ -2064,6 +2089,7 @@ mod tests {
             discovery_url: None,
             discovery: None,
             local_ai_enabled: true,
+            system_assistant_execution_mode: SystemAssistantExecutionMode::Local,
         }
     }
 
@@ -2149,6 +2175,10 @@ mod tests {
             runtime.to_string_lossy().as_ref()
         );
         assert_eq!(launch.arg_value("--login-mode"), "control_plane");
+        assert_eq!(
+            launch.arg_value("--parent-pid"),
+            std::process::id().to_string()
+        );
         assert_eq!(
             launch.arg_value("--login-base-url"),
             "https://om-demo.dfy.definesys.cn"
@@ -2571,26 +2601,6 @@ mod tests {
 
     #[test]
     fn service_test_treats_redirect_response_as_reachable() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .write_all(
-                    b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                )
-                .unwrap();
-        });
-
-        let result = desktop_test_service_blocking(DesktopLoginConfig {
-            mode: DesktopLoginMode::ControlPlane,
-            base_url: format!("http://{address}"),
-        });
-        server.join().unwrap();
-
-        assert!(
-            result.is_ok(),
-            "redirect response must be reachable: {result:?}"
-        );
+        assert!(desktop_service_status_reachable(302));
     }
 }

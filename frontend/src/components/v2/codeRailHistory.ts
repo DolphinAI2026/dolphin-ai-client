@@ -51,6 +51,10 @@ function applicationName(app: CodeRailHistoryApp): string {
   return text(app.app_name) || text(app.app_code) || text(app.external_application_id) || '未关联应用'
 }
 
+export function codeRailHistoryRouteId(app: CodeRailHistoryApp): string {
+  return text(app.route_id) || text(app.shell_session_id)
+}
+
 export function formatCodeRailLocationSummary(
   location: CodeExecutionLocation,
   workspacePath?: string | null,
@@ -66,7 +70,7 @@ export function formatCodeRailLocationSummary(
 }
 
 function appSessions(app: CodeRailHistoryApp): CodeRailSession[] {
-  const shellSessionId = text(app.shell_session_id)
+  const shellSessionId = codeRailHistoryRouteId(app)
   if (!shellSessionId) return []
   const location = executionLocation(app.execution_location, app.external_application_id)
   const purpose = sessionPurpose(app.session_purpose)
@@ -133,7 +137,7 @@ export async function hydrateCodeRailHistorySessions(
   options?: { shouldLoad?: (app: CodeRailHistoryApp) => boolean },
 ): Promise<CodeRailHistoryResponse> {
   const apps = await Promise.all(history.apps.map(async (app) => {
-    const shellSessionId = text(app.shell_session_id)
+    const shellSessionId = codeRailHistoryRouteId(app)
     if (!shellSessionId || options?.shouldLoad?.(app) === false) return app
     try {
       const result = await loadSessions(shellSessionId)
@@ -208,5 +212,8 @@ export function findCodeRailHistoryApp(
   history: CodeRailHistoryResponse | null | undefined,
   shellSessionId: string,
 ): CodeRailHistoryApp | undefined {
-  return (history?.apps || []).find(app => text(app.shell_session_id) === text(shellSessionId))
+  return (history?.apps || []).find(app => (
+    codeRailHistoryRouteId(app) === text(shellSessionId)
+    || text(app.shell_session_id) === text(shellSessionId)
+  ))
 }

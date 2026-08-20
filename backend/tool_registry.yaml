@@ -42,6 +42,12 @@ tools:
     category: system_asset
     description: "创建系统级种子工程、能力、环境或知识库。"
     requires_confirmation: true
+  create_system_asset_starter_repository:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "从空目录生成种子工程或能力骨架，创建平台 Git 仓库并推送首个提交；首次调用只生成确认预览。"
+    requires_confirmation: true
   create_system_skill:
     sections: [global]
     agents: []
@@ -107,6 +113,12 @@ tools:
     agents: []
     category: system_asset
     description: "读取一项系统资产详情。"
+    read_only: true
+  get_system_asset_creation_examples:
+    sections: [global]
+    agents: []
+    category: system_asset
+    description: "读取当前租户真实种子工程或能力的脱敏参考、可复用规则、权威 schema 和从零创建步骤。"
     read_only: true
   get_system_asset_schema:
     sections: [global]

@@ -8,9 +8,9 @@ import {
 import apiSource from './codeRuntime.ts?raw'
 
 describe('Code runtime browser-authenticated session APIs', () => {
-  it('keeps iframe reads on the proxy cookie path and outer mutations on Builder auth', () => {
+  it('keeps outer session reads and mutations on the authenticated Builder host route', () => {
     expect(apiSource).toContain('listAgentSessions(shellSessionId')
-    expect(apiSource).toContain('`/code-runtime/${shellSessionId}/shell/agent-sessions`')
+    expect(apiSource).not.toContain('`/code-runtime/${shellSessionId}/shell/agent-sessions`')
     expect(apiSource).toContain('`/code/sessions/${encodedShellSessionId}/agent-sessions`')
     expect(apiSource).toContain(
       '`/code/sessions/${encodedShellSessionId}/agent-sessions/${encodeURIComponent(runtimeSessionId)}/activate`',

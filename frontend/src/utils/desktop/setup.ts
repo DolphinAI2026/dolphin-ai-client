@@ -1,6 +1,7 @@
 export type DesktopLoginMode = 'control_plane' | 'apaas'
 export type DesktopLoginServiceMode = DesktopLoginMode | 'public_account' | 'trial_account'
 export type DesktopWorkspaceEntryScope = 'apaas' | 'ai_platform' | 'both'
+export type SystemAssistantExecutionMode = 'local' | 'remote'
 
 export type DesktopPhase =
   | 'needs_setup'
@@ -33,6 +34,7 @@ export interface DesktopConfig {
   discovery_url?: string
   discovery?: DesktopDiscoveryDocument | null
   local_ai_enabled?: boolean
+  system_assistant_execution_mode?: SystemAssistantExecutionMode
 }
 
 export interface DesktopDiscoveryDocument {
@@ -50,6 +52,7 @@ export interface DesktopDiscoveryDocument {
     skills: boolean
     knowledge_bases: boolean
     system_git?: boolean
+    system_assistant_remote?: boolean
   }
   local_ai: { enabled: boolean; allowed_kinds: string[]; bridge_protocol_version: number }
 }
@@ -61,6 +64,7 @@ export interface DesktopSetupInput {
   discovery_url?: string | null
   discovery?: DesktopDiscoveryDocument | null
   local_ai_enabled?: boolean
+  system_assistant_execution_mode?: SystemAssistantExecutionMode
 }
 
 export interface DesktopStateSnapshot {
@@ -92,6 +96,7 @@ export function buildDesktopSetupInput(
   discoveryUrl?: string,
   discovery?: DesktopDiscoveryDocument | null,
   localAiEnabled = true,
+  systemAssistantExecutionMode: SystemAssistantExecutionMode = 'local',
 ): DesktopSetupInput {
   return {
     root_dir: rootDir,
@@ -100,6 +105,7 @@ export function buildDesktopSetupInput(
     discovery_url: discoveryUrl || baseUrl,
     discovery: discovery || null,
     local_ai_enabled: localAiEnabled,
+    system_assistant_execution_mode: systemAssistantExecutionMode,
   }
 }
 
@@ -236,7 +242,7 @@ function previewDiscovery(url: string): DesktopDiscoveryDocument {
       builder: { enabled: true, base_url: baseUrl },
       code: { enabled: !standaloneBuilder, base_url: standaloneBuilder ? null : baseUrl },
     },
-    remote_capabilities: { models: true, mcp: true, skills: true, knowledge_bases: true, system_git: true },
+    remote_capabilities: { models: true, mcp: true, skills: true, knowledge_bases: true, system_git: true, system_assistant_remote: false },
     local_ai: {
       enabled: true,
       allowed_kinds: ['models', 'mcp', 'skills', 'knowledge_bases'],

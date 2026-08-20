@@ -25,6 +25,7 @@ async def test_bootstrap_requires_authentication():
 
 @pytest.mark.asyncio
 async def test_bootstrap_passes_current_tenant_to_read_only_collector(monkeypatch):
+    monkeypatch.setattr(system_assistant.runtime, "is_desktop", lambda: False)
     app = FastAPI()
     app.include_router(system_assistant.router, prefix="/api")
     ctx = SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=42, tenant_role="member", org_permissions={})
@@ -45,6 +46,39 @@ async def test_bootstrap_passes_current_tenant_to_read_only_collector(monkeypatc
     body = response.json()
     assert body["baseline_snapshot"]["tenant_id"] == 42
     assert body["baseline_snapshot"]["readonly"] is True
+    assert body["execution"] == {
+        "configured_mode": "local",
+        "remote_runtime_available": False,
+        "local_directory_access": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_reports_execution_mode_without_confusing_remote_assets_with_runtime(monkeypatch):
+    app = FastAPI()
+    app.include_router(system_assistant.router, prefix="/api")
+    app.dependency_overrides[get_auth_context] = lambda: SimpleNamespace(
+        user=SimpleNamespace(id=11), tenant_id=42, tenant_role="member", org_permissions={}
+    )
+    app.dependency_overrides[get_db] = lambda: object()
+
+    async def collect(_db, _ctx):
+        return {"workspace": {"status": "missing", "source_status": "ready", "items": []}}
+
+    monkeypatch.setattr(system_assistant, "collect_baseline_facts", collect)
+    monkeypatch.setattr(system_assistant.runtime, "system_assistant_execution_mode", lambda: "remote")
+    monkeypatch.setattr(system_assistant.runtime, "system_assistant_remote_enabled", lambda: False)
+    monkeypatch.setattr(system_assistant.runtime, "is_desktop", lambda: True)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/system-assistant/bootstrap")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["execution"] == {
+        "configured_mode": "remote",
+        "remote_runtime_available": False,
+        "local_directory_access": False,
+    }
 
 
 @pytest.mark.asyncio

@@ -56,8 +56,10 @@ import {
   type CodeExecutionLocation,
 } from '@/api/codeRuntime'
 import { getControlPlaneCodeSession } from '@/utils/controlPlaneCodeSession'
+import { llmConfigApi } from '@/api/llmConfig'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import SystemAssistantSessionSections from '@/components/v2/SystemAssistantSessionSections.vue'
+import SessionTitleDialog from '@/components/v2/SessionTitleDialog.vue'
 import {
   groupRailSessionsByApplication,
   normalizeAiSessions,
@@ -71,6 +73,7 @@ import {
 } from '@/composables/railSessions'
 import type { CodeAgentSessionRecord, CodeRailHistoryResponse } from '@/api/codeRuntime'
 import {
+  codeRailHistoryRouteId,
   codeRailHistorySessions,
   groupCodeRailHistoryByApplication,
   hydrateCodeRailHistorySessions,
@@ -119,6 +122,7 @@ const activeCodeRuntimeSessionId = computed(() => {
 const aiSessions = ref<AIChatSession[]>([])
 const systemAssistantSessionData = ref<AIChatSession[]>([])
 const codeRailHistory = ref<CodeRailHistoryResponse | null>(null)
+const codeTitleModelAvailable = ref(false)
 const CODE_RAIL_HIDDEN_APPLICATIONS_KEY = 'apaas-code-rail-hidden-applications-v1'
 function loadHiddenCodeRailApplications(): Set<string> {
   try {
@@ -246,7 +250,7 @@ async function loadRailSessions() {
             // sandbox already open in this tab; probing every historical
             // sandbox otherwise produces avoidable 401s and slows navigation.
             shouldLoad: app => Boolean(activeShellSessionId)
-              && String(app.shell_session_id || '') === activeShellSessionId,
+              && codeRailHistoryRouteId(app) === activeShellSessionId,
           },
         )
         if (seq !== railSessionsSeq || mode !== currentMode.value) return
@@ -261,6 +265,18 @@ async function loadRailSessions() {
   } catch {
     if (seq !== railSessionsSeq || mode !== currentMode.value) return
     if (mode !== 'code') aiSessions.value = []
+  }
+}
+
+async function loadCodeTitleModelAvailability() {
+  if (currentMode.value !== 'code') {
+    codeTitleModelAvailable.value = false
+    return
+  }
+  try {
+    codeTitleModelAvailable.value = (await llmConfigApi.listOptions('coding')).length > 0
+  } catch {
+    codeTitleModelAvailable.value = false
   }
 }
 
@@ -279,6 +295,7 @@ function refreshCodeRail() {
   if (currentMode.value === 'code') {
     void loadRailApps()
     void loadRailSessions()
+    void loadCodeTitleModelAvailability()
   }
 }
 
@@ -317,6 +334,7 @@ watch(currentMode, () => {
   groupBy.value = loadGroupByForMode(currentMode.value)
   void loadRailApps()
   void loadRailSessions()
+  void loadCodeTitleModelAvailability()
   syncSystemAssistantSessionPolling()
 })
 watch(isSystemAssistantRoute, () => {
@@ -407,26 +425,26 @@ function sessionRunning(session: RailSession): boolean {
   return ['running', 'processing'].includes(String(session.status || '').toLowerCase())
 }
 
-async function renameSystemAssistantSession(session: RailSession) {
-  try {
-    const { value } = await ElMessageBox.prompt('输入新的会话名称', '重命名会话', {
-      inputValue: session.title || '',
-      inputPlaceholder: '会话名称',
-      confirmButtonText: '保存',
-      cancelButtonText: '取消',
-      inputValidator: value => Boolean(String(value || '').trim()) || '请输入会话名称',
-    })
-    const title = String(value || '').trim()
-    if (!title || title === session.title) return
-    await aiChatApi.updateSession(Number(session.id), { title })
-    await loadRailSessions()
-    window.dispatchEvent(new CustomEvent('system-assistant-session-renamed', {
-      detail: { id: Number(session.id), title },
-    }))
-  } catch (error: any) {
-    if (error === 'cancel' || error === 'close') return
-    ElMessage.error(error?.response?.data?.detail || error?.message || '重命名失败')
-  }
+type SessionTitleTarget =
+  | { kind: 'system'; session: RailSession }
+  | { kind: 'code'; session: CodeRailSession }
+
+const sessionTitleDialogVisible = ref(false)
+const sessionTitleDraft = ref('')
+const sessionTitleTarget = ref<SessionTitleTarget | null>(null)
+const sessionTitleGenerating = ref(false)
+const sessionTitleSaving = ref(false)
+
+function openSessionTitleDialog(target: SessionTitleTarget) {
+  sessionTitleTarget.value = target
+  sessionTitleDraft.value = String(target.session.title || '').trim()
+  sessionTitleGenerating.value = false
+  sessionTitleSaving.value = false
+  sessionTitleDialogVisible.value = true
+}
+
+function renameSystemAssistantSession(session: RailSession) {
+  openSessionTitleDialog({ kind: 'system', session })
 }
 
 function updateCodeRailSessionTitle(session: CodeRailSession, title: string) {
@@ -435,7 +453,7 @@ function updateCodeRailSessionTitle(session: CodeRailSession, title: string) {
   codeRailHistory.value = {
     ...codeRailHistory.value,
     apps: codeRailHistory.value.apps.map((app) => (
-      String(app.shell_session_id || '') !== String(session.shellSessionId)
+      codeRailHistoryRouteId(app) !== String(session.shellSessionId)
         ? app
         : {
             ...app,
@@ -449,41 +467,70 @@ function updateCodeRailSessionTitle(session: CodeRailSession, title: string) {
   }
 }
 
-async function renameCodeAgentSession(session: CodeRailSession) {
+function renameCodeAgentSession(session: CodeRailSession) {
   if (!session.shellSessionId || !session.runtimeSessionId) return
-  try {
-    const { value } = await ElMessageBox.prompt('输入新的会话名称', '重命名会话', {
-      inputValue: session.title || '',
-      inputPlaceholder: '会话名称',
-      confirmButtonText: '保存',
-      cancelButtonText: '取消',
-      inputValidator: value => Boolean(String(value || '').trim()) || '请输入会话名称',
-    })
-    const title = String(value || '').trim()
-    if (!title || title === session.title) return
-    const result = await codeRuntimeApi.renameAgentSession(
-      session.shellSessionId,
-      session.runtimeSessionId,
-      title,
-    )
-    updateCodeRailSessionTitle(session, result.title || title)
-  } catch (error: any) {
-    if (error === 'cancel' || error === 'close') return
-    ElMessage.error(error?.response?.data?.detail || error?.message || '重命名失败')
-  }
+  // Revalidate on every open so a removed or newly configured model is never
+  // represented by a stale action in the dialog.
+  codeTitleModelAvailable.value = false
+  openSessionTitleDialog({ kind: 'code', session })
+  void loadCodeTitleModelAvailability()
 }
 
-async function generateCodeAgentSessionTitle(session: CodeRailSession) {
+async function generateCodeAgentSessionTitle() {
+  const target = sessionTitleTarget.value
+  if (target?.kind !== 'code' || !codeTitleModelAvailable.value) return
+  const session = target.session
   if (!session.shellSessionId || !session.runtimeSessionId) return
+  sessionTitleGenerating.value = true
   try {
     const result = await codeRuntimeApi.generateAgentSessionTitle(
       session.shellSessionId,
       session.runtimeSessionId,
+      false,
     )
-    updateCodeRailSessionTitle(session, result.title)
-    ElMessage.success('已根据最近的消息生成标题')
+    if (sessionTitleTarget.value === target) {
+      sessionTitleDraft.value = result.title
+      ElMessage.success('标题已生成，保存后生效')
+    }
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || error?.message || '生成标题失败')
+  } finally {
+    sessionTitleGenerating.value = false
+  }
+}
+
+async function saveSessionTitle() {
+  const target = sessionTitleTarget.value
+  const title = sessionTitleDraft.value.trim()
+  if (!target || !title || sessionTitleSaving.value) return
+  if (title === String(target.session.title || '').trim()) {
+    sessionTitleDialogVisible.value = false
+    return
+  }
+
+  sessionTitleSaving.value = true
+  try {
+    if (target.kind === 'system') {
+      await aiChatApi.updateSession(Number(target.session.id), { title })
+      await loadRailSessions()
+      window.dispatchEvent(new CustomEvent('system-assistant-session-renamed', {
+        detail: { id: Number(target.session.id), title },
+      }))
+    } else {
+      const session = target.session
+      if (!session.shellSessionId || !session.runtimeSessionId) return
+      const result = await codeRuntimeApi.renameAgentSession(
+        session.shellSessionId,
+        session.runtimeSessionId,
+        title,
+      )
+      updateCodeRailSessionTitle(session, result.title || title)
+    }
+    sessionTitleDialogVisible.value = false
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || error?.message || '修改标题失败')
+  } finally {
+    sessionTitleSaving.value = false
   }
 }
 
@@ -749,6 +796,7 @@ onMounted(() => {
   const startupTasks: Promise<unknown>[] = [
     loadRailApps(),
     loadRailSessions(),
+    loadCodeTitleModelAvailability(),
   ]
   startupTasks.push(user.fetchAvailableTenants())
   if (__DESKTOP__) startupTasks.push(loadDesktopWorkspaceEntryScope())
@@ -1026,7 +1074,6 @@ function renderIcon(name: string): string {
         @open-application-session="openSession"
         @new-application-session="createCodeAgentSession"
         @rename-application-session="renameCodeAgentSession"
-        @generate-application-session-title="generateCodeAgentSessionTitle"
         @archive-application-session="archiveRailSession"
         @hide-application="hideCodeRailApplication"
         @restore-applications="restoreCodeRailApplications"
@@ -1183,6 +1230,16 @@ function renderIcon(name: string): string {
       </div>
     </div>
   </aside>
+
+  <SessionTitleDialog
+    v-model="sessionTitleDialogVisible"
+    v-model:title="sessionTitleDraft"
+    :can-generate="sessionTitleTarget?.kind === 'code' && codeTitleModelAvailable"
+    :generating="sessionTitleGenerating"
+    :saving="sessionTitleSaving"
+    @generate="generateCodeAgentSessionTitle"
+    @save="saveSessionTitle"
+  />
 </template>
 
 <style scoped>

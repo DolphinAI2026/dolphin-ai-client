@@ -173,6 +173,30 @@ publish_macos_arm_release() {
     node "$ROOT/scripts/verify-desktop-release-brand.mjs" "${brand_args[@]}"
 }
 
+create_macos_fallback_dmg() {
+    local version dmg_dir app_dir app_bundle output
+    version="$(read_package_version)"
+    dmg_dir="$TAURI_RELEASE_DIR/bundle/dmg"
+    app_dir="$TAURI_RELEASE_DIR/bundle/macos"
+    if find "$dmg_dir" -maxdepth 1 -type f -name '*.dmg' -print -quit 2>/dev/null | grep -q .; then
+        return 0
+    fi
+    app_bundle="$(find_exactly_one "expected one *.app artifact under $app_dir" find "$app_dir" -maxdepth 1 -type d -name '*.app' -print0)" || return 1
+    mkdir -p "$dmg_dir"
+    output="$dmg_dir/DolphinAI_${version}_aarch64.dmg"
+    echo "==> Tauri DMG bundler unavailable; creating a local UDZO DMG from $(basename "$app_bundle")"
+    hdiutil create \
+        -volname "DolphinAI" \
+        -srcfolder "$app_bundle" \
+        -ov \
+        -format UDZO \
+        "$output"
+    [[ -s "$output" ]] || {
+        echo "ERROR: fallback DMG was not created: $output" >&2
+        return 1
+    }
+}
+
 repack_linux_appimage_with_pristine_codex() {
     local bundle_dir="$TAURI_RELEASE_DIR/bundle/appimage"
     local source_codex="$ROOT/src-tauri/resources/agent-runtime/codex/bin/codex"
@@ -388,6 +412,7 @@ if [[ "$HOST_OS" == "Linux" ]]; then
     repack_linux_appimage_with_pristine_codex
     publish_linux_release
 else
+    create_macos_fallback_dmg
     publish_macos_arm_release
 fi
 
