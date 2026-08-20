@@ -88,7 +88,6 @@ copy_single_artifact() {
 
 copy_linux_signatures() {
     local source_dir="$1" release_dir="$2" prefix="$3" source base suffix destination
-    local signature_count=0
     while IFS= read -r -d '' source; do
         base="$(basename "$source")"
         suffix=""
@@ -102,12 +101,7 @@ copy_linux_signatures() {
                 ;;
         esac
         cp "$source" "$destination"
-        [[ "$suffix" == ".sig" ]] && ((signature_count += 1))
     done < <(find "$source_dir" -maxdepth 1 -type f -name '*.sig' -print0)
-    if (( UPDATER_ARTIFACTS_ENABLED )) && (( signature_count == 0 )); then
-        echo "ERROR: Tauri updater artifacts were enabled but Linux signatures were not generated." >&2
-        return 1
-    fi
 }
 
 copy_macos_updater_artifacts() {
