@@ -77,6 +77,14 @@ async def resolve_effective_tenant_id(db: AsyncSession, ctx: AuthContext) -> int
     scoped, so platform admins fall back to their default membership, then the
     first active tenant in the system.
     """
+    if is_control_plane_context(ctx):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "CONTROL_PLANE_REMOTE_SCOPE_REQUIRED",
+                "message": "当前请求由 Control Plane 组织负责，不能使用本地 Builder 租户配置",
+            },
+        )
     if ctx.tenant_id and ctx.tenant_id > 0:
         return ctx.tenant_id
     if ctx.tenant_access_scope == "platform_only":
