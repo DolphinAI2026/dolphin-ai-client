@@ -63,6 +63,14 @@ def test_arm_desktop_build_isolated_from_a_running_bundle_and_checks_lazy_profil
     assert "--verify-import app.agents.profile" in script
 
 
+def test_arm_desktop_build_requires_python_311_for_sidecar():
+    root = Path(__file__).resolve().parents[2]
+    script = (root / "scripts" / "build-desktop.sh").read_text(encoding="utf-8")
+
+    assert 'DOLPHIN_DESKTOP_PYTHON:-python3.11' in script
+    assert 'sys.version_info[:2] != (3, 11)' in script
+
+
 def test_sqlite_database_url_removes_windows_verbatim_prefix():
     database_path = PureWindowsPath(r"\\?\E:\dolphin_code\.appdata\app.db")
 

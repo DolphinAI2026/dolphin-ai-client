@@ -9,6 +9,7 @@ HOST_ARCH="$(uname -m)"
 TRIPLE="$(rustc --print host-tuple)"
 CONFIG="$ROOT/src-tauri/tauri.conf.json"
 SOURCE_REVISION="$(git -C "$ROOT" rev-parse HEAD)"
+DESKTOP_PYTHON="${DOLPHIN_DESKTOP_PYTHON:-python3.11}"
 UPDATER_ARTIFACTS_ENABLED=1
 TAURI_TARGET_DIR=""
 TAURI_RELEASE_DIR=""
@@ -297,9 +298,21 @@ fi
 echo ""
 echo "==> 2/4 PyInstaller 打 sidecar (onefile, 内嵌前端)"
 cd "$ROOT/backend"
+command -v "$DESKTOP_PYTHON" >/dev/null 2>&1 || {
+    echo "ERROR: desktop sidecar build requires Python 3.11: $DESKTOP_PYTHON" >&2
+    exit 1
+}
 if [[ ! -x .venv/bin/python ]]; then
-    python3 -m venv .venv
+    "$DESKTOP_PYTHON" -m venv .venv
 fi
+.venv/bin/python - <<'PY'
+import sys
+
+if sys.version_info[:2] != (3, 11):
+    raise SystemExit(
+        "desktop sidecar build requires Python 3.11; remove backend/.venv and retry"
+    )
+PY
 .venv/bin/python -m pip install -r requirements.txt >/dev/null
 # 全新 checkout 可能没装 pyinstaller — 缺则补装 (构建期依赖, 不入 requirements.txt 避免污染部署)
 .venv/bin/python -m PyInstaller --version >/dev/null 2>&1 || .venv/bin/pip install "pyinstaller>=6.6"
@@ -307,7 +320,7 @@ fi
 # 首启由 build_env._sync_preset_skills 覆盖式同步进 data_dir/skills/platform/。
 # 注入构建期 env 防 collect_submodules("app") 触发 Settings() 校验失败
 export JWT_SECRET_KEY="pyinstaller-build-placeholder"
-export ENCRYPTION_KEY="$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")"
+export ENCRYPTION_KEY="$(.venv/bin/python -c "import secrets; print(secrets.token_urlsafe(48))")"
 export DATABASE_URL="sqlite+aiosqlite:///:memory:"
 export ALLOW_DEFAULT_ENCRYPTION_KEY="1"
 .venv/bin/python -m PyInstaller dolphin-ai-sidecar.spec --clean --noconfirm
