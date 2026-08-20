@@ -153,11 +153,14 @@ try {
       throw "TAURI_SIGNING_PRIVATE_KEY is required for a Release-tag desktop build."
     }
     $RestoreConfig = $true
-    $text = Get-Content $Config -Raw
-    $text = $text -replace '"createUpdaterArtifacts"\s*:\s*true', '"createUpdaterArtifacts": false'
-    Write-Utf8NoBom $Config $text
+    & node (Join-Path $Root "scripts\configure-tauri-updater.mjs") --config $Config --enabled false
+    Assert-NativeSuccess "Disable Tauri updater artifacts" $LASTEXITCODE
     $UpdaterArtifactsEnabled = $false
     Write-Host "TAURI_SIGNING_PRIVATE_KEY is not set; updater artifacts are temporarily disabled for this non-Release desktop build."
+  } else {
+    $RestoreConfig = $true
+    & node (Join-Path $Root "scripts\configure-tauri-updater.mjs") --config $Config --enabled true
+    Assert-NativeSuccess "Enable Tauri updater artifacts" $LASTEXITCODE
   }
 
   Write-Host "==> [build-desktop-windows.ps1] ROOT=$Root TARGET=$Target BUNDLE=$Bundle"

@@ -49,17 +49,28 @@ cleanup() {
 
 trap cleanup EXIT
 
+configure_updater_artifacts() {
+    local enabled="$1"
+    if [[ -z "${TAURI_CONFIG_BACKUP:-}" ]]; then
+        mkdir -p /tmp/d-ai-code/build-desktop
+        TAURI_CONFIG_BACKUP="$(mktemp /tmp/d-ai-code/build-desktop/tauri.conf.XXXXXX)"
+        cp "$CONFIG" "$TAURI_CONFIG_BACKUP"
+    fi
+    node "$ROOT/scripts/configure-tauri-updater.mjs" \
+        --config "$CONFIG" \
+        --enabled "$enabled"
+}
+
 if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
     if is_release_build; then
         echo "ERROR: TAURI_SIGNING_PRIVATE_KEY is required for a Release-tag desktop build." >&2
         exit 1
     fi
-    mkdir -p /tmp/d-ai-code/build-desktop
-    TAURI_CONFIG_BACKUP="$(mktemp /tmp/d-ai-code/build-desktop/tauri.conf.XXXXXX)"
-    cp "$CONFIG" "$TAURI_CONFIG_BACKUP"
-    node -e 'const fs = require("node:fs"); const file = process.argv[1]; const config = JSON.parse(fs.readFileSync(file, "utf8")); config.bundle.createUpdaterArtifacts = false; fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);' "$CONFIG"
+    configure_updater_artifacts false
     UPDATER_ARTIFACTS_ENABLED=0
     echo "==> TAURI_SIGNING_PRIVATE_KEY is not set; updater artifacts are temporarily disabled for this non-Release desktop build."
+else
+    configure_updater_artifacts true
 fi
 
 read_package_version() {
