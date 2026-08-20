@@ -95,6 +95,11 @@ test('signing helper signs Mach-O resources and verifies the final app', async (
 
 test('desktop build verifies the signed app before packaging and publishing', async () => {
   const buildScript = await readFile(path.join(root, 'scripts/build-desktop.sh'), 'utf8');
+  assert.match(
+    buildScript,
+    /bash "\$ROOT\/scripts\/macos-code-signing\.sh" sign-resources/,
+    'the signing helper must not depend on the executable bit being preserved',
+  );
   const signResources = buildScript.indexOf('macos-code-signing.sh" sign-resources');
   const tauriBuild = buildScript.indexOf('cd "$ROOT" && run_tauri_build "$BUNDLES"');
   const verifyApp = buildScript.indexOf('macos-code-signing.sh" verify-app');
