@@ -25,6 +25,7 @@ export interface AIChatSession {
   external_application_id?: string | null
   external_app_name?: string | null
   external_app_code?: string | null
+  execution_location?: 'local' | 'remote' | null
   selected_llm_config_id: number | null
   workspace_dir: string | null
   workspace_id?: string | null

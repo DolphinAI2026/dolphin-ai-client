@@ -81,6 +81,10 @@ async def desktop_bootstrap(
             # desktop sidecar receives an ephemeral user credential per Git
             # command after the user confirms the action.
             "system_git": code_enabled,
+            # A dedicated remote system-assistant Runtime is not deployed on
+            # this service yet. Remote assets/models by themselves are not an
+            # execution Runtime, so advertise that fact explicitly.
+            "system_assistant_remote": False,
         },
         "local_ai": {
             "enabled": True,

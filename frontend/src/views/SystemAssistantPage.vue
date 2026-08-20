@@ -11,7 +11,7 @@ import type { AgentMessage } from '@/components/common/agent-conversation/types'
 import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
 import { aiChatApi } from '@/api/aiChat'
 import type { BuilderModelOption } from '@/api/llmConfig'
-import { systemAssistantApi } from '@/api/systemAssistant'
+import { systemAssistantApi, type SystemAssistantBootstrap } from '@/api/systemAssistant'
 import { useAiChatSession } from '@/composables/useAiChatSession'
 import { isImageFile } from '@/utils/pasteImages'
 import ArtifactPanel from '@/views/workspace/panels/ArtifactPanel.vue'
@@ -20,6 +20,7 @@ const route = useRoute()
 const router = useRouter()
 const selectedLlmId = ref<number | null>(null)
 const llmOptions = ref<BuilderModelOption[]>([])
+const execution = ref<SystemAssistantBootstrap['execution'] | null>(null)
 
 const {
   currentSession,
@@ -81,6 +82,14 @@ async function loadModels() {
   } catch {
     llmOptions.value = []
     selectedLlmId.value = null
+  }
+}
+
+async function loadExecution() {
+  try {
+    execution.value = (await systemAssistantApi.getBootstrap()).execution
+  } catch {
+    execution.value = null
   }
 }
 
@@ -192,6 +201,7 @@ onMounted(async () => {
   await Promise.all([
     loadModels(),
     loadSessions(),
+    loadExecution(),
   ])
   await selectSession(querySessionId())
 })
@@ -209,6 +219,10 @@ onBeforeUnmount(() => {
         <div>
           <strong>系统助手</strong>
           <span :title="currentSessionTitle">{{ currentSessionTitle }}</span>
+          <small v-if="execution" class="system-assistant-execution" :title="execution.configured_mode === 'local' ? '本机执行：仅访问你在对话中明确提供的目录' : '远程执行：不读取本机目录'">
+            <AppIcon :name="execution.configured_mode === 'local' ? 'laptop' : 'globe'" :size="12" />
+            {{ execution.configured_mode === 'local' ? '本机执行' : '远程执行' }}
+          </small>
         </div>
       </div>
       <div class="system-assistant-actions">
@@ -347,6 +361,16 @@ onBeforeUnmount(() => {
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.system-assistant-execution {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  color: var(--brand);
+  font-size: 10.5px;
+  font-weight: 600;
 }
 
 .system-assistant-actions {

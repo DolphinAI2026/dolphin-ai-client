@@ -18,8 +18,8 @@ describe('SystemAssistantSessionSections', () => {
 
   it('lets users archive a conversation or remove an application group without deleting the project', () => {
     expect(sectionsSource).toContain("'rename-application-session'")
-    expect(sectionsSource).toContain("'generate-application-session-title'")
-    expect(sectionsSource).toContain('AI 生成标题')
+    expect(sectionsSource).not.toContain("'generate-application-session-title'")
+    expect(sectionsSource).not.toContain('AI 生成标题')
     expect(sectionsSource).toContain("'archive-application-session'")
     expect(sectionsSource).toContain("'hide-application'")
     expect(sectionsSource).toContain('从侧边栏移除项目')

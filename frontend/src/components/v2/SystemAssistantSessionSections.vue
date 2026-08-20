@@ -28,7 +28,6 @@ const emit = defineEmits<{
   (event: 'open-application-session', session: RailSession): void
   (event: 'new-application-session', shellSessionId: string): void
   (event: 'rename-application-session', session: CodeRailSession): void
-  (event: 'generate-application-session-title', session: CodeRailSession): void
   (event: 'archive-application-session', session: CodeRailSession): void
   (event: 'hide-application', logicalApplicationId: string): void
   (event: 'restore-applications'): void
@@ -127,10 +126,6 @@ function renameApplicationSession(session: CodeRailSession) {
   emit('rename-application-session', session)
 }
 
-function generateApplicationSessionTitle(session: CodeRailSession) {
-  sessionMenuOpenId.value = null
-  emit('generate-application-session-title', session)
-}
 </script>
 
 <template>
@@ -298,10 +293,6 @@ function generateApplicationSessionTitle(session: CodeRailSession) {
                   <button type="button" role="menuitem" @click="renameApplicationSession(session)">
                     <AppIcon name="edit" :size="14" />
                     重命名
-                  </button>
-                  <button type="button" role="menuitem" @click="generateApplicationSessionTitle(session)">
-                    <AppIcon name="sparkles" :size="14" />
-                    AI 生成标题
                   </button>
                   <button type="button" role="menuitem" @click="archiveApplicationSession(session)">
                     <AppIcon name="archive" :size="14" />

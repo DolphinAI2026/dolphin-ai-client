@@ -300,6 +300,28 @@ def test_recent_runtime_user_messages_uses_at_most_the_latest_five_user_turns():
     ]
 
 
+def test_generated_code_agent_title_preview_does_not_persist_until_save():
+    from app.routes.code_runtime import _apply_generated_code_agent_session_title
+
+    record = SimpleNamespace(title="原始标题", title_override=False)
+
+    assert _apply_generated_code_agent_session_title(
+        record,
+        "AI 建议标题",
+        persist=False,
+    ) is False
+    assert record.title == "原始标题"
+    assert record.title_override is False
+
+    assert _apply_generated_code_agent_session_title(
+        record,
+        "AI 建议标题",
+        persist=True,
+    ) is True
+    assert record.title == "AI 建议标题"
+    assert record.title_override is True
+
+
 @pytest.mark.asyncio
 async def test_desktop_model_proxy_forwards_scoped_request_to_control_plane(
     db_session,
@@ -2778,8 +2800,10 @@ async def test_list_code_runtime_rail_history_accepts_all_source_and_includes_sh
     app = result["apps"][0]
     assert app["shell_session_id"] != "1"
     assert len(app["shell_session_id"]) == 36
+    assert app["route_id"].startswith("s")
     assert app == {
         "shell_session_id": app["shell_session_id"],
+        "route_id": app["route_id"],
         "external_application_id": "crm",
         "logical_application_id": "legacy:crm",
         "execution_location": "remote",
@@ -2900,9 +2924,15 @@ async def test_desktop_rail_history_uses_remote_builder_shells_and_caches_openab
 
     result = await list_code_runtime_rail_history(_request(), ctx, db_session)
 
+    cached = (
+        await db_session.execute(
+            select(AIChatSession).where(AIChatSession.public_id == remote_shell_id)
+        )
+    ).scalar_one()
     assert result == {
         "apps": [{
             "shell_session_id": remote_shell_id,
+            "route_id": code_runtime_routes.code_session_route_id(cached.id),
             "external_application_id": "remote-crm",
             "app_name": "远端 CRM",
             "app_code": "remote_crm",
@@ -2910,11 +2940,6 @@ async def test_desktop_rail_history_uses_remote_builder_shells_and_caches_openab
             "sessions": [],
         }],
     }
-    cached = (
-        await db_session.execute(
-            select(AIChatSession).where(AIChatSession.public_id == remote_shell_id)
-        )
-    ).scalar_one()
     assert cached.tenant_id == 0
     assert cached.user_id == 11
     assert cached.external_application_id == "remote-crm"
@@ -3173,6 +3198,7 @@ async def test_list_code_runtime_rail_history_returns_opened_app_agent_sessions(
     assert str(UUID(unopened_shell_id)) == unopened_shell_id
     assert apps_by_external_id["never-opened"] == {
         "shell_session_id": unopened_shell_id,
+        "route_id": f"s{unopened_session.id}",
         "external_application_id": "never-opened",
         "logical_application_id": "legacy:never-opened",
         "execution_location": "remote",
@@ -3746,6 +3772,91 @@ async def test_activate_code_runtime_agent_session_proxies_to_runtime_and_update
         )
     )).scalar_one()
     assert scoped.external_application_id == "crm"
+
+
+@pytest.mark.asyncio
+async def test_list_code_runtime_agent_sessions_uses_authenticated_host_route_without_browser_cookie(
+    db_session,
+    monkeypatch,
+):
+    import httpx
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import (
+        RenameCodeRuntimeAgentSessionRequest,
+        list_code_runtime_agent_sessions,
+        rename_code_runtime_agent_session,
+    )
+
+    shell = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        title="CRM Code",
+        mode="code",
+        status="active",
+        external_application_id="crm",
+        external_app_name="CRM",
+    )
+    db_session.add(shell)
+    await db_session.flush()
+    db_session.add(CodeRuntimeBinding(
+        tenant_id=7,
+        user_id=11,
+        session_id=shell.id,
+        external_application_id="crm",
+        runtime_base_url="http://runtime.local/workspaces/crm",
+        builder_url="http://runtime.local/workspaces/crm/builder",
+        runtime_service_session_enc=_runtime_service_session_enc(),
+        runtime_session_id="runtime-1",
+        status="ready",
+    ))
+    await db_session.commit()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/workspaces/crm/api/agent/sessions"
+        assert request.headers["cookie"] == "apaas_sandbox_token=test-runtime-cookie"
+        return httpx.Response(200, json={
+            "sessions": [{"runtimeSessionId": "runtime-1", "title": "远程会话"}],
+        })
+
+    transport = httpx.MockTransport(handler)
+    original = code_runtime_routes.httpx.AsyncClient
+    monkeypatch.setattr(
+        code_runtime_routes.httpx,
+        "AsyncClient",
+        lambda **kwargs: original(transport=transport, **kwargs),
+    )
+
+    result = await list_code_runtime_agent_sessions(
+        f"s{shell.id}", _request(), _ctx(), db_session,
+    )
+
+    assert result["sessions"][0]["runtimeSessionId"] == "runtime-1"
+    scoped = (await db_session.execute(
+        select(CodeRuntimeAgentSession).where(
+            CodeRuntimeAgentSession.session_id == shell.id,
+            CodeRuntimeAgentSession.runtime_session_id == "runtime-1",
+        )
+    )).scalar_one()
+    assert scoped.title == "远程会话"
+
+    renamed = await rename_code_runtime_agent_session(
+        f"s{shell.id}",
+        "runtime-1",
+        RenameCodeRuntimeAgentSessionRequest(title="本地重命名"),
+        _ctx(),
+        db_session,
+    )
+
+    assert renamed == {"ok": True, "title": "本地重命名"}
+    await db_session.refresh(scoped)
+    assert scoped.title == "本地重命名"
+    assert scoped.title_override is True
+
+    refreshed = await list_code_runtime_agent_sessions(
+        f"s{shell.id}", _request(), _ctx(), db_session,
+    )
+    assert refreshed["sessions"][0]["title"] == "本地重命名"
 
 
 @pytest.mark.asyncio

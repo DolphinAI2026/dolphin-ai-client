@@ -188,6 +188,7 @@ export interface CodeAgentSessionRecord {
 
 export interface CodeRailHistoryApp {
   shell_session_id: string
+  route_id?: string | null
   external_application_id: string
   logical_application_id: string
   execution_location: CodeExecutionLocation
@@ -329,8 +330,9 @@ export const codeRuntimeApi = {
     }
   },
   listAgentSessions(shellSessionId: string) {
+    const encodedShellSessionId = encodeURIComponent(shellSessionId)
     return request.get<any, { sessions: CodeAgentSessionRecord[] }>(
-      `/code-runtime/${shellSessionId}/shell/agent-sessions`, { headers: controlPlaneCodeAuthorization() },
+      `/code/sessions/${encodedShellSessionId}/agent-sessions`, { headers: controlPlaneCodeAuthorization() },
     )
   },
   createAgentSession(shellSessionId: string) {
@@ -376,10 +378,11 @@ export const codeRuntimeApi = {
       { headers: controlPlaneCodeAuthorization() },
     )
   },
-  generateAgentSessionTitle(shellSessionId: string, runtimeSessionId: string) {
+  generateAgentSessionTitle(shellSessionId: string, runtimeSessionId: string, persist = true) {
     const encodedShellSessionId = encodeURIComponent(shellSessionId)
-    return request.post<any, { ok: boolean; title: string; source_message_count: number }>(
-      `/code/sessions/${encodedShellSessionId}/agent-sessions/${encodeURIComponent(runtimeSessionId)}/title/generate`,
+    const query = persist ? '' : '?persist=false'
+    return request.post<any, { ok: boolean; title: string; source_message_count: number; persisted: boolean }>(
+      `/code/sessions/${encodedShellSessionId}/agent-sessions/${encodeURIComponent(runtimeSessionId)}/title/generate${query}`,
       undefined,
       { headers: controlPlaneCodeAuthorization() },
     )

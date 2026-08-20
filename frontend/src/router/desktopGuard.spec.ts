@@ -365,6 +365,7 @@ describe('resolveDesktopRedirect', () => {
         discovery_url: 'https://example.com',
         discovery: null,
         local_ai_enabled: true,
+        system_assistant_execution_mode: 'local',
       })
   })
 

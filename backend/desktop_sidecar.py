@@ -10,12 +10,49 @@ import os
 import runpy
 import secrets
 import sys
+import threading
+import time
 import traceback
 from pathlib import Path
 
 # Keep the implementation at backend root. PyInstaller follows this direct
 # dependency without importing or scanning the configuration-sensitive app package.
 from form_component_editor_impl import normalize_form_component_editor_artifacts
+
+
+def process_exists(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def start_parent_watchdog(parent_pid: int, *, poll_seconds: float = 1.0) -> None:
+    """Exit the frozen sidecar when its owning desktop process disappears.
+
+    Normal Tauri shutdown still terminates the process tree immediately.  This
+    watchdog covers forced quits/crashes where CommandChild is dropped before
+    the lifecycle worker can run, preventing stale sidecars and local Runtime
+    ownership from leaking into the next launch.
+    """
+    if parent_pid <= 0:
+        return
+
+    def watch() -> None:
+        while process_exists(parent_pid):
+            time.sleep(max(poll_seconds, 0.05))
+        os._exit(0)
+
+    threading.Thread(
+        target=watch,
+        name="dolphin-desktop-parent-watchdog",
+        daemon=True,
+    ).start()
 
 
 def ensure_jwt_secret(data_dir: Path) -> str:
@@ -178,6 +215,7 @@ def main() -> None:
     )
     parser.add_argument("--applications-root", type=Path)
     parser.add_argument("--runtime-data-dir", type=Path)
+    parser.add_argument("--parent-pid", type=int, default=0)
     parser.add_argument("--run-script", type=str, default="")
     parser.add_argument(
         "--verify-import",
@@ -189,6 +227,8 @@ def main() -> None:
 
     if args.run_script:
         sys.exit(run_script(args.run_script))
+
+    start_parent_watchdog(args.parent_pid)
 
     data_dir = Path(args.data_dir) if args.data_dir else (Path.home() / "DolphinAI" / ".appdata")
 

@@ -188,6 +188,7 @@ def _session_to_dict(s: AIChatSession, generation: Optional[dict] = None) -> dic
         "external_application_id": getattr(s, "external_application_id", None),
         "external_app_name": getattr(s, "external_app_name", None),
         "external_app_code": getattr(s, "external_app_code", None),
+        "execution_location": getattr(s, "execution_location", None),
         "created_at": s.created_at.isoformat() if s.created_at else None,
         "updated_at": s.updated_at.isoformat() if s.updated_at else None,
     }
@@ -593,6 +594,17 @@ async def create_session(
     )
     title = body.title or "新会话"
     is_system_assistant = body.assistant_profile == "system_assistant"
+    system_assistant_location = None
+    if is_system_assistant:
+        system_assistant_location = runtime.system_assistant_execution_mode()
+        if system_assistant_location == "remote" and not runtime.system_assistant_remote_enabled():
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "SYSTEM_ASSISTANT_REMOTE_RUNTIME_UNAVAILABLE: "
+                    "当前远程服务未部署系统助手 Runtime，请在桌面设置切换为本机模式"
+                ),
+            )
     app_id = None if is_system_assistant else body.app_id
     if body.mode == "code" and body.workspace_id:
         # 代码会话从「我的开发」/clone/本地夹各入口进来,单点派生两件事:
@@ -632,6 +644,7 @@ async def create_session(
         status="active",
         app_id=app_id,
         workspace_id=body.workspace_id,
+        execution_location=system_assistant_location,
     )
     db.add(s)
     await db.flush()  # 拿到 id
@@ -844,6 +857,17 @@ async def send_message(
 
     # 用请求级 session 校验权限并写入 user_msg（这一步必须同步落库才能让前端立即看到）
     s = await _load_session_or_404(db, session_id, ctx)
+    if (
+        getattr(s, "assistant_profile", None) == "system_assistant"
+        and str(getattr(s, "execution_location", "") or "").strip().lower() == "remote"
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "SYSTEM_ASSISTANT_REMOTE_RUNTIME_UNAVAILABLE: "
+                "当前远程服务未部署系统助手 Runtime，请在桌面设置切换为本机模式后新建会话"
+            ),
+        )
     # 守卫:同会话已有在跑 run → 挡住(单会话单 run,避免并发竞态/误丢)
     if ai_chat_run_registry.is_running(session_id):
         raise HTTPException(status_code=409, detail="该会话有任务在跑,请等它完成或先停止")

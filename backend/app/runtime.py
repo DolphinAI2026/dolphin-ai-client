@@ -54,6 +54,24 @@ def is_desktop() -> bool:
     return os.environ.get(ENV_DESKTOP_MODE) == "1" or is_frozen()
 
 
+def system_assistant_execution_mode() -> str:
+    """Return the configured desktop system-assistant execution mode.
+
+    The value is deliberately separate from model/asset provider location.
+    An online model or Control Plane MCP does not itself move the agent loop
+    into a remote Runtime.
+    """
+
+    configured = os.environ.get("DOLPHIN_SYSTEM_ASSISTANT_EXECUTION_MODE", "local")
+    return "remote" if configured.strip().lower() == "remote" else "local"
+
+
+def system_assistant_remote_enabled() -> bool:
+    return os.environ.get("DOLPHIN_SYSTEM_ASSISTANT_REMOTE_ENABLED", "").strip().lower() in {
+        "1", "true", "yes",
+    }
+
+
 def desktop_data_dir() -> Path:
     """桌面 data_dir: SIDECAR_DATA_DIR > APAAS_WORKSPACE_ROOT.parent > ~/.ruijing-builder。
 

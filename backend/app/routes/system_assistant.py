@@ -14,7 +14,7 @@ from app.system_assistant.baseline_service import (
     build_baseline_snapshot,
     collect_baseline_facts,
 )
-from app.system_assistant.contracts import BootstrapResponse
+from app.system_assistant.contracts import BootstrapResponse, SystemAssistantExecution
 from app.routes.llm_configs import LLMConfigOptionResponse, list_llm_configs_for_purpose
 from app.code_runtime.control_plane_models import list_control_plane_model_options
 
@@ -29,7 +29,16 @@ async def bootstrap(
     """Return a tenant-scoped baseline snapshot without creating a plan."""
 
     facts = await collect_baseline_facts(db, ctx)
-    return build_baseline_snapshot(facts, tenant_id=int(getattr(ctx, "tenant_id", 0) or 0))
+    response = build_baseline_snapshot(facts, tenant_id=int(getattr(ctx, "tenant_id", 0) or 0))
+    response["execution"] = SystemAssistantExecution(
+        configured_mode=runtime.system_assistant_execution_mode(),
+        remote_runtime_available=runtime.system_assistant_remote_enabled(),
+        local_directory_access=(
+            runtime.is_desktop()
+            and runtime.system_assistant_execution_mode() == "local"
+        ),
+    )
+    return response
 
 
 @router.get("/models", response_model=list[LLMConfigOptionResponse])

@@ -31,6 +31,7 @@ BaselineStatus: TypeAlias = Literal[
     "ready", "partial", "missing", "stale", "unavailable", "not_needed"
 ]
 SourceStatus: TypeAlias = Literal["ready", "partial", "unavailable"]
+SystemAssistantExecutionMode: TypeAlias = Literal["local", "remote"]
 
 
 class BaselineNode(BaseModel):
@@ -73,6 +74,14 @@ class BaselineSnapshot(BaseModel):
     metadata: BaselineSnapshotMetadata
 
 
+class SystemAssistantExecution(BaseModel):
+    """Configured execution boundary, distinct from model and asset sources."""
+
+    configured_mode: SystemAssistantExecutionMode
+    remote_runtime_available: bool
+    local_directory_access: bool
+
+
 class BootstrapResponse(BaseModel):
     """Stable response shape for ``GET /system-assistant/bootstrap``."""
 
@@ -80,6 +89,7 @@ class BootstrapResponse(BaseModel):
     recommended_action: RecommendedAction
     available_actions: list[str]
     source_status: dict[str, SourceStatus]
+    execution: SystemAssistantExecution
 
 
 def normalize_assistant_profile(value: str | AssistantProfile | None) -> AssistantProfileValue:

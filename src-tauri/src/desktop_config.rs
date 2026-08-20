@@ -33,6 +33,19 @@ pub enum WorkspaceEntryScope {
     Both,
 }
 
+/// System-assistant execution location selected by the desktop owner.
+/// `remote` is accepted only when Discovery advertises a real remote runtime.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SystemAssistantExecutionMode {
+    Local,
+    Remote,
+}
+
+fn default_system_assistant_execution_mode() -> SystemAssistantExecutionMode {
+    SystemAssistantExecutionMode::Local
+}
+
 fn default_workspace_entry_scope() -> WorkspaceEntryScope {
     WorkspaceEntryScope::Both
 }
@@ -85,6 +98,10 @@ pub struct DesktopRemoteCapabilities {
     pub knowledge_bases: bool,
     #[serde(default)]
     pub system_git: bool,
+    /// Remote assets/models do not imply that a remote system-assistant
+    /// runtime exists. This explicit declaration prevents a fake fallback.
+    #[serde(default)]
+    pub system_assistant_remote: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -129,6 +146,8 @@ pub struct DesktopConfig {
     pub discovery: Option<DesktopDiscoveryDocument>,
     #[serde(default = "default_local_ai_enabled")]
     pub local_ai_enabled: bool,
+    #[serde(default = "default_system_assistant_execution_mode")]
+    pub system_assistant_execution_mode: SystemAssistantExecutionMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,6 +161,8 @@ pub struct DesktopSetupInput {
     pub discovery: Option<DesktopDiscoveryDocument>,
     #[serde(default = "default_local_ai_enabled")]
     pub local_ai_enabled: bool,
+    #[serde(default = "default_system_assistant_execution_mode")]
+    pub system_assistant_execution_mode: SystemAssistantExecutionMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -351,6 +372,7 @@ impl DesktopConfigStore {
             discovery_url,
             discovery: input.discovery,
             local_ai_enabled: input.local_ai_enabled,
+            system_assistant_execution_mode: input.system_assistant_execution_mode,
         };
         atomic_write_json(&paths.config_path, &config)?;
 
@@ -879,6 +901,7 @@ mod tests {
                 discovery_url: None,
                 discovery: None,
                 local_ai_enabled: true,
+                system_assistant_execution_mode: SystemAssistantExecutionMode::Local,
             })
             .unwrap();
         let loaded = store.load().unwrap().unwrap();
@@ -906,6 +929,7 @@ mod tests {
                 discovery_url: None,
                 discovery: None,
                 local_ai_enabled: true,
+                system_assistant_execution_mode: SystemAssistantExecutionMode::Local,
             })
             .unwrap();
 
@@ -931,6 +955,7 @@ mod tests {
                 discovery_url: None,
                 discovery: None,
                 local_ai_enabled: true,
+                system_assistant_execution_mode: SystemAssistantExecutionMode::Local,
             })
             .unwrap();
 
@@ -1041,6 +1066,7 @@ mod tests {
                 discovery_url: None,
                 discovery: None,
                 local_ai_enabled: true,
+                system_assistant_execution_mode: SystemAssistantExecutionMode::Local,
             })
             .unwrap_err();
 
@@ -1073,6 +1099,7 @@ mod tests {
                 discovery_url: None,
                 discovery: None,
                 local_ai_enabled: true,
+                system_assistant_execution_mode: SystemAssistantExecutionMode::Local,
             });
             let applications_created = root.join("applications").exists();
             let data_created = root.join(".appdata").exists();
@@ -1108,6 +1135,7 @@ mod tests {
             discovery_url: None,
             discovery: None,
             local_ai_enabled: true,
+            system_assistant_execution_mode: SystemAssistantExecutionMode::Local,
         });
         let external_runtime_created = external.join("runtime").exists();
         let bootstrap_created = system_data.join("bootstrap.json").exists();
@@ -1156,6 +1184,7 @@ mod tests {
                             discovery_url: None,
                             discovery: None,
                             local_ai_enabled: true,
+                            system_assistant_execution_mode: SystemAssistantExecutionMode::Local,
                         })
                         .unwrap();
                     sender.send(saved.config).unwrap();

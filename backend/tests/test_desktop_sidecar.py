@@ -36,6 +36,20 @@ def test_sidecar_entry_declares_root_form_editor_for_freezing():
     )
 
 
+def test_parent_watchdog_skips_missing_parent_id(monkeypatch):
+    started = []
+    monkeypatch.setattr(ds.threading.Thread, "start", lambda self: started.append(self))
+
+    ds.start_parent_watchdog(0)
+
+    assert started == []
+
+
+def test_process_exists_handles_missing_and_current_process():
+    assert ds.process_exists(0) is False
+    assert ds.process_exists(os.getpid()) is True
+
+
 def test_sidecar_spec_does_not_scan_configuration_sensitive_coding_package():
     spec_path = Path(__file__).resolve().parents[1] / "dolphin-ai-sidecar.spec"
 
