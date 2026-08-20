@@ -1419,7 +1419,7 @@ async def _try_apaas_provider_login_response(
 
 @router.get("/captcha")
 async def captcha():
-    if _auth_provider() != "control_plane":
+    if _auth_provider() != "control_plane" or not settings.control_plane_captcha_enabled:
         return {"required": False}
     result = await fetch_dolphin_captcha()
     return {"required": bool(result), **(result or {})}

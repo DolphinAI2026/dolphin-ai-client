@@ -447,8 +447,22 @@ async def test_desktop_control_plane_context_migrates_existing_ticket_without_wo
 
 
 @pytest.mark.asyncio
+async def test_control_plane_captcha_endpoint_skips_upstream_when_disabled(monkeypatch):
+    _set_auth_provider(monkeypatch, "control_plane")
+    monkeypatch.setattr(settings, "control_plane_captcha_enabled", False)
+
+    async def unexpected_captcha_fetch():
+        raise AssertionError("disabled captcha must not call the upstream service")
+
+    monkeypatch.setattr(auth_routes, "fetch_dolphin_captcha", unexpected_captcha_fetch)
+
+    assert await auth_routes.captcha() == {"required": False}
+
+
+@pytest.mark.asyncio
 async def test_control_plane_captcha_endpoint_hides_incomplete_upstream_response(monkeypatch):
     _set_auth_provider(monkeypatch, "control_plane")
+    monkeypatch.setattr(settings, "control_plane_captcha_enabled", True)
 
     async def incomplete_captcha_fetch():
         return None
@@ -461,6 +475,7 @@ async def test_control_plane_captcha_endpoint_hides_incomplete_upstream_response
 @pytest.mark.asyncio
 async def test_control_plane_captcha_shows_complete_upstream_response(monkeypatch):
     _set_auth_provider(monkeypatch, "control_plane")
+    monkeypatch.setattr(settings, "control_plane_captcha_enabled", True)
 
     async def fake_fetch_dolphin_captcha():
         return {"captcha_id": "remote-captcha-id", "image_data": "data:image/png;base64,abc"}
