@@ -61,6 +61,12 @@ configure_updater_artifacts() {
         --enabled "$enabled"
 }
 
+configure_macos_adhoc_signing() {
+    node "$ROOT/scripts/configure-macos-signing.mjs" \
+        --config "$CONFIG" \
+        --mode adhoc
+}
+
 if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
     if is_release_build; then
         echo "ERROR: TAURI_SIGNING_PRIVATE_KEY is required for a Release-tag desktop build." >&2
@@ -367,6 +373,9 @@ ls -lh "$ROOT/src-tauri/binaries/"
 
 echo ""
 if [[ "$HOST_OS" == "Darwin" ]]; then
+    configure_macos_adhoc_signing
+    "$ROOT/scripts/macos-code-signing.sh" sign-resources \
+        "$ROOT/src-tauri/resources/agent-runtime"
     BUNDLES="app,dmg"
     FALLBACK_BUNDLES="app"
     BUNDLE_DIRS=("macos" "dmg")
@@ -417,6 +426,8 @@ if [[ "$HOST_OS" == "Linux" ]]; then
     repack_linux_appimage_with_pristine_codex
     publish_linux_release
 else
+    app_bundle="$(find_exactly_one "expected one signed *.app artifact under $TAURI_RELEASE_DIR/bundle/macos" find "$TAURI_RELEASE_DIR/bundle/macos" -maxdepth 1 -type d -name '*.app' -print0)" || exit 1
+    "$ROOT/scripts/macos-code-signing.sh" verify-app "$app_bundle"
     create_macos_fallback_dmg
     publish_macos_arm_release
 fi
