@@ -549,3 +549,29 @@ jobs:
           RELEASE_REPOSITORY: ${{ env.RELEASES_REPOSITORY }}
           RELEASES_GITHUB_TOKEN: ${{ secrets.RELEASES_GITHUB_TOKEN }}
         run: node scripts/report-desktop-release.mjs
+
+      - name: Probe public updater entry and payloads
+        shell: bash
+        env:
+          EXPECTED_VERSION: ${{ needs.release-metadata.outputs.version }}
+          UPDATER_ENTRY: https://github.com/DolphinAI2026/dolphin-ai-releases/releases/latest/download/latest.json
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error --retry 3 --max-time 30 "${UPDATER_ENTRY}" |
+            jq -e --arg version "${EXPECTED_VERSION}" '
+              .version == $version and
+              (.platforms | keys | sort == ["darwin-aarch64", "linux-x86_64", "windows-x86_64"]) and
+              all(.platforms | to_entries[];
+                (.value.url | type == "string" and startswith("https://github.com/DolphinAI2026/dolphin-ai-releases/releases/download/")) and
+                (.value.signature | type == "string" and length > 0)
+              )
+            ' >/dev/null
+          curl --fail --location --silent --show-error --retry 3 --max-time 30 "${UPDATER_ENTRY}" |
+            jq -r '.platforms | to_entries[] | [.key, .value.url] | @tsv' |
+            while IFS=$'\t' read -r platform update_url; do
+              response_code="$(curl --location --silent --show-error --output /dev/null --write-out '%{http_code}' --range 0-0 --retry 3 --max-time 30 "${update_url}")"
+              [[ "${response_code}" == "200" || "${response_code}" == "206" ]] || {
+                echo "updater payload is unavailable for ${platform}: HTTP ${response_code}" >&2
+                exit 1
+              }
+            done

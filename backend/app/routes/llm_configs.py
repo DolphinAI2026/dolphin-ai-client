@@ -354,17 +354,33 @@ async def list_llm_config_options(
     if runtime.is_desktop() and is_control_plane_context(ctx):
         from app.routes.code_runtime import _control_plane_request_auth
 
-        authorization, _auth_provider = await _control_plane_request_auth(
-            SimpleNamespace(headers={}), ctx, db,
-        )
-        if authorization:
-            remote_options = await list_control_plane_model_options(
-                purpose=purpose,
-                authorization_header=authorization,
-                delegated_context=ctx,
+        local_options = [LLMConfigOptionResponse.from_db(row) for row in rows]
+        try:
+            authorization, _auth_provider = await _control_plane_request_auth(
+                SimpleNamespace(headers={}), ctx, db,
             )
-            local_options = [LLMConfigOptionResponse.from_db(row) for row in rows]
-            return local_options + [LLMConfigOptionResponse(**option) for option in remote_options]
+            if not authorization:
+                if local_options:
+                    return local_options
+            else:
+                remote_options = await list_control_plane_model_options(
+                    purpose=purpose,
+                    authorization_header=authorization,
+                    delegated_context=ctx,
+                )
+                return local_options + [LLMConfigOptionResponse(**option) for option in remote_options]
+        except HTTPException as exc:
+            if not local_options:
+                raise
+            # The desktop's private provider is an independent execution
+            # path.  A Control Plane model-catalog outage must not make that
+            # working local model disappear from the Code picker.
+            logger.warning(
+                "Control Plane model options unavailable; using %d local options (status=%s)",
+                len(local_options),
+                exc.status_code,
+            )
+            return local_options
     if not rows:
         rows = await list_llm_configs_for_purpose(db, None, purpose)
     return [LLMConfigOptionResponse.from_db(row) for row in rows]

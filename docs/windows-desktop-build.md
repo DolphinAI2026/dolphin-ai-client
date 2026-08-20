@@ -61,6 +61,23 @@ GitHub Actions 需要以下 Secrets：`TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNI
 工作流再通过 GitHub API 回读实际附件的 `browser_download_url`，输出 Windows 安装包、macOS DMG、Linux AppImage、
 Linux DEB、manifest 和 checksum 下载地址。旧 `desktop-windows.yml` 仅生成不签名的 portable 调试包，不能用于正式发布。
 
+发布后还必须从**客户端实际使用的公开入口**回读，而不只依赖 GitHub API：工作流会下载 `latest.json`，核对其版本、三个平台键（Windows、macOS、Linux）、每个平台的签名和 release URL，再对每个安装负载发起一个 1 字节 Range 请求，要求返回 `200` 或 `206`。任一入口文件、签名或负载链接不可访问，Release job 失败。
+
+需要人工复核时可执行（只下载 manifest 和每个负载的首字节，不下载完整安装包）：
+
+```bash
+export UPDATER_ENTRY=https://github.com/DolphinAI2026/dolphin-ai-releases/releases/latest/download/latest.json
+curl --fail --location --silent --show-error "$UPDATER_ENTRY" |
+  jq '{version, platforms: (.platforms | with_entries(.value |= {url, has_signature: (.signature | type == "string" and length > 0)}))}'
+curl --fail --location --silent --show-error "$UPDATER_ENTRY" |
+  jq -r '.platforms | to_entries[] | [.key, .value.url] | @tsv' |
+  while IFS=$'\t' read -r platform update_url; do
+    response_code="$(curl --location --silent --show-error --output /dev/null --write-out '%{http_code}' --range 0-0 "$update_url")"
+    [[ "$response_code" == "200" || "$response_code" == "206" ]] || exit 1
+    printf '%s\t%s\n' "$platform" "$response_code"
+  done
+```
+
 ## 自动构建门禁
 
 以下检查由构建脚本按顺序执行。任一步失败都不会生成或复制“可下载包”。
