@@ -532,9 +532,12 @@ class ControlPlaneGitConnection:
     id: int
     provider: str
     host: str
-    group_id_or_org: str
+    asset_groups: dict[str, str]
     default_branch: str
     status: str = "connected"
+
+    def group_for(self, asset_type: str) -> str:
+        return str(self.asset_groups.get(asset_type) or "").strip().strip("/")
 
 
 @dataclass(frozen=True)
@@ -553,29 +556,60 @@ async def _control_plane_git_connection(
     user_id: int,
 ) -> ControlPlaneGitConnection | None:
     """Read non-sensitive desktop Git metadata from the authenticated Control Plane."""
-    if str(os.getenv("DOLPHIN_SYSTEM_GIT_ENABLED", "")).strip().lower() not in {"1", "true", "yes"}:
+    if not _system_git_feature_enabled():
         return None
     try:
         gateway = await _gateway(resolve_identity, tenant_id, user_id)
         result = await gateway.request(
             asset_type="seed_project", method="GET", path="/api/system-assets/git/connection",
         )
-    except AssetGatewayError:
-        return None
+    except AssetGatewayError as exc:
+        raise SystemGitError(
+            exc.code,
+            f"控制面系统 Git broker 暂不可用：{exc}",
+        ) from exc
     if not isinstance(result, dict):
-        return None
+        raise SystemGitError("SYSTEM_GIT_BROKER_INVALID_RESPONSE", "控制面系统 Git broker 返回了无效连接信息")
     try:
         if str(result.get("connectionScope") or result.get("connection_scope") or "").strip() != "control_plane_default":
-            return None
+            raise ValueError("invalid connection scope")
         provider = str(result.get("provider") or "").strip().lower()
         host = str(result.get("host") or "").strip().rstrip("/")
-        group = str(result.get("groupIdOrOrg") or result.get("group_id_or_org") or "").strip().strip("/")
+        raw_groups = result.get("assetGroups") or result.get("asset_groups") or {}
+        groups = {
+            str(asset_type).strip(): str(group).strip().strip("/")
+            for asset_type, group in raw_groups.items()
+            if str(asset_type).strip() in {"seed_project", "capability"} and str(group).strip()
+        } if isinstance(raw_groups, dict) else {}
+        legacy_group = str(result.get("groupIdOrOrg") or result.get("group_id_or_org") or "").strip().strip("/")
+        if legacy_group and not groups:
+            groups = {"seed_project": legacy_group, "capability": legacy_group}
         branch = str(result.get("defaultBranch") or result.get("default_branch") or "main").strip()
-        if provider != "gitlab" or not host.startswith("https://") or not group or not branch:
-            return None
-        return ControlPlaneGitConnection(0, provider, host, group, branch)
+        if provider != "gitlab" or not host.startswith("https://") or not groups or not branch:
+            raise ValueError("missing connection fields")
+        return ControlPlaneGitConnection(0, provider, host, groups, branch)
     except (TypeError, ValueError):
-        return None
+        raise SystemGitError("SYSTEM_GIT_BROKER_INVALID_RESPONSE", "控制面系统 Git broker 返回了无效连接信息")
+
+
+def _system_git_feature_enabled() -> bool:
+    return str(os.getenv("DOLPHIN_SYSTEM_GIT_ENABLED", "")).strip().lower() in {"1", "true", "yes"}
+
+
+def _system_git_group(
+    connection: GitConnection | TenantGitConnection | DeploymentGitConnection | ControlPlaneGitConnection,
+    asset_type: str,
+) -> str:
+    if isinstance(connection, ControlPlaneGitConnection):
+        group = connection.group_for(asset_type)
+    else:
+        group = str(connection.group_id_or_org or "").strip().strip("/")
+    if not group:
+        raise SystemGitError(
+            "SYSTEM_GIT_GROUP_REQUIRED",
+            f"所选 GitConnection 尚未配置 {asset_type} 对应的系统资产 Git 组",
+        )
+    return group
 
 
 async def _control_plane_git_repository_access(
@@ -584,6 +618,7 @@ async def _control_plane_git_repository_access(
     user_id: int,
     *,
     action: str,
+    asset_type: str | None = None,
     repository_name: str | None = None,
     path_with_namespace: str | None = None,
 ) -> ControlPlaneGitRepositoryAccess:
@@ -592,7 +627,10 @@ async def _control_plane_git_repository_access(
         raise SystemGitError("SYSTEM_GIT_BROKER_REQUEST_INVALID", "Git 受控授权请求无效")
     gateway = await _gateway(resolve_identity, tenant_id, user_id)
     if action == "create":
-        path, body = "/api/system-assets/git/repositories", {"repositoryName": repository_name}
+        path, body = "/api/system-assets/git/repositories", {
+            "assetType": asset_type,
+            "repositoryName": repository_name,
+        }
     else:
         path, body = "/api/system-assets/git/credentials", {"pathWithNamespace": path_with_namespace}
     result = await gateway.request(asset_type="seed_project", method="POST", path=path, body=body)
@@ -1921,16 +1959,18 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
             # the Control Plane's server-managed connection instead.  Its
             # one-time user credential is requested only immediately before a
             # confirmed Git operation and never appears in this response.
-            control_plane_connection = await _control_plane_git_connection(
-                resolve_identity, tenant_id, user_id,
-            )
-            if control_plane_connection is not None and not tenant_connections:
+            control_plane_connection = None
+            if not tenant_connections and deployment_connection is None:
+                control_plane_connection = await _control_plane_git_connection(
+                    resolve_identity, tenant_id, user_id,
+                )
+            if control_plane_connection is not None:
                 connections.append({
                     "id": control_plane_connection.id,
                     "connection_scope": "control_plane_default",
                     "provider": control_plane_connection.provider,
                     "host": control_plane_connection.host,
-                    "group_id_or_org": control_plane_connection.group_id_or_org,
+                    "asset_groups": control_plane_connection.asset_groups,
                     "default_branch": control_plane_connection.default_branch,
                     "status": control_plane_connection.status,
                     "source": "control_plane",
@@ -1945,7 +1985,26 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
                 "group_id_or_org": connection.group_id_or_org,
                 "status": connection.status,
             } for connection, project in project_rows)
-            return _ok(connections=connections)
+            if connections:
+                return _ok(
+                    connections=connections,
+                    connection_status="ready",
+                    message="已发现可用的系统资产 Git 连接。",
+                )
+            if not _system_git_feature_enabled():
+                return _ok(
+                    connections=[],
+                    connection_status="broker_disabled",
+                    message=(
+                        "当前桌面环境未启用系统资产 Git broker；这不代表平台没有 Git 仓库或 GitLab 配置。"
+                        "请更新桌面 Discovery 的 remote_capabilities.system_git 后重新连接。"
+                    ),
+                )
+            return _ok(
+                connections=[],
+                connection_status="not_configured",
+                message="系统 Git broker 已启用，但当前租户没有返回可用的系统资产 Git 连接。",
+            )
         except SystemGitError as exc:
             return _err(exc.code, str(exc))
 
@@ -1987,9 +2046,7 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
             )
             if connection is None:
                 return _err("SYSTEM_GIT_CONNECTION_REQUIRED", "必须选择平台已配置的 GitConnection")
-            group = str(connection.group_id_or_org or "").strip().strip("/")
-            if not group:
-                return _err("SYSTEM_GIT_GROUP_REQUIRED", "所选 GitConnection 尚未配置系统资产 Git 组（group_id_or_org）")
+            group = _system_git_group(connection, kind)
             full_path = f"{group}/{project_name}"
             clean_remote = _clean_repository_remote(connection.host, full_path)
             initial_files = ["README.md", ".gitignore"] + (["capability.json"] if kind == "capability" else ["AGENTS.md"])
@@ -2023,7 +2080,12 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
 
             if isinstance(connection, ControlPlaneGitConnection):
                 access = await _control_plane_git_repository_access(
-                    resolve_identity, tenant_id, user_id, action="create", repository_name=project_name,
+                    resolve_identity,
+                    tenant_id,
+                    user_id,
+                    action="create",
+                    asset_type=kind,
+                    repository_name=project_name,
                 )
                 connection = access.connection
                 full_path = access.path_with_namespace
@@ -2128,12 +2190,7 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
             )
             if connection is None:  # for type checkers; the ID is required above
                 return _err("SYSTEM_GIT_CONNECTION_REQUIRED", "必须选择平台已配置的 GitConnection")
-            group = str(connection.group_id_or_org or "").strip().strip("/")
-            if not group:
-                return _err(
-                    "SYSTEM_GIT_GROUP_REQUIRED",
-                    "所选 GitConnection 尚未配置能力 Git 组（group_id_or_org）",
-                )
+            group = _system_git_group(connection, "capability")
             project_name = _capability_repository_name(root, repository_name)
             full_path = f"{group}/{project_name}"
             clean_remote = _clean_repository_remote(connection.host, full_path)
@@ -2167,7 +2224,12 @@ def register(mcp, resolve_identity: Callable[[int | None, int | None], tuple[int
             try:
                 if isinstance(connection, ControlPlaneGitConnection):
                     access = await _control_plane_git_repository_access(
-                        resolve_identity, tenant_id, user_id, action="create", repository_name=project_name,
+                        resolve_identity,
+                        tenant_id,
+                        user_id,
+                        action="create",
+                        asset_type="capability",
+                        repository_name=project_name,
                     )
                     connection = access.connection
                     full_path = access.path_with_namespace

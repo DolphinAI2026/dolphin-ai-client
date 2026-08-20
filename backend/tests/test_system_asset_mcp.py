@@ -531,6 +531,104 @@ async def test_deployment_git_default_is_used_when_tenant_has_no_override(tools,
 
 
 @pytest.mark.asyncio
+async def test_control_plane_git_default_exposes_typed_asset_groups(tools, db_session, monkeypatch):
+    registered, gateway = tools
+    tenant = Tenant(tenant_name="broker-git-tenant", tenant_code="broker-git-tenant")
+    user = User(username="broker-git-user", hashed_password="x")
+    db_session.add_all([tenant, user])
+    await db_session.commit()
+    monkeypatch.setattr(system_assets, "AsyncSessionLocal", lambda: _SessionContext(db_session))
+    monkeypatch.setenv("DOLPHIN_SYSTEM_GIT_ENABLED", "true")
+
+    async def broker_connection(**kwargs):
+        gateway.calls.append(kwargs)
+        return {
+            "id": 0,
+            "connectionScope": "control_plane_default",
+            "provider": "gitlab",
+            "host": "https://git.example.com",
+            "assetGroups": {
+                "seed_project": "dolphin-code/seeds",
+                "capability": "dolphin-code/capabilities",
+            },
+            "defaultBranch": "main",
+        }
+
+    monkeypatch.setattr(gateway, "request", broker_connection)
+
+    listed = await registered["list_system_git_connections"](tenant_id=tenant.id, user_id=user.id)
+
+    assert listed["connection_status"] == "ready"
+    assert listed["connections"] == [{
+        "id": 0,
+        "connection_scope": "control_plane_default",
+        "provider": "gitlab",
+        "host": "https://git.example.com",
+        "asset_groups": {
+            "seed_project": "dolphin-code/seeds",
+            "capability": "dolphin-code/capabilities",
+        },
+        "default_branch": "main",
+        "status": "connected",
+        "source": "control_plane",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_empty_git_list_explains_disabled_broker_without_claiming_platform_is_empty(
+    tools, db_session, monkeypatch,
+):
+    registered, _gateway = tools
+    tenant = Tenant(tenant_name="disabled-git-tenant", tenant_code="disabled-git-tenant")
+    user = User(username="disabled-git-user", hashed_password="x")
+    db_session.add_all([tenant, user])
+    await db_session.commit()
+    monkeypatch.setattr(system_assets, "AsyncSessionLocal", lambda: _SessionContext(db_session))
+    monkeypatch.delenv("DOLPHIN_SYSTEM_GIT_ENABLED", raising=False)
+
+    listed = await registered["list_system_git_connections"](tenant_id=tenant.id, user_id=user.id)
+
+    assert listed["connections"] == []
+    assert listed["connection_status"] == "broker_disabled"
+    assert "不代表平台没有 Git" in listed["message"]
+
+
+@pytest.mark.asyncio
+async def test_control_plane_repository_broker_routes_create_by_asset_type(tools, monkeypatch):
+    _registered, gateway = tools
+    response = {
+        "provider": "gitlab",
+        "providerProjectId": "501",
+        "pathWithNamespace": "dolphin-code/capabilities/approval-center",
+        "repositoryUrl": "https://git.example.com/dolphin-code/capabilities/approval-center.git",
+        "branch": "main",
+        "accessToken": "one-process-only",
+    }
+
+    async def create_repository(**kwargs):
+        gateway.calls.append(kwargs)
+        return response
+
+    monkeypatch.setattr(gateway, "request", create_repository)
+    access = await system_assets._control_plane_git_repository_access(
+        lambda tenant_id, user_id: (tenant_id, user_id),
+        1,
+        2,
+        action="create",
+        asset_type="capability",
+        repository_name="approval-center",
+    )
+
+    assert gateway.calls[0]["body"] == {
+        "assetType": "capability",
+        "repositoryName": "approval-center",
+    }
+    assert access.path_with_namespace == "dolphin-code/capabilities/approval-center"
+    assert access.connection.access_token_enc != "one-process-only"
+    assert "accessToken" not in response
+
+
+@pytest.mark.asyncio
 async def test_create_capability_git_repository_previews_platform_group_and_push(tools, capability_repository, monkeypatch):
     registered, _gateway = tools
     connection = SimpleNamespace(
