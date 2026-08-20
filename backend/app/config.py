@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     # 可选项：开启后，Dolphin 登录账号必须已在平台管理绑定本地租户和 aPaaS 环境。
     # 默认关闭；关闭时按 Dolphin 当前租户自动创建/复用本地租户上下文。
     control_plane_binding_enabled: bool = False
+    # Control Plane 登录链路是否要求图形验证码。关闭时不得探测上游验证码服务。
+    control_plane_captcha_enabled: bool = True
     # 可选项：Control Plane 登录页所在环境的根地址。
     dolphin_workspace_base_url: str = "https://om-demo.dfy.definesys.cn"
     apaas_base_url: str = ""

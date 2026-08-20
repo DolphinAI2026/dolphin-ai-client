@@ -39,6 +39,9 @@ jobs:
           python-version: '3.11'
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.93'
+          components: clippy,rustfmt
 
       - id: debug-version
         name: Validate optional debug version

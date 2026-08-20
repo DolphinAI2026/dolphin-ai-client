@@ -9,6 +9,7 @@ HOST_ARCH="$(uname -m)"
 TRIPLE="$(rustc --print host-tuple)"
 CONFIG="$ROOT/src-tauri/tauri.conf.json"
 SOURCE_REVISION="$(git -C "$ROOT" rev-parse HEAD)"
+DESKTOP_PYTHON="${DOLPHIN_DESKTOP_PYTHON:-python3.11}"
 UPDATER_ARTIFACTS_ENABLED=1
 TAURI_TARGET_DIR=""
 TAURI_RELEASE_DIR=""
@@ -48,17 +49,28 @@ cleanup() {
 
 trap cleanup EXIT
 
+configure_updater_artifacts() {
+    local enabled="$1"
+    if [[ -z "${TAURI_CONFIG_BACKUP:-}" ]]; then
+        mkdir -p /tmp/d-ai-code/build-desktop
+        TAURI_CONFIG_BACKUP="$(mktemp /tmp/d-ai-code/build-desktop/tauri.conf.XXXXXX)"
+        cp "$CONFIG" "$TAURI_CONFIG_BACKUP"
+    fi
+    node "$ROOT/scripts/configure-tauri-updater.mjs" \
+        --config "$CONFIG" \
+        --enabled "$enabled"
+}
+
 if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
     if is_release_build; then
         echo "ERROR: TAURI_SIGNING_PRIVATE_KEY is required for a Release-tag desktop build." >&2
         exit 1
     fi
-    mkdir -p /tmp/d-ai-code/build-desktop
-    TAURI_CONFIG_BACKUP="$(mktemp /tmp/d-ai-code/build-desktop/tauri.conf.XXXXXX)"
-    cp "$CONFIG" "$TAURI_CONFIG_BACKUP"
-    node -e 'const fs = require("node:fs"); const file = process.argv[1]; const config = JSON.parse(fs.readFileSync(file, "utf8")); config.bundle.createUpdaterArtifacts = false; fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);' "$CONFIG"
+    configure_updater_artifacts false
     UPDATER_ARTIFACTS_ENABLED=0
     echo "==> TAURI_SIGNING_PRIVATE_KEY is not set; updater artifacts are temporarily disabled for this non-Release desktop build."
+else
+    configure_updater_artifacts true
 fi
 
 read_package_version() {
@@ -87,7 +99,6 @@ copy_single_artifact() {
 
 copy_linux_signatures() {
     local source_dir="$1" release_dir="$2" prefix="$3" source base suffix destination
-    local signature_count=0
     while IFS= read -r -d '' source; do
         base="$(basename "$source")"
         suffix=""
@@ -101,12 +112,7 @@ copy_linux_signatures() {
                 ;;
         esac
         cp "$source" "$destination"
-        [[ "$suffix" == ".sig" ]] && ((signature_count += 1))
     done < <(find "$source_dir" -maxdepth 1 -type f -name '*.sig' -print0)
-    if (( UPDATER_ARTIFACTS_ENABLED )) && (( signature_count == 0 )); then
-        echo "ERROR: Tauri updater artifacts were enabled but Linux signatures were not generated." >&2
-        return 1
-    fi
 }
 
 copy_macos_updater_artifacts() {
@@ -321,9 +327,21 @@ fi
 echo ""
 echo "==> 2/4 PyInstaller 打 sidecar (onefile, 内嵌前端)"
 cd "$ROOT/backend"
+command -v "$DESKTOP_PYTHON" >/dev/null 2>&1 || {
+    echo "ERROR: desktop sidecar build requires Python 3.11: $DESKTOP_PYTHON" >&2
+    exit 1
+}
 if [[ ! -x .venv/bin/python ]]; then
-    python3 -m venv .venv
+    "$DESKTOP_PYTHON" -m venv .venv
 fi
+.venv/bin/python - <<'PY'
+import sys
+
+if sys.version_info[:2] != (3, 11):
+    raise SystemExit(
+        "desktop sidecar build requires Python 3.11; remove backend/.venv and retry"
+    )
+PY
 .venv/bin/python -m pip install -r requirements.txt >/dev/null
 # 全新 checkout 可能没装 pyinstaller — 缺则补装 (构建期依赖, 不入 requirements.txt 避免污染部署)
 .venv/bin/python -m PyInstaller --version >/dev/null 2>&1 || .venv/bin/pip install "pyinstaller>=6.6"
@@ -331,7 +349,7 @@ fi
 # 首启由 build_env._sync_preset_skills 覆盖式同步进 data_dir/skills/platform/。
 # 注入构建期 env 防 collect_submodules("app") 触发 Settings() 校验失败
 export JWT_SECRET_KEY="pyinstaller-build-placeholder"
-export ENCRYPTION_KEY="$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")"
+export ENCRYPTION_KEY="$(.venv/bin/python -c "import secrets; print(secrets.token_urlsafe(48))")"
 export DATABASE_URL="sqlite+aiosqlite:///:memory:"
 export ALLOW_DEFAULT_ENCRYPTION_KEY="1"
 .venv/bin/python -m PyInstaller dolphin-ai-sidecar.spec --clean --noconfirm

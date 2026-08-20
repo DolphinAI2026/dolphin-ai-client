@@ -349,11 +349,12 @@ async def list_llm_config_options(
         )
         return [LLMConfigOptionResponse(**option) for option in options]
 
-    tenant_id = await resolve_effective_tenant_id(db, ctx)
-    rows = await list_llm_configs_for_purpose(db, tenant_id, purpose)
     if runtime.is_desktop() and is_control_plane_context(ctx):
         from app.routes.code_runtime import _control_plane_request_auth
 
+        rows = []
+        if ctx.tenant_access_scope == "tenant" and ctx.tenant_id and ctx.tenant_id > 0:
+            rows = await list_llm_configs_for_purpose(db, ctx.tenant_id, purpose)
         local_options = [LLMConfigOptionResponse.from_db(row) for row in rows]
         try:
             authorization, _auth_provider = await _control_plane_request_auth(
@@ -362,6 +363,7 @@ async def list_llm_config_options(
             if not authorization:
                 if local_options:
                     return local_options
+                raise HTTPException(status_code=401, detail="Control Plane 登录已失效，请重新登录")
             else:
                 remote_options = await list_control_plane_model_options(
                     purpose=purpose,
@@ -381,6 +383,9 @@ async def list_llm_config_options(
                 exc.status_code,
             )
             return local_options
+
+    tenant_id = await resolve_effective_tenant_id(db, ctx)
+    rows = await list_llm_configs_for_purpose(db, tenant_id, purpose)
     if not rows:
         rows = await list_llm_configs_for_purpose(db, None, purpose)
     return [LLMConfigOptionResponse.from_db(row) for row in rows]

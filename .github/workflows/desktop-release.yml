@@ -22,7 +22,7 @@ env:
   AGENT_RUNTIME_REPO_URL: https://git.dfy.definesys.cn/orcamatrix/agent-runtime.git
   AGENT_RUNTIME_REVISION: c98437dbde5c803670a8694c7558870a05eb4c6e
   AGENTIC_CODING_REPO_URL: https://git.dfy.definesys.cn/support/agentic-coding.git
-  AGENTIC_CODING_REVISION: 379d7a82cc026179e116a7d3d5a6e50c6f2ef7af
+  AGENTIC_CODING_REVISION: a3b4ce73ae024b51a4810629e4281e8bce657b43
   SUPERPOWERS_REPO_URL: https://github.com/obra/superpowers.git
   SUPERPOWERS_REVISION: 44c9b2d6e889982ac18c27d05a19fefe335194e1
   CODEX_VERSION: 0.147.0
@@ -126,6 +126,9 @@ jobs:
           python-version: '3.11'
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.93'
+          components: clippy,rustfmt
 
       - name: Checkout fixed runtime and capability dependencies
         shell: pwsh
@@ -224,6 +227,9 @@ jobs:
           go-version: "1.24"
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.93'
+          components: clippy,rustfmt
 
       - name: Checkout fixed runtime and capability dependencies
         shell: bash
@@ -341,6 +347,9 @@ jobs:
           python-version: '3.11'
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.93'
+          components: clippy,rustfmt
 
       - name: Install Linux desktop build packages
         shell: bash
