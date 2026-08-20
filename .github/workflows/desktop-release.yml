@@ -126,6 +126,9 @@ jobs:
           python-version: '3.11'
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.93'
+          components: clippy,rustfmt
 
       - name: Checkout fixed runtime and capability dependencies
         shell: pwsh
@@ -224,6 +227,9 @@ jobs:
           go-version: "1.24"
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.93'
+          components: clippy,rustfmt
 
       - name: Checkout fixed runtime and capability dependencies
         shell: bash
@@ -341,6 +347,9 @@ jobs:
           python-version: '3.11'
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.93'
+          components: clippy,rustfmt
 
       - name: Install Linux desktop build packages
         shell: bash
