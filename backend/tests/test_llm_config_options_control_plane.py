@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 import app.routes.llm_configs as llm_config_routes
 from app.crypto import encrypt_password
@@ -150,6 +151,88 @@ async def test_desktop_control_plane_options_include_private_local_models_first(
         (local.id, "gpt-local"),
         (-17, "gpt-online"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_desktop_control_plane_options_keep_private_models_when_remote_catalog_is_down(
+    db_session, monkeypatch,
+):
+    """A remote outage cannot hide a separately configured desktop model."""
+    monkeypatch.setenv("DESKTOP_MODE", "1")
+    tenant = Tenant(tenant_name="local", tenant_code="desktop-local-fallback")
+    user = User(username="desktop-fallback-user", hashed_password="x", account_source="control_plane")
+    db_session.add_all([tenant, user])
+    await db_session.flush()
+    local = LLMConfig(
+        tenant_id=tenant.id,
+        config_name="JD-GLM5",
+        provider="custom",
+        base_url="https://local.example/v1",
+        api_key_enc=encrypt_password("local-key"),
+        model="GLM-5.1",
+        purpose="all",
+        is_default=False,
+        status="active",
+        codex_wire_api="chat",
+    )
+    db_session.add(local)
+    await db_session.flush()
+    ctx = SimpleNamespace(
+        user=user,
+        tenant_id=tenant.id,
+        tenant_role="tenant_admin",
+        tenant_access_scope="tenant",
+        control_plane_tenant_id="remote-tenant",
+    )
+
+    async def fake_auth(*_args, **_kwargs):
+        return "Bearer remote-token", "control_plane"
+
+    async def unavailable_catalog(**_kwargs):
+        raise HTTPException(status_code=503, detail="Control Plane unavailable")
+
+    import app.routes.code_runtime as code_runtime_routes
+
+    monkeypatch.setattr(code_runtime_routes, "_control_plane_request_auth", fake_auth)
+    monkeypatch.setattr(llm_config_routes, "list_control_plane_model_options", unavailable_catalog)
+
+    result = await llm_config_routes.list_llm_config_options(ctx, db_session, purpose="coding")
+
+    assert [(item.id, item.model) for item in result] == [(local.id, "GLM-5.1")]
+
+
+@pytest.mark.asyncio
+async def test_desktop_control_plane_options_preserve_remote_error_without_local_fallback(
+    db_session, monkeypatch,
+):
+    monkeypatch.setenv("DESKTOP_MODE", "1")
+    tenant = Tenant(tenant_name="empty", tenant_code="desktop-empty-fallback")
+    user = User(username="desktop-empty-user", hashed_password="x", account_source="control_plane")
+    db_session.add_all([tenant, user])
+    await db_session.flush()
+    ctx = SimpleNamespace(
+        user=user,
+        tenant_id=tenant.id,
+        tenant_role="tenant_admin",
+        tenant_access_scope="tenant",
+        control_plane_tenant_id="remote-tenant",
+    )
+
+    async def fake_auth(*_args, **_kwargs):
+        return "Bearer remote-token", "control_plane"
+
+    async def unavailable_catalog(**_kwargs):
+        raise HTTPException(status_code=503, detail="Control Plane unavailable")
+
+    import app.routes.code_runtime as code_runtime_routes
+
+    monkeypatch.setattr(code_runtime_routes, "_control_plane_request_auth", fake_auth)
+    monkeypatch.setattr(llm_config_routes, "list_control_plane_model_options", unavailable_catalog)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await llm_config_routes.list_llm_config_options(ctx, db_session, purpose="coding")
+
+    assert exc_info.value.status_code == 503
 
 
 def test_control_plane_html_gateway_error_is_sanitized():
